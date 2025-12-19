@@ -1,8 +1,8 @@
 package cli
 
 import (
-        "sort"
         "fmt"
+        "sort"
 
         "clarity-cli/internal/docs"
 

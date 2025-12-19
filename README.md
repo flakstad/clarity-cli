@@ -27,14 +27,14 @@ clarity items --help
 ```bash
 clarity init
 clarity identity create --name "andreas" --kind human --use
-clarity projects create --name "Clarity"
+clarity projects create --name "Clarity" --use
 clarity projects list
 ```
 
 Create an item:
 
 ```bash
-clarity items create --project proj-1 --title "First item"
+clarity items create --title "First item"
 clarity items list --project proj-1
 ```
 

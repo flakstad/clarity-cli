@@ -7,7 +7,12 @@ Core model:
 ## Create an item
 
 ```bash
+# Option A: explicit
 clarity items create --project <project-id> --title "Write spec" --description "Markdown supported"
+
+# Option B: set current project once
+clarity projects use <project-id>
+clarity items create --title "Write spec" --description "Markdown supported"
 ```
 
 ## Status

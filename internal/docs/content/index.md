@@ -10,6 +10,7 @@ For long-form docs:
 
 Recommended starting topics:
 - `getting-started`
+- `output-contract`
 - `identity-ownership`
 - `items-outlines`
 - `deps`

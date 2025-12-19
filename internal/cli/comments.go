@@ -1,6 +1,8 @@
 package cli
 
 import (
+        "sort"
+        "strconv"
         "strings"
         "time"
 
@@ -66,9 +68,12 @@ func newCommentsAddCmd(app *App) *cobra.Command {
 }
 
 func newCommentsListCmd(app *App) *cobra.Command {
+        var limit int
+        var offset int
+
         cmd := &cobra.Command{
                 Use:   "list <item-id>",
-                Short: "List comments for an item",
+                Short: "List comments for an item (paginated)",
                 Args:  cobra.ExactArgs(1),
                 RunE: func(cmd *cobra.Command, args []string) error {
                         db, _, err := loadDB(app)
@@ -79,14 +84,50 @@ func newCommentsListCmd(app *App) *cobra.Command {
                         if _, ok := db.FindItem(itemID); !ok {
                                 return writeErr(cmd, errNotFound("item", itemID))
                         }
-                        var out []model.Comment
+
+                        var all []model.Comment
                         for _, c := range db.Comments {
                                 if c.ItemID == itemID {
-                                        out = append(out, c)
+                                        all = append(all, c)
                                 }
                         }
-                        return writeOut(cmd, app, map[string]any{"data": out})
+
+                        sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.Before(all[j].CreatedAt) })
+
+                        total := len(all)
+                        if offset < 0 {
+                                offset = 0
+                        }
+                        if offset > total {
+                                offset = total
+                        }
+
+                        end := total
+                        if limit > 0 && offset+limit < end {
+                                end = offset + limit
+                        }
+                        out := all[offset:end]
+
+                        hints := []string{
+                                "clarity comments list " + itemID + " --limit 0",
+                        }
+                        if end < total {
+                                hints = append(hints, "clarity comments list "+itemID+" --limit "+strconv.Itoa(limit)+" --offset "+strconv.Itoa(end))
+                        }
+
+                        return writeOut(cmd, app, map[string]any{
+                                "data": out,
+                                "meta": map[string]any{
+                                        "total":    total,
+                                        "limit":    limit,
+                                        "offset":   offset,
+                                        "returned": len(out),
+                                },
+                                "_hints": hints,
+                        })
                 },
         }
+        cmd.Flags().IntVar(&limit, "limit", 20, "Max comments to return (0 = all)")
+        cmd.Flags().IntVar(&offset, "offset", 0, "Offset into comment list (for pagination)")
         return cmd
 }

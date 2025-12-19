@@ -65,8 +65,15 @@ func newItemsCreateCmd(app *App) *cobra.Command {
                         if _, ok := db.FindActor(actorID); !ok {
                                 return writeErr(cmd, errNotFound("actor", actorID))
                         }
-                        if _, ok := db.FindProject(projectID); !ok {
-                                return writeErr(cmd, errNotFound("project", projectID))
+                        pid := strings.TrimSpace(projectID)
+                        if pid == "" {
+                                pid = strings.TrimSpace(db.CurrentProjectID)
+                                if pid == "" {
+                                        return writeErr(cmd, errors.New("missing --project (or set a current project with `clarity projects use <project-id>`)"))
+                                }
+                        }
+                        if _, ok := db.FindProject(pid); !ok {
+                                return writeErr(cmd, errNotFound("project", pid))
                         }
 
                         oid := strings.TrimSpace(outlineID)
@@ -75,7 +82,7 @@ func newItemsCreateCmd(app *App) *cobra.Command {
                                 if !ok {
                                         return writeErr(cmd, errNotFound("outline", oid))
                                 }
-                                if o.ProjectID != projectID {
+                                if o.ProjectID != pid {
                                         return writeErr(cmd, errors.New("outline must belong to the same project"))
                                 }
                         } else {
@@ -85,12 +92,12 @@ func newItemsCreateCmd(app *App) *cobra.Command {
                                 // - >1 outlines: require --outline (or user creates a new outline explicitly)
                                 var outlines []model.Outline
                                 for _, o := range db.Outlines {
-                                        if o.ProjectID == projectID {
+                                        if o.ProjectID == pid {
                                                 outlines = append(outlines, o)
                                         }
                                 }
                                 if len(outlines) == 0 {
-                                        oid = db.EnsureDefaultOutline(projectID, actorID, func(prefix string) string { return s.NextID(db, prefix) })
+                                        oid = db.EnsureDefaultOutline(pid, actorID, func(prefix string) string { return s.NextID(db, prefix) })
                                 } else if len(outlines) == 1 {
                                         oid = outlines[0].ID
                                 } else {
@@ -135,10 +142,10 @@ func newItemsCreateCmd(app *App) *cobra.Command {
                         now := time.Now().UTC()
                         t := model.Item{
                                 ID:                 s.NextID(db, "item"),
-                                ProjectID:          projectID,
+                                ProjectID:          pid,
                                 OutlineID:          oid,
                                 ParentID:           p,
-                                Order:              nextOrder(db, projectID, p),
+                                Order:              nextOrder(db, pid, p),
                                 Title:              strings.TrimSpace(title),
                                 Description:        description,
                                 StatusID:           "todo",
@@ -167,14 +174,13 @@ func newItemsCreateCmd(app *App) *cobra.Command {
                 },
         }
 
-        cmd.Flags().StringVar(&projectID, "project", "", "Project id")
+        cmd.Flags().StringVar(&projectID, "project", "", "Project id (optional if a current project is set)")
         cmd.Flags().StringVar(&outlineID, "outline", "", "Outline id (optional; default: project's first outline)")
         cmd.Flags().StringVar(&parentID, "parent", "", "Parent item id (for outline nesting)")
         cmd.Flags().StringVar(&title, "title", "", "Item title")
         cmd.Flags().StringVar(&description, "description", "", "Markdown description (optional)")
         cmd.Flags().StringVar(&ownerID, "owner", "", "Owner actor id (default: current actor)")
         cmd.Flags().StringVar(&assignID, "assign", "", "Assigned actor id (optional; default: agent assigns to itself, human leaves unassigned)")
-        _ = cmd.MarkFlagRequired("project")
         _ = cmd.MarkFlagRequired("title")
 
         return cmd
@@ -282,7 +288,67 @@ func newItemsShowCmd(app *App) *cobra.Command {
                         if !ok {
                                 return writeErr(cmd, errNotFound("item", id))
                         }
-                        return writeOut(cmd, app, map[string]any{"data": t})
+
+                        // Progressive disclosure: don't inline large collections by default.
+                        commentsCount := 0
+                        for _, c := range db.Comments {
+                                if c.ItemID == id {
+                                        commentsCount++
+                                }
+                        }
+
+                        var worklogCount *int
+                        if actorID, err := currentActorID(app, db); err == nil {
+                                if humanID, ok := db.HumanUserIDForActor(actorID); ok {
+                                        n := 0
+                                        for _, w := range db.Worklog {
+                                                if w.ItemID != id {
+                                                        continue
+                                                }
+                                                if authorHuman, ok := db.HumanUserIDForActor(w.AuthorID); ok && authorHuman == humanID {
+                                                        n++
+                                                }
+                                        }
+                                        worklogCount = &n
+                                }
+                        }
+
+                        depsOut := 0
+                        depsIn := 0
+                        for _, d := range db.Deps {
+                                if d.FromItemID == id && d.Type == model.DependencyBlocks {
+                                        depsOut++
+                                }
+                                if d.ToItemID == id && d.Type == model.DependencyBlocks {
+                                        depsIn++
+                                }
+                        }
+
+                        hints := []string{
+                                "clarity comments list " + id,
+                                "clarity worklog list " + id,
+                                "clarity deps list --item " + id,
+                                "clarity deps tree " + id,
+                        }
+
+                        return writeOut(cmd, app, map[string]any{
+                                "data": t,
+                                "meta": map[string]any{
+                                        "comments": map[string]any{
+                                                "count": commentsCount,
+                                        },
+                                        "worklog": map[string]any{
+                                                "count": worklogCount,
+                                        },
+                                        "deps": map[string]any{
+                                                "blocks": map[string]any{
+                                                        "out": depsOut,
+                                                        "in":  depsIn,
+                                                },
+                                        },
+                                },
+                                "_hints": hints,
+                        })
                 },
         }
         return cmd

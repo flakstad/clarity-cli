@@ -19,17 +19,18 @@ const (
 )
 
 type DB struct {
-        Version        int                  `json:"version"`
-        CurrentActorID string               `json:"currentActorId,omitempty"`
-        NextIDs        map[string]int       `json:"nextIds"`
-        Actors         []model.Actor        `json:"actors"`
-        Projects       []model.Project      `json:"projects"`
-        Outlines       []model.Outline      `json:"outlines"`
-        Items          []model.Item         `json:"items"`
-        LegacyTasks    []model.Item         `json:"tasks,omitempty"`
-        Deps           []model.Dependency   `json:"deps"`
-        Comments       []model.Comment      `json:"comments"`
-        Worklog        []model.WorklogEntry `json:"worklog"`
+        Version          int                  `json:"version"`
+        CurrentActorID   string               `json:"currentActorId,omitempty"`
+        CurrentProjectID string               `json:"currentProjectId,omitempty"`
+        NextIDs          map[string]int       `json:"nextIds"`
+        Actors           []model.Actor        `json:"actors"`
+        Projects         []model.Project      `json:"projects"`
+        Outlines         []model.Outline      `json:"outlines"`
+        Items            []model.Item         `json:"items"`
+        LegacyTasks      []model.Item         `json:"tasks,omitempty"`
+        Deps             []model.Dependency   `json:"deps"`
+        Comments         []model.Comment      `json:"comments"`
+        Worklog          []model.WorklogEntry `json:"worklog"`
 }
 
 type Store struct {
@@ -177,8 +178,8 @@ func migrateOutlines(db *DB) bool {
         changed := false
         // V1: every item must belong to an outline. Older DBs won't have outlines.
         // Strategy:
-        // - Create one unnamed default outline per project (out-xxxxxxxx)
-        // - Attach items to their project's outline
+        // - Create one unnamed default outline per project IF that project has items without outline IDs
+        // - Attach those items to their project's outline
         // - Normalize status IDs TODO/DOING/DONE -> todo/doing/done
         if db.Outlines == nil {
                 db.Outlines = []model.Outline{}
@@ -192,8 +193,18 @@ func migrateOutlines(db *DB) bool {
 
         next := func(prefix string) string { return (&Store{}).NextID(db, prefix) }
 
+        projectNeedsOutline := map[string]bool{}
+        for i := range db.Items {
+                if db.Items[i].OutlineID == "" && db.Items[i].ProjectID != "" {
+                        projectNeedsOutline[db.Items[i].ProjectID] = true
+                }
+        }
+
         for i := range db.Projects {
                 pid := db.Projects[i].ID
+                if !projectNeedsOutline[pid] {
+                        continue
+                }
                 if _, ok := projectToOutline[pid]; ok {
                         continue
                 }

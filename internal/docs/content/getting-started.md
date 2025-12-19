@@ -7,7 +7,7 @@ Clarity is a local-first project management CLI + TUI built for humans and their
 ```bash
 clarity init
 clarity identity create --kind human --name "andreas" --use
-clarity projects create --name "Clarity"
+clarity projects create --name "Clarity" --use
 clarity outlines create --project <project-id>
 ```
 
@@ -18,10 +18,18 @@ clarity workspace list
 clarity workspace use <name>
 ```
 
+## Projects (set context)
+
+```bash
+clarity projects list
+clarity projects use <project-id>
+clarity projects current
+```
+
 ## Start tracking work
 
 ```bash
-clarity items create --project <project-id> --title "First item"
+clarity items create --title "First item"
 clarity items list --project <project-id>
 ```
 

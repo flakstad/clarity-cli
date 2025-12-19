@@ -20,9 +20,11 @@ Use Clarity to:
 - High-level help: `clarity --help`
 - Feature-level help: `clarity <command> --help`
 - Long-form docs (on demand): `clarity docs` and `clarity docs <topic>`
+- Output convention: `clarity docs output-contract`
 
 ## Output contract
 - Default output is a stable JSON envelope: `{ "data": ... }`
+- Some commands also return `meta` and `_hints` for progressive disclosure
 - Use `--pretty` for readability while debugging
 
 ## Identity model (hard requirement)
@@ -50,7 +52,7 @@ clarity workspace use default
 ```bash
 clarity init
 clarity identity create --kind human --name "andreas" --use
-clarity projects create --name "Clarity"
+clarity projects create --name "Clarity" --use
 clarity outlines create --project <project-id>
 ```
 

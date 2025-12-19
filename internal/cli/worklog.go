@@ -2,6 +2,8 @@ package cli
 
 import (
         "errors"
+        "sort"
+        "strconv"
         "strings"
         "time"
 
@@ -72,9 +74,10 @@ func newWorklogAddCmd(app *App) *cobra.Command {
 
 func newWorklogListCmd(app *App) *cobra.Command {
         var limit int
+        var offset int
         cmd := &cobra.Command{
                 Use:   "list <item-id>",
-                Short: "List worklog entries for an item (filtered to your human user)",
+                Short: "List worklog entries for an item (filtered to your human user; paginated)",
                 Args:  cobra.ExactArgs(1),
                 RunE: func(cmd *cobra.Command, args []string) error {
                         db, _, err := loadDB(app)
@@ -96,7 +99,7 @@ func newWorklogListCmd(app *App) *cobra.Command {
                                 return writeErr(cmd, errors.New("unable to resolve human user for current actor"))
                         }
 
-                        var out []model.WorklogEntry
+                        var all []model.WorklogEntry
                         for _, w := range db.Worklog {
                                 if w.ItemID != itemID {
                                         continue
@@ -108,15 +111,45 @@ func newWorklogListCmd(app *App) *cobra.Command {
                                 if authorHuman != humanID {
                                         continue
                                 }
-                                out = append(out, w)
-                                if limit > 0 && len(out) >= limit {
-                                        break
-                                }
+                                all = append(all, w)
                         }
 
-                        return writeOut(cmd, app, map[string]any{"data": out})
+                        sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.Before(all[j].CreatedAt) })
+
+                        total := len(all)
+                        if offset < 0 {
+                                offset = 0
+                        }
+                        if offset > total {
+                                offset = total
+                        }
+
+                        end := total
+                        if limit > 0 && offset+limit < end {
+                                end = offset + limit
+                        }
+                        out := all[offset:end]
+
+                        hints := []string{
+                                "clarity worklog list " + itemID + " --limit 0",
+                        }
+                        if end < total {
+                                hints = append(hints, "clarity worklog list "+itemID+" --limit "+strconv.Itoa(limit)+" --offset "+strconv.Itoa(end))
+                        }
+
+                        return writeOut(cmd, app, map[string]any{
+                                "data": out,
+                                "meta": map[string]any{
+                                        "total":    total,
+                                        "limit":    limit,
+                                        "offset":   offset,
+                                        "returned": len(out),
+                                },
+                                "_hints": hints,
+                        })
                 },
         }
-        cmd.Flags().IntVar(&limit, "limit", 200, "Max entries to return (0 = all)")
+        cmd.Flags().IntVar(&limit, "limit", 20, "Max entries to return (0 = all)")
+        cmd.Flags().IntVar(&offset, "offset", 0, "Offset into worklog list (for pagination)")
         return cmd
 }

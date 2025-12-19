@@ -30,14 +30,15 @@ func newStatusCmd(app *App) *cobra.Command {
 
                         return writeOut(cmd, app, map[string]any{
                                 "data": map[string]any{
-                                        "dir":            s.Dir,
-                                        "currentActorId": db.CurrentActorID,
-                                        "actors":         len(db.Actors),
-                                        "projects":       len(db.Projects),
-                                        "items":          len(db.Items),
-                                        "deps":           len(db.Deps),
-                                        "comments":       len(db.Comments),
-                                        "events":         eventsCount,
+                                        "dir":              s.Dir,
+                                        "currentActorId":   db.CurrentActorID,
+                                        "currentProjectId": db.CurrentProjectID,
+                                        "actors":           len(db.Actors),
+                                        "projects":         len(db.Projects),
+                                        "items":            len(db.Items),
+                                        "deps":             len(db.Deps),
+                                        "comments":         len(db.Comments),
+                                        "events":           eventsCount,
                                 },
                         })
                 },

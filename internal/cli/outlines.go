@@ -1,6 +1,7 @@
 package cli
 
 import (
+        "errors"
         "strings"
         "time"
 
@@ -38,8 +39,15 @@ func newOutlinesCreateCmd(app *App) *cobra.Command {
                         if err != nil {
                                 return writeErr(cmd, err)
                         }
-                        if _, ok := db.FindProject(projectID); !ok {
-                                return writeErr(cmd, errNotFound("project", projectID))
+                        pid := strings.TrimSpace(projectID)
+                        if pid == "" {
+                                pid = strings.TrimSpace(db.CurrentProjectID)
+                                if pid == "" {
+                                        return writeErr(cmd, errors.New("missing --project (or set a current project with `clarity projects use <project-id>`)"))
+                                }
+                        }
+                        if _, ok := db.FindProject(pid); !ok {
+                                return writeErr(cmd, errNotFound("project", pid))
                         }
                         var namePtr *string
                         n := strings.TrimSpace(name)
@@ -48,7 +56,7 @@ func newOutlinesCreateCmd(app *App) *cobra.Command {
                         }
                         o := model.Outline{
                                 ID:         s.NextID(db, "out"),
-                                ProjectID:  projectID,
+                                ProjectID:  pid,
                                 Name:       namePtr,
                                 StatusDefs: store.DefaultOutlineStatusDefs(),
                                 CreatedBy:  actorID,
@@ -63,9 +71,8 @@ func newOutlinesCreateCmd(app *App) *cobra.Command {
                 },
         }
 
-        cmd.Flags().StringVar(&projectID, "project", "", "Project id")
+        cmd.Flags().StringVar(&projectID, "project", "", "Project id (optional if a current project is set)")
         cmd.Flags().StringVar(&name, "name", "", "Optional outline name")
-        _ = cmd.MarkFlagRequired("project")
         return cmd
 }
 
