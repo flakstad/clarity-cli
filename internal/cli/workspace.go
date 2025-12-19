@@ -17,6 +17,7 @@ func newWorkspaceCmd(app *App) *cobra.Command {
         cmd.AddCommand(newWorkspaceInitCmd(app))
         cmd.AddCommand(newWorkspaceUseCmd(app))
         cmd.AddCommand(newWorkspaceCurrentCmd(app))
+        cmd.AddCommand(newWorkspaceListCmd(app))
         cmd.AddCommand(newWorkspaceRenameCmd(app))
 
         return cmd
@@ -135,6 +136,35 @@ func newWorkspaceCurrentCmd(app *App) *cobra.Command {
                                 "data": map[string]any{
                                         "workspace": cfg.CurrentWorkspace,
                                         "dir":       dir,
+                                },
+                        })
+                },
+        }
+        return cmd
+}
+
+func newWorkspaceListCmd(app *App) *cobra.Command {
+        cmd := &cobra.Command{
+                Use:   "list",
+                Short: "List all workspaces",
+                RunE: func(cmd *cobra.Command, args []string) error {
+                        cfg, err := store.LoadConfig()
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if cfg.CurrentWorkspace == "" {
+                                cfg.CurrentWorkspace = "default"
+                        }
+
+                        ws, err := store.ListWorkspaces()
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+
+                        return writeOut(cmd, app, map[string]any{
+                                "data": map[string]any{
+                                        "workspaces":       ws,
+                                        "currentWorkspace": cfg.CurrentWorkspace,
                                 },
                         })
                 },

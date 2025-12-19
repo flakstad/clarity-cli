@@ -5,6 +5,7 @@ import (
         "errors"
         "os"
         "path/filepath"
+        "sort"
         "strings"
 )
 
@@ -74,4 +75,27 @@ func NormalizeWorkspaceName(name string) (string, error) {
         }
         // Keep it simple for now; treat it as a directory name.
         return name, nil
+}
+
+func ListWorkspaces() ([]string, error) {
+        dir, err := ConfigDir()
+        if err != nil {
+                return nil, err
+        }
+        wsRoot := filepath.Join(dir, "workspaces")
+        ents, err := os.ReadDir(wsRoot)
+        if err != nil {
+                if errors.Is(err, os.ErrNotExist) {
+                        return []string{}, nil
+                }
+                return nil, err
+        }
+        var out []string
+        for _, e := range ents {
+                if e.IsDir() {
+                        out = append(out, e.Name())
+                }
+        }
+        sort.Strings(out)
+        return out, nil
 }

@@ -11,6 +11,13 @@ clarity projects create --name "Clarity"
 clarity outlines create --project <project-id>
 ```
 
+## Workspaces
+
+```bash
+clarity workspace list
+clarity workspace use <name>
+```
+
 ## Start tracking work
 
 ```bash
