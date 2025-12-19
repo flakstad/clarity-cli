@@ -1,0 +1,15 @@
+# Go
+*.exe
+*.test
+*.out
+
+# Local builds
+/clarity
+/dist/
+
+# Local state
+/.clarity/
+/.gocache/
+/tmp/
+/go-build-cache/
+/.gopath/

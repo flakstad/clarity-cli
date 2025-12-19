@@ -1,0 +1,455 @@
+package store
+
+import (
+        "bufio"
+        "encoding/json"
+        "errors"
+        "fmt"
+        "os"
+        "path/filepath"
+        "strings"
+        "time"
+
+        "clarity-cli/internal/model"
+)
+
+const (
+        dbFileName     = "db.json"
+        eventsFileName = "events.jsonl"
+)
+
+type DB struct {
+        Version        int                  `json:"version"`
+        CurrentActorID string               `json:"currentActorId,omitempty"`
+        NextIDs        map[string]int       `json:"nextIds"`
+        Actors         []model.Actor        `json:"actors"`
+        Projects       []model.Project      `json:"projects"`
+        Outlines       []model.Outline      `json:"outlines"`
+        Items          []model.Item         `json:"items"`
+        LegacyTasks    []model.Item         `json:"tasks,omitempty"`
+        Deps           []model.Dependency   `json:"deps"`
+        Comments       []model.Comment      `json:"comments"`
+        Worklog        []model.WorklogEntry `json:"worklog"`
+}
+
+type Store struct {
+        Dir string
+}
+
+func DiscoverDir(start string) (string, bool) {
+        dir := start
+        for {
+                candidate := filepath.Join(dir, ".clarity")
+                if st, err := os.Stat(candidate); err == nil && st.IsDir() {
+                        return candidate, true
+                }
+                parent := filepath.Dir(dir)
+                if parent == dir {
+                        return "", false
+                }
+                dir = parent
+        }
+}
+
+func DefaultDir() (string, error) {
+        cwd, err := os.Getwd()
+        if err != nil {
+                return "", err
+        }
+        if found, ok := DiscoverDir(cwd); ok {
+                return found, nil
+        }
+        return filepath.Join(cwd, ".clarity"), nil
+}
+
+func WorkspaceDir(name string) (string, error) {
+        name, err := NormalizeWorkspaceName(name)
+        if err != nil {
+                return "", err
+        }
+        dir, err := ConfigDir()
+        if err != nil {
+                return "", err
+        }
+        return filepath.Join(dir, "workspaces", name), nil
+}
+
+func (s Store) Ensure() error {
+        return os.MkdirAll(s.Dir, 0o755)
+}
+
+func (s Store) dbPath() string {
+        return filepath.Join(s.Dir, dbFileName)
+}
+
+func (s Store) eventsPath() string {
+        return filepath.Join(s.Dir, eventsFileName)
+}
+
+func (s Store) Load() (*DB, error) {
+        if err := s.Ensure(); err != nil {
+                return nil, err
+        }
+
+        b, err := os.ReadFile(s.dbPath())
+        if err != nil {
+                if errors.Is(err, os.ErrNotExist) {
+                        return &DB{
+                                Version: 1,
+                                NextIDs: map[string]int{},
+                        }, nil
+                }
+                return nil, err
+        }
+
+        var db DB
+        if err := json.Unmarshal(b, &db); err != nil {
+                return nil, err
+        }
+
+        dirty := false
+        if db.NextIDs == nil {
+                db.NextIDs = map[string]int{}
+                dirty = true
+        }
+        if len(db.Items) == 0 && len(db.LegacyTasks) > 0 {
+                db.Items = db.LegacyTasks
+                db.LegacyTasks = nil
+                dirty = true
+        }
+        if db.Version == 0 {
+                db.Version = 1
+                dirty = true
+        }
+        if migrateLegacyDates(&db) {
+                dirty = true
+        }
+        if migrateOutlines(&db) {
+                dirty = true
+        }
+        if migrateLegacyIDs(&db) {
+                dirty = true
+        }
+
+        // Persist migrations immediately so IDs (e.g. outline IDs) are stable across runs.
+        if dirty {
+                if err := s.Save(&db); err != nil {
+                        return nil, err
+                }
+        }
+        return &db, nil
+}
+
+func migrateLegacyIDs(db *DB) bool {
+        changed := false
+        // deps: fromTaskId/toTaskId -> fromItemId/toItemId
+        for i := range db.Deps {
+                d := &db.Deps[i]
+                if d.FromItemID == "" && d.LegacyFromTaskID != "" {
+                        d.FromItemID = d.LegacyFromTaskID
+                        changed = true
+                }
+                if d.ToItemID == "" && d.LegacyToTaskID != "" {
+                        d.ToItemID = d.LegacyToTaskID
+                        changed = true
+                }
+        }
+
+        // comments/worklog: taskId -> itemId
+        for i := range db.Comments {
+                c := &db.Comments[i]
+                if c.ItemID == "" && c.LegacyTaskID != "" {
+                        c.ItemID = c.LegacyTaskID
+                        changed = true
+                }
+        }
+        for i := range db.Worklog {
+                w := &db.Worklog[i]
+                if w.ItemID == "" && w.LegacyTaskID != "" {
+                        w.ItemID = w.LegacyTaskID
+                        changed = true
+                }
+        }
+        return changed
+}
+
+func migrateOutlines(db *DB) bool {
+        changed := false
+        // V1: every item must belong to an outline. Older DBs won't have outlines.
+        // Strategy:
+        // - Create one unnamed default outline per project (out-xxxxxxxx)
+        // - Attach items to their project's outline
+        // - Normalize status IDs TODO/DOING/DONE -> todo/doing/done
+        if db.Outlines == nil {
+                db.Outlines = []model.Outline{}
+                changed = true
+        }
+
+        projectToOutline := map[string]string{}
+        for _, o := range db.Outlines {
+                projectToOutline[o.ProjectID] = o.ID
+        }
+
+        next := func(prefix string) string { return (&Store{}).NextID(db, prefix) }
+
+        for i := range db.Projects {
+                pid := db.Projects[i].ID
+                if _, ok := projectToOutline[pid]; ok {
+                        continue
+                }
+                oid := next("out")
+                projectToOutline[pid] = oid
+                db.Outlines = append(db.Outlines, model.Outline{
+                        ID:         oid,
+                        ProjectID:  pid,
+                        Name:       nil,
+                        StatusDefs: DefaultOutlineStatusDefs(),
+                        CreatedBy:  db.Projects[i].CreatedBy,
+                        CreatedAt:  db.Projects[i].CreatedAt,
+                })
+                changed = true
+        }
+
+        for i := range db.Items {
+                t := &db.Items[i]
+                if t.OutlineID == "" {
+                        if oid, ok := projectToOutline[t.ProjectID]; ok {
+                                t.OutlineID = oid
+                                changed = true
+                        }
+                }
+                switch t.StatusID {
+                case "TODO":
+                        t.StatusID = "todo"
+                        changed = true
+                case "DOING":
+                        t.StatusID = "doing"
+                        changed = true
+                case "DONE":
+                        t.StatusID = "done"
+                        changed = true
+                }
+        }
+        return changed
+}
+
+func migrateLegacyDates(db *DB) bool {
+        changed := false
+        for i := range db.Items {
+                t := &db.Items[i]
+                if t.Due == nil && t.LegacyDueAt != nil {
+                        t.Due = legacyTimeToDateTime(*t.LegacyDueAt)
+                        changed = true
+                }
+                if t.Schedule == nil && t.LegacyScheduledAt != nil {
+                        t.Schedule = legacyTimeToDateTime(*t.LegacyScheduledAt)
+                        changed = true
+                }
+        }
+        return changed
+}
+
+func legacyTimeToDateTime(ts time.Time) *model.DateTime {
+        // Best-effort migration: we previously used 09:00 local default for date-only;
+        // detect that and migrate to date-only.
+        ts = ts.UTC()
+        date := ts.Format("2006-01-02")
+        hm := ts.Format("15:04")
+        if hm == "09:00" || hm == "00:00" {
+                return &model.DateTime{Date: date, Time: nil}
+        }
+        return &model.DateTime{Date: date, Time: &hm}
+}
+
+func (s Store) Save(db *DB) error {
+        if err := s.Ensure(); err != nil {
+                return err
+        }
+        b, err := json.MarshalIndent(db, "", "  ")
+        if err != nil {
+                return err
+        }
+        tmp := s.dbPath() + ".tmp"
+        if err := os.WriteFile(tmp, b, 0o644); err != nil {
+                return err
+        }
+        return os.Rename(tmp, s.dbPath())
+}
+
+func (s Store) NextID(db *DB, prefix string) string {
+        // Hash-based IDs (stable-ish length) instead of sequential integers.
+        // Prefixes remain for readability: item-xxxxxxxx, proj-xxxxxxxx, out-xxxxxxxx, etc.
+        //
+        // NOTE: NextIDs is kept for backwards compatibility with old db.json files,
+        // but is no longer used as the source of IDs.
+        for i := 0; i < 10; i++ {
+                id, err := newRandomID(prefix)
+                if err != nil {
+                        // fallback: keep old behavior if crypto/rand fails
+                        if db.NextIDs == nil {
+                                db.NextIDs = map[string]int{}
+                        }
+                        db.NextIDs[prefix]++
+                        return fmt.Sprintf("%s-%d", prefix, db.NextIDs[prefix])
+                }
+                if !idExists(db, id) {
+                        return id
+                }
+        }
+        // Extremely unlikely fallback
+        if db.NextIDs == nil {
+                db.NextIDs = map[string]int{}
+        }
+        db.NextIDs[prefix]++
+        return fmt.Sprintf("%s-%d", prefix, db.NextIDs[prefix])
+}
+
+func (s Store) AppendEvent(actorID, typ, entityID string, payload any) error {
+        if err := s.Ensure(); err != nil {
+                return err
+        }
+
+        ev := model.Event{
+                ID:       "", // filled below
+                TS:       time.Now().UTC(),
+                ActorID:  actorID,
+                Type:     typ,
+                EntityID: entityID,
+                Payload:  payload,
+        }
+
+        // Generate a monotonic event id without loading db.json.
+        // Format: evt-<unixms>-<rand-ish suffix from pid>
+        ev.ID = fmt.Sprintf("evt-%d-%d", ev.TS.UnixMilli(), os.Getpid())
+
+        line, err := json.Marshal(ev)
+        if err != nil {
+                return err
+        }
+
+        f, err := os.OpenFile(s.eventsPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+        if err != nil {
+                return err
+        }
+        defer f.Close()
+
+        _, err = fmt.Fprintln(f, string(line))
+        return err
+}
+
+func (db *DB) FindActor(id string) (*model.Actor, bool) {
+        for i := range db.Actors {
+                if db.Actors[i].ID == id {
+                        return &db.Actors[i], true
+                }
+        }
+        return nil, false
+}
+
+// HumanUserIDForActor returns the owning human user id for an actor.
+// - human actor => itself
+// - agent actor => actor.UserID (required)
+func (db *DB) HumanUserIDForActor(actorID string) (string, bool) {
+        a, ok := db.FindActor(actorID)
+        if !ok {
+                return "", false
+        }
+        switch a.Kind {
+        case model.ActorKindHuman:
+                return a.ID, true
+        case model.ActorKindAgent:
+                if a.UserID == nil || *a.UserID == "" {
+                        return "", false
+                }
+                return *a.UserID, true
+        default:
+                return "", false
+        }
+}
+
+func (db *DB) FindProject(id string) (*model.Project, bool) {
+        for i := range db.Projects {
+                if db.Projects[i].ID == id {
+                        return &db.Projects[i], true
+                }
+        }
+        return nil, false
+}
+
+func (db *DB) FindOutline(id string) (*model.Outline, bool) {
+        for i := range db.Outlines {
+                if db.Outlines[i].ID == id {
+                        return &db.Outlines[i], true
+                }
+        }
+        return nil, false
+}
+
+func (db *DB) FindItem(id string) (*model.Item, bool) {
+        for i := range db.Items {
+                if db.Items[i].ID == id {
+                        return &db.Items[i], true
+                }
+        }
+        return nil, false
+}
+
+func NormalizeActorKind(s string) (model.ActorKind, error) {
+        switch strings.ToLower(strings.TrimSpace(s)) {
+        case "human":
+                return model.ActorKindHuman, nil
+        case "agent":
+                return model.ActorKindAgent, nil
+        default:
+                return "", fmt.Errorf("invalid actor kind: %q (expected human|agent)", s)
+        }
+}
+
+func ParseStatusID(s string) (string, error) {
+        switch strings.ToUpper(strings.TrimSpace(s)) {
+        case "TODO", "todo":
+                return "todo", nil
+        case "DOING", "doing":
+                return "doing", nil
+        case "DONE", "done":
+                return "done", nil
+        case "NONE", "none":
+                return "", nil
+        default:
+                // For outline-defined statuses, we allow any non-empty id.
+                s = strings.TrimSpace(s)
+                if s == "" {
+                        return "", fmt.Errorf("invalid status: empty")
+                }
+                return s, nil
+        }
+}
+
+func ReadEvents(dir string, limit int) ([]model.Event, error) {
+        path := filepath.Join(dir, eventsFileName)
+        f, err := os.Open(path)
+        if err != nil {
+                if errors.Is(err, os.ErrNotExist) {
+                        return []model.Event{}, nil
+                }
+                return nil, err
+        }
+        defer f.Close()
+
+        var out []model.Event
+        sc := bufio.NewScanner(f)
+        for sc.Scan() {
+                var ev model.Event
+                if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
+                        return nil, err
+                }
+                out = append(out, ev)
+                if limit > 0 && len(out) >= limit {
+                        break
+                }
+        }
+        if err := sc.Err(); err != nil {
+                return nil, err
+        }
+        return out, nil
+}
