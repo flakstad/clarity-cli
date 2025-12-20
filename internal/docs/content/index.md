@@ -14,3 +14,4 @@ Recommended starting topics:
 - `identity-ownership`
 - `items-outlines`
 - `deps`
+- `tui`

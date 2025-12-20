@@ -43,3 +43,12 @@ Run the TUI:
 ```bash
 clarity
 ```
+
+## Ordering model
+Items are ordered by:
+- `parentId` (hierarchy)
+- `rank` (lexicographic sibling ordering)
+
+For CLI reordering/reparenting:
+- `clarity items move ...`
+- `clarity items set-parent ...`

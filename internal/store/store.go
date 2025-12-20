@@ -7,6 +7,7 @@ import (
         "fmt"
         "os"
         "path/filepath"
+        "sort"
         "strings"
         "time"
 
@@ -103,8 +104,8 @@ func (s Store) Load() (*DB, error) {
                 return nil, err
         }
 
-        var db DB
-        if err := json.Unmarshal(b, &db); err != nil {
+        db, legacyOrderByID, err := loadWireDB(b)
+        if err != nil {
                 return nil, err
         }
 
@@ -128,6 +129,9 @@ func (s Store) Load() (*DB, error) {
         if migrateOutlines(&db) {
                 dirty = true
         }
+        if migrateRanks(&db, legacyOrderByID) {
+                dirty = true
+        }
         if migrateLegacyIDs(&db) {
                 dirty = true
         }
@@ -139,6 +143,80 @@ func (s Store) Load() (*DB, error) {
                 }
         }
         return &db, nil
+}
+
+func migrateRanks(db *DB, legacyOrderByID map[string]int) bool {
+        // V1: ordering is stored as per-item rank (lexicographic) per sibling group.
+        // Older DBs used an integer order. Migrate groups that have missing ranks.
+        changed := false
+
+        type key struct {
+                outlineID string
+                parentID  string // "" for nil
+        }
+
+        groups := map[key][]int{}
+        for i := range db.Items {
+                it := &db.Items[i]
+                pid := ""
+                if it.ParentID != nil {
+                        pid = *it.ParentID
+                }
+                k := key{outlineID: it.OutlineID, parentID: pid}
+                groups[k] = append(groups[k], i)
+        }
+
+        for _, idxs := range groups {
+                needs := false
+                for _, idx := range idxs {
+                        if strings.TrimSpace(db.Items[idx].Rank) == "" {
+                                needs = true
+                                break
+                        }
+                }
+                if !needs {
+                        continue
+                }
+
+                sort.Slice(idxs, func(i, j int) bool {
+                        a := db.Items[idxs[i]]
+                        b := db.Items[idxs[j]]
+                        oa, oka := legacyOrderByID[a.ID]
+                        ob, okb := legacyOrderByID[b.ID]
+                        if oka && okb && oa != ob {
+                                return oa < ob
+                        }
+                        return a.CreatedAt.Before(b.CreatedAt)
+                })
+
+                prev := ""
+                for _, idx := range idxs {
+                        it := &db.Items[idx]
+                        if strings.TrimSpace(it.Rank) != "" {
+                                prev = it.Rank
+                                continue
+                        }
+                        var next string
+                        if strings.TrimSpace(prev) == "" {
+                                r, err := RankInitial()
+                                if err != nil {
+                                        r = "h"
+                                }
+                                next = r
+                        } else {
+                                r, err := RankAfter(prev)
+                                if err != nil {
+                                        r = prev + "0"
+                                }
+                                next = r
+                        }
+                        it.Rank = next
+                        prev = next
+                        changed = true
+                }
+        }
+
+        return changed
 }
 
 func migrateLegacyIDs(db *DB) bool {

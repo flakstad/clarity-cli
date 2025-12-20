@@ -103,10 +103,14 @@ func newDepsListCmd(app *App) *cobra.Command {
                         }
 
                         if len(args) == 0 {
-                                return writeOut(cmd, app, map[string]any{"data": db.Deps})
+                                out := db.Deps
+                                if out == nil {
+                                        out = []model.Dependency{}
+                                }
+                                return writeOut(cmd, app, map[string]any{"data": out})
                         }
                         itemID := args[0]
-                        var out []model.Dependency
+                        out := make([]model.Dependency, 0)
                         for _, d := range db.Deps {
                                 if d.FromItemID == itemID || d.ToItemID == itemID {
                                         out = append(out, d)

@@ -99,7 +99,7 @@ func newWorklogListCmd(app *App) *cobra.Command {
                                 return writeErr(cmd, errors.New("unable to resolve human user for current actor"))
                         }
 
-                        var all []model.WorklogEntry
+                        all := make([]model.WorklogEntry, 0)
                         for _, w := range db.Worklog {
                                 if w.ItemID != itemID {
                                         continue

@@ -87,9 +87,13 @@ func newOutlinesListCmd(app *App) *cobra.Command {
                                 return writeErr(cmd, err)
                         }
                         if projectID == "" {
-                                return writeOut(cmd, app, map[string]any{"data": db.Outlines})
+                                out := db.Outlines
+                                if out == nil {
+                                        out = []model.Outline{}
+                                }
+                                return writeOut(cmd, app, map[string]any{"data": out})
                         }
-                        var out []model.Outline
+                        out := make([]model.Outline, 0)
                         for _, o := range db.Outlines {
                                 if o.ProjectID == projectID {
                                         out = append(out, o)

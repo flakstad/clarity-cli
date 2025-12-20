@@ -33,8 +33,7 @@ func newItemsCmd(app *App) *cobra.Command {
         cmd.AddCommand(newItemsArchiveCmd(app))
         cmd.AddCommand(newItemsReadyCmd(app))
         cmd.AddCommand(newItemsMoveCmd(app))
-        cmd.AddCommand(newItemsIndentCmd(app))
-        cmd.AddCommand(newItemsOutdentCmd(app))
+        cmd.AddCommand(newItemsSetParentCmd(app))
         cmd.AddCommand(newItemsMoveOutlineCmd(app))
 
         return cmd
@@ -145,7 +144,7 @@ func newItemsCreateCmd(app *App) *cobra.Command {
                                 ProjectID:          pid,
                                 OutlineID:          oid,
                                 ParentID:           p,
-                                Order:              nextOrder(db, pid, p),
+                                Rank:               nextSiblingRank(db, oid, p),
                                 Title:              strings.TrimSpace(title),
                                 Description:        description,
                                 StatusID:           "todo",
@@ -222,7 +221,7 @@ func newItemsListCmd(app *App) *cobra.Command {
                                 filterStatus = true
                         }
 
-                        var out []model.Item
+                        out := make([]model.Item, 0)
                         for _, t := range db.Items {
                                 if !includeArchived && t.Archived {
                                         continue
@@ -246,6 +245,9 @@ func newItemsListCmd(app *App) *cobra.Command {
                                 if out[i].ProjectID != out[j].ProjectID {
                                         return out[i].ProjectID < out[j].ProjectID
                                 }
+                                if out[i].OutlineID != out[j].OutlineID {
+                                        return out[i].OutlineID < out[j].OutlineID
+                                }
                                 pi := ""
                                 pj := ""
                                 if out[i].ParentID != nil {
@@ -257,7 +259,18 @@ func newItemsListCmd(app *App) *cobra.Command {
                                 if pi != pj {
                                         return pi < pj
                                 }
-                                return out[i].Order < out[j].Order
+                                ri := strings.TrimSpace(out[i].Rank)
+                                rj := strings.TrimSpace(out[j].Rank)
+                                if ri != "" && rj != "" {
+                                        return ri < rj
+                                }
+                                if ri != "" && rj == "" {
+                                        return false
+                                }
+                                if ri == "" && rj != "" {
+                                        return true
+                                }
+                                return out[i].CreatedAt.Before(out[j].CreatedAt)
                         })
 
                         return writeOut(cmd, app, map[string]any{"data": out})
@@ -327,7 +340,7 @@ func newItemsShowCmd(app *App) *cobra.Command {
                         hints := []string{
                                 "clarity comments list " + id,
                                 "clarity worklog list " + id,
-                                "clarity deps list --item " + id,
+                                "clarity deps list " + id,
                                 "clarity deps tree " + id,
                         }
 
@@ -464,7 +477,7 @@ func newItemsReadyCmd(app *App) *cobra.Command {
                                 }
                         }
 
-                        var out []model.Item
+                        out := make([]model.Item, 0)
                         for _, t := range db.Items {
                                 if t.Archived {
                                         continue
@@ -483,10 +496,11 @@ func newItemsReadyCmd(app *App) *cobra.Command {
         return cmd
 }
 
-func nextOrder(db *store.DB, projectID string, parentID *string) int {
-        max := 0
+func nextSiblingRank(db *store.DB, outlineID string, parentID *string) string {
+        // Append to end of sibling list.
+        max := ""
         for _, t := range db.Items {
-                if t.ProjectID != projectID {
+                if t.OutlineID != outlineID {
                         continue
                 }
                 if (t.ParentID == nil) != (parentID == nil) {
@@ -495,9 +509,21 @@ func nextOrder(db *store.DB, projectID string, parentID *string) int {
                 if t.ParentID != nil && parentID != nil && *t.ParentID != *parentID {
                         continue
                 }
-                if t.Order > max {
-                        max = t.Order
+                r := strings.TrimSpace(t.Rank)
+                if r != "" && r > max {
+                        max = r
                 }
         }
-        return max + 1
+        if max == "" {
+                r, err := store.RankInitial()
+                if err != nil {
+                        return "h"
+                }
+                return r
+        }
+        r, err := store.RankAfter(max)
+        if err != nil {
+                return max + "0"
+        }
+        return r
 }

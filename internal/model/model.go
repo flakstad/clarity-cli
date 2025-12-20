@@ -44,11 +44,11 @@ type Item struct {
         OutlineID string `json:"outlineId"`
 
         ParentID *string `json:"parentId,omitempty"`
-        Order    int     `json:"order"`
+        Rank     string  `json:"rank,omitempty"`
 
-        Title       string `json:"title"`
-        Description string `json:"description,omitempty"`
-        StatusID    string `json:"status,omitempty"`
+        Title       string    `json:"title"`
+        Description string    `json:"description,omitempty"`
+        StatusID    string    `json:"status,omitempty"`
         Priority    bool      `json:"priority"`
         OnHold      bool      `json:"onHold"`
         Due         *DateTime `json:"due,omitempty"`

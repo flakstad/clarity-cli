@@ -85,7 +85,7 @@ func newCommentsListCmd(app *App) *cobra.Command {
                                 return writeErr(cmd, errNotFound("item", itemID))
                         }
 
-                        var all []model.Comment
+                        all := make([]model.Comment, 0)
                         for _, c := range db.Comments {
                                 if c.ItemID == itemID {
                                         all = append(all, c)

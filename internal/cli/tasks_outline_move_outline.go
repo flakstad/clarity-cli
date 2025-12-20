@@ -57,7 +57,7 @@ func newItemsMoveOutlineCmd(app *App) *cobra.Command {
                         t.ParentID = nil
                         t.OutlineID = o.ID
                         t.StatusID = statusToUse
-                        t.Order = nextOrder(db, t.ProjectID, nil)
+                        t.Rank = nextSiblingRank(db, o.ID, nil)
                         t.UpdatedAt = time.Now().UTC()
 
                         if err := s.Save(db); err != nil {
