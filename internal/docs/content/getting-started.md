@@ -31,6 +31,9 @@ clarity projects current
 ```bash
 clarity items create --title "First item"
 clarity items list --project <project-id>
+
+# Direct item lookup (shortcut for `clarity items show <item-id>`)
+clarity <item-id>
 ```
 
 ## If you want an isolated store

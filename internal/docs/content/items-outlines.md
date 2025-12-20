@@ -22,6 +22,19 @@ clarity projects use <project-id>
 clarity items create --title "Write spec" --description "Markdown supported"
 ```
 
+## Show an item
+
+```bash
+# Canonical
+clarity items show <item-id>
+
+# Alias
+clarity items get <item-id>
+
+# Direct lookup (beads-style convenience)
+clarity <item-id>
+```
+
 ## Reorder and reparent (CLI)
 The CLI intentionally avoids `indent`/`outdent`. Use explicit operations:
 

@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "currentActorId": "act-q5eon7lz",
+  "currentProjectId": "proj-tmgxcc25",
+  "nextIds": {},
+  "actors": [
+    {
+      "id": "act-q5eon7lz",
+      "kind": "human",
+      "name": "Test User"
+    }
+  ],
+  "projects": [
+    {
+      "id": "proj-tmgxcc25",
+      "name": "P",
+      "createdBy": "act-q5eon7lz",
+      "createdAt": "2025-12-20T15:57:19.652724Z"
+    }
+  ],
+  "outlines": [
+    {
+      "id": "out-tb44svsx",
+      "projectId": "proj-tmgxcc25",
+      "statusDefs": [
+        {
+          "id": "todo",
+          "label": "TODO",
+          "isEndState": false
+        },
+        {
+          "id": "doing",
+          "label": "DOING",
+          "isEndState": false
+        },
+        {
+          "id": "done",
+          "label": "DONE",
+          "isEndState": true
+        }
+      ],
+      "createdBy": "act-q5eon7lz",
+      "createdAt": "2025-12-20T15:57:19.656766Z"
+    }
+  ],
+  "items": [
+    {
+      "id": "item-le3rhx",
+      "projectId": "proj-tmgxcc25",
+      "outlineId": "out-tb44svsx",
+      "rank": "h",
+      "title": "X",
+      "status": "todo",
+      "priority": false,
+      "onHold": false,
+      "archived": false,
+      "ownerActorId": "act-q5eon7lz",
+      "createdBy": "act-q5eon7lz",
+      "createdAt": "2025-12-20T15:57:19.660918Z",
+      "updatedAt": "2025-12-20T15:57:19.660918Z"
+    }
+  ],
+  "deps": null,
+  "comments": null,
+  "worklog": null
+}

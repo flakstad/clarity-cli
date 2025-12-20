@@ -3,22 +3,27 @@
 Run `clarity` with no subcommands to start the interactive TUI.
 
 Current scope (early):
+- Centered layout by default (projects/outlines/outline/item views)
+- Breadcrumb at the top showing where you are (projects > project > outline > item)
 - Navigate projects → outlines → items
-- Read item details in a split view (outline on the left, details on the right)
+- Optional preview pane for item details (outline on the left, preview on the right)
+- Full-screen item view (single pane)
 - Auto-refresh when the local store changes (polls file mtimes)
-- Outline shows progress cookies for items with children (e.g. `[1/2]`)
+- Outline shows progress cookies for items with children (e.g. `1/2`)
 - Create items directly from the TUI (sibling and subitem)
 - Reorder and restructure items (reorder, indent, outdent)
 
 Key bindings:
-- `enter`: open selected item (outline view)
-- `o`: open selected item (outline view)
-- `backspace` or `esc`: go back (from detail → outline; from outline → previous screen)
+- `enter`: open selected item (single-pane item view)
+- `o`: toggle preview pane (split view)
+- `backspace` or `esc`: go back (from item view → outline; from outline → previous screen)
 - `r`: archive selected item (with confirm)
+- `y`: copy selected item ID to clipboard
+- `Y`: copy `clarity items show <id>` to clipboard
 - `c`: add a comment (selected item)
 - `w`: add a worklog entry (selected item)
 - `q` or `ctrl+c`: quit
-- `tab`: toggle focus (outline/detail) (optional)
+- `tab`: toggle focus (outline/preview) (optional; only when preview is visible)
 
 Outline navigation (outline.js-style):
 - `↑/↓`, `j/k`, `ctrl+n/ctrl+p`: previous/next visible item

@@ -18,12 +18,7 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
         box := lipgloss.NewStyle().
                 Width(width).
                 Height(height).
-                Padding(0, 1).
-                Border(lipgloss.RoundedBorder()).
-                BorderForeground(lipgloss.Color("240"))
-        if focused {
-                box = box.BorderForeground(lipgloss.Color("62"))
-        }
+                Padding(0, 1)
 
         status := renderStatus(outline, it.StatusID)
         assigned := "-"
@@ -84,14 +79,14 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
                 desc = truncateLines(desc, 12)
         }
 
-                lines := []string{
-                        titleStyle.Render(it.Title),
-                        "",
-                        labelStyle.Render("ID: ") + it.ID,
-                        labelStyle.Render("Owner: ") + it.OwnerActorID,
-                        labelStyle.Render("Assigned: ") + assigned,
-                        labelStyle.Render("Priority: ") + fmt.Sprintf("%v", it.Priority),
-                        labelStyle.Render("On hold: ") + fmt.Sprintf("%v", it.OnHold),
+        lines := []string{
+                titleStyle.Render(it.Title),
+                "",
+                labelStyle.Render("ID: ") + it.ID,
+                labelStyle.Render("Owner: ") + it.OwnerActorID,
+                labelStyle.Render("Assigned: ") + assigned,
+                labelStyle.Render("Priority: ") + fmt.Sprintf("%v", it.Priority),
+                labelStyle.Render("On hold: ") + fmt.Sprintf("%v", it.OnHold),
                 "",
                 labelStyle.Render("Description"),
                 desc,
@@ -107,17 +102,17 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
                 "",
                 labelStyle.Render("Recent worklog (yours)"),
                 renderWorklog(myWorklog, 3),
-                        "",
-                        labelStyle.Render("Hints"),
-                        "- tab toggles focus between outline/detail",
-                        "- n creates a new sibling (outline pane)",
-                        "- N creates a new subitem",
-                        "- c adds a comment; w adds a worklog entry",
-                        "- z toggles collapse; Shift+Z toggles collapse all/expand all",
-                        "- More via CLI:",
-                        "  clarity comments list " + it.ID,
-                        "  clarity worklog list " + it.ID,
-                }
+                "",
+                labelStyle.Render("Hints"),
+                "- tab toggles focus between outline/detail",
+                "- n creates a new sibling (outline pane)",
+                "- N creates a new subitem",
+                "- c adds a comment; w adds a worklog entry",
+                "- z toggles collapse; Shift+Z toggles collapse all/expand all",
+                "- More via CLI:",
+                "  clarity comments list " + it.ID,
+                "  clarity worklog list " + it.ID,
+        }
 
         if strings.TrimSpace(status) != "" {
                 // Insert status after ID line.

@@ -290,81 +290,87 @@ func newItemsShowCmd(app *App) *cobra.Command {
         cmd := &cobra.Command{
                 Use:   "show <item-id>",
                 Short: "Show an item",
-                Args:  cobra.ExactArgs(1),
+                Aliases: []string{
+                        "get",
+                },
+                Args: cobra.ExactArgs(1),
                 RunE: func(cmd *cobra.Command, args []string) error {
-                        db, _, err := loadDB(app)
-                        if err != nil {
-                                return writeErr(cmd, err)
-                        }
-                        id := args[0]
-                        t, ok := db.FindItem(id)
-                        if !ok {
-                                return writeErr(cmd, errNotFound("item", id))
-                        }
-
-                        // Progressive disclosure: don't inline large collections by default.
-                        commentsCount := 0
-                        for _, c := range db.Comments {
-                                if c.ItemID == id {
-                                        commentsCount++
-                                }
-                        }
-
-                        var worklogCount *int
-                        if actorID, err := currentActorID(app, db); err == nil {
-                                if humanID, ok := db.HumanUserIDForActor(actorID); ok {
-                                        n := 0
-                                        for _, w := range db.Worklog {
-                                                if w.ItemID != id {
-                                                        continue
-                                                }
-                                                if authorHuman, ok := db.HumanUserIDForActor(w.AuthorID); ok && authorHuman == humanID {
-                                                        n++
-                                                }
-                                        }
-                                        worklogCount = &n
-                                }
-                        }
-
-                        depsOut := 0
-                        depsIn := 0
-                        for _, d := range db.Deps {
-                                if d.FromItemID == id && d.Type == model.DependencyBlocks {
-                                        depsOut++
-                                }
-                                if d.ToItemID == id && d.Type == model.DependencyBlocks {
-                                        depsIn++
-                                }
-                        }
-
-                        hints := []string{
-                                "clarity comments list " + id,
-                                "clarity worklog list " + id,
-                                "clarity deps list " + id,
-                                "clarity deps tree " + id,
-                        }
-
-                        return writeOut(cmd, app, map[string]any{
-                                "data": t,
-                                "meta": map[string]any{
-                                        "comments": map[string]any{
-                                                "count": commentsCount,
-                                        },
-                                        "worklog": map[string]any{
-                                                "count": worklogCount,
-                                        },
-                                        "deps": map[string]any{
-                                                "blocks": map[string]any{
-                                                        "out": depsOut,
-                                                        "in":  depsIn,
-                                                },
-                                        },
-                                },
-                                "_hints": hints,
-                        })
+                        return showItem(app, cmd, args[0])
                 },
         }
         return cmd
+}
+
+func showItem(app *App, cmd *cobra.Command, id string) error {
+        db, _, err := loadDB(app)
+        if err != nil {
+                return writeErr(cmd, err)
+        }
+        t, ok := db.FindItem(id)
+        if !ok {
+                return writeErr(cmd, errNotFound("item", id))
+        }
+
+        // Progressive disclosure: don't inline large collections by default.
+        commentsCount := 0
+        for _, c := range db.Comments {
+                if c.ItemID == id {
+                        commentsCount++
+                }
+        }
+
+        var worklogCount *int
+        if actorID, err := currentActorID(app, db); err == nil {
+                if humanID, ok := db.HumanUserIDForActor(actorID); ok {
+                        n := 0
+                        for _, w := range db.Worklog {
+                                if w.ItemID != id {
+                                        continue
+                                }
+                                if authorHuman, ok := db.HumanUserIDForActor(w.AuthorID); ok && authorHuman == humanID {
+                                        n++
+                                }
+                        }
+                        worklogCount = &n
+                }
+        }
+
+        depsOut := 0
+        depsIn := 0
+        for _, d := range db.Deps {
+                if d.FromItemID == id && d.Type == model.DependencyBlocks {
+                        depsOut++
+                }
+                if d.ToItemID == id && d.Type == model.DependencyBlocks {
+                        depsIn++
+                }
+        }
+
+        hints := []string{
+                "clarity comments list " + id,
+                "clarity worklog list " + id,
+                "clarity deps list " + id,
+                "clarity deps tree " + id,
+        }
+
+        return writeOut(cmd, app, map[string]any{
+                "data": t,
+                "meta": map[string]any{
+                        "comments": map[string]any{
+                                "count": commentsCount,
+                        },
+                        "worklog": map[string]any{
+                                "count": worklogCount,
+                        },
+                        "deps": map[string]any{
+                                "blocks": map[string]any{
+                                        "out": depsOut,
+                                        "in":  depsIn,
+                                },
+                        },
+                },
+                "_hints": hints,
+        })
 }
 
 func newItemsSetTitleCmd(app *App) *cobra.Command {

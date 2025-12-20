@@ -4,6 +4,7 @@ import (
         "errors"
         "fmt"
         "os"
+        "strings"
 
         "clarity-cli/internal/format"
         "clarity-cli/internal/store"
@@ -27,6 +28,16 @@ func NewRootCmd() *cobra.Command {
                 Use:          "clarity",
                 Short:        "Clarity (local-first) CLI + TUI",
                 SilenceUsage: true,
+                Example: strings.TrimSpace(`
+  # Start the interactive TUI
+  clarity
+
+  # Scriptable commands
+  clarity items list
+
+  # Direct item lookup (shortcut for: clarity items show <item-id>)
+  clarity item-abc123
+`),
                 RunE: func(cmd *cobra.Command, args []string) error {
                         // No subcommand => interactive TUI.
                         if cmd.HasSubCommands() && len(args) == 0 {

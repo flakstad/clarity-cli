@@ -6,16 +6,34 @@ import (
         "strings"
 )
 
-// newRandomID returns prefix-<suffix> where suffix is 8 chars of base32 (lowercase, no padding).
-// 8 chars base32 ~= 40 bits (~1 trillion) of space.
+// newRandomID returns prefix-<suffix> where suffix is base32 (lowercase, no padding).
+// The suffix length is intentionally short for better ergonomics in a terminal UI.
 func newRandomID(prefix string) (string, error) {
+        suffixLen := idSuffixLen(prefix)
+
+        // Generate 8 chars of base32 (~40 bits) and truncate if needed.
+        // 8 chars base32 ~= 40 bits (~1 trillion) of space.
         var b [5]byte // 40 bits -> 8 base32 chars
         if _, err := rand.Read(b[:]); err != nil {
                 return "", err
         }
         enc := base32.StdEncoding.WithPadding(base32.NoPadding)
         suffix := strings.ToLower(enc.EncodeToString(b[:]))
+        if suffixLen > 0 && suffixLen < len(suffix) {
+                suffix = suffix[:suffixLen]
+        }
         return prefix + "-" + suffix, nil
+}
+
+func idSuffixLen(prefix string) int {
+        switch prefix {
+        case "item":
+                // Items are referenced constantly; keep these extra short.
+                // 6 chars base32 ~= 30 bits (~1 billion) of space; NextID retries on collision.
+                return 6
+        default:
+                return 8
+        }
 }
 
 func idExists(db *DB, id string) bool {

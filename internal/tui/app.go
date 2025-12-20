@@ -26,6 +26,7 @@ const (
         viewProjects view = iota
         viewOutlines
         viewOutline
+        viewItem
 )
 
 type reloadTickMsg struct{}
@@ -80,6 +81,8 @@ type appModel struct {
         selectedOutline   *model.Outline
 
         pane                pane
+        showPreview         bool
+        openItemID          string
         collapsed           map[string]bool
         collapseInitialized bool
 
@@ -97,6 +100,12 @@ type appModel struct {
         minibufferText string
 }
 
+const (
+        topPadLines   = 1
+        breadcrumbGap = 1
+        maxContentW   = 96
+)
+
 func newAppModel(dir string, db *store.DB) appModel {
         s := store.Store{Dir: dir}
         m := appModel{
@@ -108,12 +117,16 @@ func newAppModel(dir string, db *store.DB) appModel {
         }
 
         m.projectsList = newList("Projects", "Select a project", []list.Item{})
+        m.projectsList.SetDelegate(newCompactItemDelegate())
         m.outlinesList = newList("Outlines", "Select an outline", []list.Item{})
+        m.outlinesList.SetDelegate(newCompactItemDelegate())
         m.itemsList = newList("Outline", "Navigate items (split view)", []list.Item{})
+        m.itemsList.SetDelegate(newOutlineItemDelegate())
         m.itemsList.SetFilteringEnabled(false)
         m.itemsList.SetShowFilter(false)
 
         m.statusList = newList("Status", "Select a status", []list.Item{})
+        m.statusList.SetDelegate(newCompactItemDelegate())
         m.statusList.SetFilteringEnabled(false)
         m.statusList.SetShowFilter(false)
         m.statusList.SetShowHelp(false)
@@ -172,7 +185,38 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 switch msg.String() {
                 case "ctrl+c", "q":
                         return m, tea.Quit
+                case "y":
+                        if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
+                                id := strings.TrimSpace(m.openItemID)
+                                if err := copyToClipboard(id); err != nil {
+                                        m.showMinibuffer("Clipboard error: " + err.Error())
+                                } else {
+                                        m.showMinibuffer("Copied item ID " + id)
+                                }
+                                return m, nil
+                        }
+                case "Y":
+                        if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
+                                id := strings.TrimSpace(m.openItemID)
+                                cmd := "clarity items show " + id
+                                if err := copyToClipboard(cmd); err != nil {
+                                        m.showMinibuffer("Clipboard error: " + err.Error())
+                                } else {
+                                        m.showMinibuffer("Copied: " + cmd)
+                                }
+                                return m, nil
+                        }
                 case "backspace":
+                        if m.view == viewItem {
+                                m.view = viewOutline
+                                m.openItemID = ""
+                                m.showPreview = false
+                                m.pane = paneOutline
+                                if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
+                                        m.refreshItems(*o)
+                                }
+                                return m, nil
+                        }
                         if m.view == viewOutline && m.modal == modalNone && m.pane == paneDetail {
                                 m.pane = paneOutline
                                 return m, nil
@@ -188,6 +232,16 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, nil
                         }
                 case "esc":
+                        if m.view == viewItem {
+                                m.view = viewOutline
+                                m.openItemID = ""
+                                m.showPreview = false
+                                m.pane = paneOutline
+                                if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
+                                        m.refreshItems(*o)
+                                }
+                                return m, nil
+                        }
                         if m.view == viewOutline && m.modal == modalNone && m.pane == paneDetail {
                                 m.pane = paneOutline
                                 return m, nil
@@ -222,6 +276,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.selectedOutlineID = it.outline.ID
                                         m.view = viewOutline
                                         m.pane = paneOutline
+                                        m.showPreview = false
+                                        m.openItemID = ""
                                         m.collapsed = map[string]bool{}
                                         m.collapseInitialized = false
                                         m.refreshItems(it.outline)
@@ -243,6 +299,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 return m, cmd
         case viewOutline:
                 return m.updateOutline(msg)
+        case viewItem:
+                // Read-only for now. Back/quit handled in the root key handler.
+                return m, nil
         default:
                 return m, nil
         }
@@ -252,11 +311,13 @@ func (m appModel) View() string {
         var body string
         switch m.view {
         case viewProjects:
-                body = m.projectsList.View()
+                body = m.viewProjects()
         case viewOutlines:
-                body = m.outlinesList.View()
+                body = m.viewOutlines()
         case viewOutline:
                 body = m.viewOutline()
+        case viewItem:
+                body = m.viewItem()
         default:
                 body = ""
         }
@@ -265,8 +326,118 @@ func (m appModel) View() string {
         return strings.Join([]string{body, footer}, "\n\n")
 }
 
+func (m *appModel) breadcrumbText() string {
+        parts := []string{"projects"}
+        if m.view == viewProjects {
+                return strings.Join(parts, " > ")
+        }
+
+        if m.selectedProjectID != "" {
+                if p, ok := m.db.FindProject(m.selectedProjectID); ok {
+                        if t := strings.TrimSpace(p.Name); t != "" {
+                                parts = append(parts, t)
+                        } else {
+                                parts = append(parts, p.ID)
+                        }
+                }
+        }
+
+        if m.view == viewOutlines {
+                return strings.Join(parts, " > ")
+        }
+
+        if m.selectedOutlineID != "" {
+                if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
+                        name := ""
+                        if o.Name != nil {
+                                name = strings.TrimSpace(*o.Name)
+                        }
+                        if name != "" {
+                                parts = append(parts, name)
+                        } else {
+                                parts = append(parts, o.ID)
+                        }
+                }
+        }
+
+        if m.view == viewOutline {
+                return strings.Join(parts, " > ")
+        }
+
+        if m.view == viewItem {
+                if itemID := strings.TrimSpace(m.openItemID); itemID != "" {
+                        if it, ok := m.db.FindItem(itemID); ok {
+                                if t := strings.TrimSpace(it.Title); t != "" {
+                                        parts = append(parts, t)
+                                } else {
+                                        parts = append(parts, it.ID)
+                                }
+                        } else {
+                                parts = append(parts, itemID)
+                        }
+                }
+        }
+
+        return strings.Join(parts, " > ")
+}
+
+func (m *appModel) viewProjects() string {
+        frameH := m.height - 6
+        if frameH < 8 {
+                frameH = 8
+        }
+        bodyHeight := frameH - (topPadLines + breadcrumbGap + 2)
+        if bodyHeight < 6 {
+                bodyHeight = 6
+        }
+
+        w := m.width
+        if w < 10 {
+                w = 10
+        }
+
+        contentW := w
+        if contentW > maxContentW {
+                contentW = maxContentW
+        }
+        m.projectsList.SetSize(contentW, bodyHeight)
+
+        crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+        block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.projectsList.View()
+        return lipgloss.PlaceHorizontal(w, lipgloss.Center, block)
+}
+
+func (m *appModel) viewOutlines() string {
+        frameH := m.height - 6
+        if frameH < 8 {
+                frameH = 8
+        }
+        bodyHeight := frameH - (topPadLines + breadcrumbGap + 2)
+        if bodyHeight < 6 {
+                bodyHeight = 6
+        }
+
+        w := m.width
+        if w < 10 {
+                w = 10
+        }
+
+        contentW := w
+        if contentW > maxContentW {
+                contentW = maxContentW
+        }
+        m.outlinesList.SetSize(contentW, bodyHeight)
+
+        crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+        block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.outlinesList.View()
+        return lipgloss.PlaceHorizontal(w, lipgloss.Center, block)
+}
+
 func (m appModel) footerText() string {
         base := "enter: select  backspace/esc: back  q: quit"
+        if m.view == viewItem {
+                return "backspace/esc: back  q: quit  y/Y: copy"
+        }
         if m.view != viewOutline {
                 return base
         }
@@ -292,7 +463,11 @@ func (m appModel) footerText() string {
                 }
                 return "new item: type title, enter: save, esc: cancel  " + focus
         }
-        return "enter: toggle detail  tab: toggle focus  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  space: status  Shift+←/→: cycle status  c: comment  w: worklog  r: archive  " + focus
+        tabHelp := ""
+        if m.showPreview {
+                tabHelp = "  tab: toggle focus"
+        }
+        return "enter: open  o: preview" + tabHelp + "  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  space: status  Shift+←/→: cycle status  c: comment  w: worklog  r: archive  y/Y: copy  " + focus
 }
 
 func (m appModel) footerBlock() string {
@@ -339,10 +514,17 @@ func (m *appModel) resizeLists() {
         if w < 10 {
                 w = 10
         }
-        m.projectsList.SetSize(w, h)
-        m.outlinesList.SetSize(w, h)
-        // Outline view is split.
-        m.itemsList.SetSize(w/2, h)
+        centeredW := w
+        if centeredW > maxContentW {
+                centeredW = maxContentW
+        }
+        m.projectsList.SetSize(centeredW, h)
+        m.outlinesList.SetSize(centeredW, h)
+        if m.view == viewOutline && m.showPreview {
+                m.itemsList.SetSize(w/2, h)
+        } else {
+                m.itemsList.SetSize(centeredW, h)
+        }
 }
 
 func emptyAsDash(s string) string {
@@ -439,41 +621,53 @@ func (m *appModel) refreshItems(outline model.Outline) {
 }
 
 func (m *appModel) viewOutline() string {
-        bodyHeight := m.height - 6
-        if bodyHeight < 8 {
-                bodyHeight = 8
+        frameH := m.height - 6
+        if frameH < 8 {
+                frameH = 8
+        }
+        bodyHeight := frameH - (topPadLines + breadcrumbGap + 2)
+        if bodyHeight < 6 {
+                bodyHeight = 6
         }
 
         w := m.width
         if w < 10 {
                 w = 10
         }
+
+        if !m.showPreview {
+                contentW := w
+                if contentW > maxContentW {
+                        contentW = maxContentW
+                }
+                m.itemsList.SetSize(contentW, bodyHeight)
+
+                crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+                main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.itemsList.View()
+                main = lipgloss.PlaceHorizontal(w, lipgloss.Center, main)
+                if m.modal == modalNone {
+                        return main
+                }
+                bg := dimBackground(main)
+                fg := m.renderModal()
+                return overlayCenter(bg, fg, w, frameH)
+        }
+
+        crumb := lipgloss.NewStyle().Width(w).Padding(0, 1).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
         gapW := 2
         leftWidth := (w - gapW) / 2
         rightWidth := w - gapW - leftWidth
 
         m.itemsList.SetSize(leftWidth, bodyHeight)
 
-        leftBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240"))
-        if m.pane == paneOutline {
-                leftBox = leftBox.BorderForeground(lipgloss.Color("62"))
-        }
-        left := leftBox.Width(leftWidth).Height(bodyHeight).Render(m.itemsList.View())
+        left := lipgloss.NewStyle().Width(leftWidth).Height(bodyHeight).Padding(0, 0).Render(m.itemsList.View())
 
         var detail string
         switch it := m.itemsList.SelectedItem().(type) {
         case outlineRowItem:
                 detail = renderItemDetail(m.db, it.outline, it.row.item, rightWidth, bodyHeight, m.pane == paneDetail)
         case addItemRow:
-                detailBox := lipgloss.NewStyle().
-                        Width(rightWidth).
-                        Height(bodyHeight).
-                        Padding(0, 1).
-                        Border(lipgloss.RoundedBorder()).
-                        BorderForeground(lipgloss.Color("240"))
-                if m.pane == paneDetail {
-                        detailBox = detailBox.BorderForeground(lipgloss.Color("62"))
-                }
+                detailBox := lipgloss.NewStyle().Width(rightWidth).Height(bodyHeight).Padding(0, 1)
                 detail = detailBox.Render(strings.Join([]string{
                         "(no item selected)",
                         "",
@@ -484,14 +678,64 @@ func (m *appModel) viewOutline() string {
         }
 
         gap := lipgloss.NewStyle().Width(gapW).Render("")
-        main := lipgloss.JoinHorizontal(lipgloss.Top, left, gap, detail)
+        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + lipgloss.JoinHorizontal(lipgloss.Top, left, gap, detail)
         if m.modal == modalNone {
                 return main
         }
 
         bg := dimBackground(main)
         fg := m.renderModal()
-        return overlayCenter(bg, fg, w, bodyHeight)
+        return overlayCenter(bg, fg, w, frameH)
+}
+
+func (m *appModel) viewItem() string {
+        frameH := m.height - 6
+        if frameH < 8 {
+                frameH = 8
+        }
+        bodyHeight := frameH - (topPadLines + breadcrumbGap + 2)
+        if bodyHeight < 6 {
+                bodyHeight = 6
+        }
+
+        w := m.width
+        if w < 10 {
+                w = 10
+        }
+
+        contentW := w
+        if contentW > maxContentW {
+                contentW = maxContentW
+        }
+
+        itemID := strings.TrimSpace(m.openItemID)
+        if itemID == "" {
+                crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+                msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("No item selected.")
+                block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
+                return lipgloss.PlaceHorizontal(w, lipgloss.Center, block)
+        }
+
+        outline, ok := m.db.FindOutline(m.selectedOutlineID)
+        if !ok {
+                crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+                msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("Outline not found.")
+                block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
+                return lipgloss.PlaceHorizontal(w, lipgloss.Center, block)
+        }
+
+        it, ok := m.db.FindItem(itemID)
+        if !ok {
+                crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+                msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("Item not found.")
+                block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
+                return lipgloss.PlaceHorizontal(w, lipgloss.Center, block)
+        }
+
+        crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+        card := renderItemDetail(m.db, *outline, *it, contentW, bodyHeight, true)
+        block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + card
+        return lipgloss.PlaceHorizontal(w, lipgloss.Center, block)
 }
 
 func (m *appModel) renderModal() string {
@@ -606,6 +850,10 @@ func (m *appModel) reloadFromDisk() error {
         case viewOutlines:
                 m.refreshOutlines(m.selectedProjectID)
         case viewOutline:
+                if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
+                        m.refreshItems(*o)
+                }
+        case viewItem:
                 if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
                         m.refreshItems(*o)
                 }
@@ -845,16 +1093,40 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
                 // Focus handling.
                 if msg.String() == "tab" {
-                        if m.pane == paneOutline {
-                                m.pane = paneDetail
-                        } else {
-                                m.pane = paneOutline
+                        if m.showPreview {
+                                if m.pane == paneOutline {
+                                        m.pane = paneDetail
+                                } else {
+                                        m.pane = paneOutline
+                                }
+                                return m, nil
                         }
                         return m, nil
                 }
 
                 // Open item / create items.
                 switch msg.String() {
+                case "y":
+                        // Copy selected item ID.
+                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                if err := copyToClipboard(it.row.item.ID); err != nil {
+                                        m.showMinibuffer("Clipboard error: " + err.Error())
+                                } else {
+                                        m.showMinibuffer("Copied item ID " + it.row.item.ID)
+                                }
+                                return m, nil
+                        }
+                case "Y":
+                        // Copy a helpful CLI command for the selected item.
+                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                cmd := "clarity items show " + it.row.item.ID
+                                if err := copyToClipboard(cmd); err != nil {
+                                        m.showMinibuffer("Clipboard error: " + err.Error())
+                                } else {
+                                        m.showMinibuffer("Copied: " + cmd)
+                                }
+                                return m, nil
+                        }
                 case "c":
                         // Add comment to selected item.
                         if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
@@ -895,7 +1167,11 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         if m.pane == paneOutline {
                                 switch m.itemsList.SelectedItem().(type) {
                                 case outlineRowItem:
-                                        m.pane = paneDetail
+                                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                                m.view = viewItem
+                                                m.openItemID = it.row.item.ID
+                                                return m, nil
+                                        }
                                         return m, nil
                                 case addItemRow:
                                         m.modal = modalNewSibling
@@ -906,11 +1182,13 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 }
                         }
                 case "o":
-                        if m.pane == paneOutline {
-                                if _, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-                                        m.pane = paneDetail
-                                        return m, nil
+                        if _, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                m.showPreview = !m.showPreview
+                                if !m.showPreview {
+                                        m.pane = paneOutline
                                 }
+                                m.resizeLists()
+                                return m, nil
                         }
                 case "e":
                         // Edit title for selected item.

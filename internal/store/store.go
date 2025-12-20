@@ -367,7 +367,7 @@ func (s Store) Save(db *DB) error {
 
 func (s Store) NextID(db *DB, prefix string) string {
         // Hash-based IDs (stable-ish length) instead of sequential integers.
-        // Prefixes remain for readability: item-xxxxxxxx, proj-xxxxxxxx, out-xxxxxxxx, etc.
+        // Prefixes remain for readability: item-xxxxxx, proj-xxxxxxxx, out-xxxxxxxx, etc.
         //
         // NOTE: NextIDs is kept for backwards compatibility with old db.json files,
         // but is no longer used as the source of IDs.

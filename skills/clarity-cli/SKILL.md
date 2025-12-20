@@ -19,6 +19,7 @@ Use Clarity to:
 ## How to discover capabilities (progressive disclosure)
 - High-level help: `clarity --help`
 - Feature-level help: `clarity <command> --help`
+- Item lookup shortcut: `clarity <item-id>` (equivalent to `clarity items show <item-id>`)
 - Long-form docs (on demand): `clarity docs` and `clarity docs <topic>`
 - Output convention: `clarity docs output-contract`
 

@@ -75,13 +75,13 @@ func (i outlineRowItem) Title() string {
         }
         return fmt.Sprintf("%s%s %s %s%s", prefix, twisty, status, i.row.item.Title, progress)
 }
-func (i outlineRowItem) Description() string { return i.row.item.ID }
+func (i outlineRowItem) Description() string { return "" }
 
 type addItemRow struct{}
 
 func (i addItemRow) FilterValue() string { return "" }
 func (i addItemRow) Title() string       { return "+ Add item" }
-func (i addItemRow) Description() string { return "__add__" }
+func (i addItemRow) Description() string { return "" }
 
 type statusOptionItem struct {
         id    string
@@ -123,24 +123,25 @@ func renderProgressCookie(done, total int) string {
                 done = total
         }
 
-        // Add a touch of padding so the bar reads like a "pill" behind the numbers.
-        txt := " " + fmt.Sprintf("%d/%d", done, total) + " "
-        runes := []rune(txt)
-        if len(runes) == 0 {
+        inner := fmt.Sprintf("%d/%d", done, total)
+        innerRunes := []rune(inner)
+        if len(innerRunes) == 0 {
                 return ""
         }
 
         ratio := float64(done) / float64(total)
-        filledN := int(math.Round(ratio * float64(len(runes))))
+        filledN := int(math.Round(ratio * float64(len(innerRunes))))
         if filledN < 0 {
                 filledN = 0
         }
-        if filledN > len(runes) {
-                filledN = len(runes)
+        if filledN > len(innerRunes) {
+                filledN = len(innerRunes)
         }
 
         var b strings.Builder
-        for i, r := range runes {
+        pad := lipgloss.NewStyle().Background(progressEmptyBg).Foreground(progressEmptyFg)
+        b.WriteString(pad.Render(" "))
+        for i, r := range innerRunes {
                 bg := progressEmptyBg
                 fg := progressEmptyFg
                 if i < filledN {
@@ -149,6 +150,7 @@ func renderProgressCookie(done, total int) string {
                 }
                 b.WriteString(lipgloss.NewStyle().Background(bg).Foreground(fg).Render(string(r)))
         }
+        b.WriteString(pad.Render(" "))
         return " " + b.String()
 }
 
@@ -191,5 +193,7 @@ func newList(title, help string, items []list.Item) list.Model {
         l.SetShowHelp(true)
         l.SetFilteringEnabled(true)
         l.SetStatusBarItemName("item", "items")
+        // Bubble list defaults to quitting on ESC; in Clarity ESC is "back/cancel".
+        l.KeyMap.Quit.SetKeys("q")
         return l
 }
