@@ -22,6 +22,12 @@ clarity projects use <project-id>
 clarity items create --title "Write spec" --description "Markdown supported"
 ```
 
+## Find the next item to work on
+
+```bash
+clarity items ready
+```
+
 ## Show an item
 
 ```bash

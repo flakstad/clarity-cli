@@ -35,6 +35,9 @@ func NewRootCmd() *cobra.Command {
   # Scriptable commands
   clarity items list
 
+  # Find the next thing to work on
+  clarity items ready
+
   # Direct item lookup (shortcut for: clarity items show <item-id>)
   clarity item-abc123
 `),

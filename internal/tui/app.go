@@ -48,6 +48,7 @@ const (
         modalNewChild
         modalConfirmArchive
         modalEditTitle
+        modalEditOutlineName
         modalPickStatus
         modalAddComment
         modalAddWorklog
@@ -177,9 +178,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 return m, nil
 
         case tea.KeyMsg:
-                // If a modal is open in the outline view, route all keys to the modal handler
-                // so text inputs behave normally (e.g. backspace edits).
-                if m.view == viewOutline && m.modal != modalNone {
+                // If a modal is open, route all keys to the modal handler so text inputs behave
+                // normally (e.g. backspace edits).
+                if m.modal != modalNone {
                         return m.updateOutline(msg)
                 }
                 switch msg.String() {
@@ -281,6 +282,22 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.collapsed = map[string]bool{}
                                         m.collapseInitialized = false
                                         m.refreshItems(it.outline)
+                                        return m, nil
+                                }
+                        }
+                case "e":
+                        if m.view == viewOutlines {
+                                // Rename outline.
+                                if it, ok := m.outlinesList.SelectedItem().(outlineItem); ok {
+                                        m.modal = modalEditOutlineName
+                                        m.modalForID = it.outline.ID
+                                        name := ""
+                                        if it.outline.Name != nil {
+                                                name = strings.TrimSpace(*it.outline.Name)
+                                        }
+                                        m.input.Placeholder = "Outline name (optional)"
+                                        m.input.SetValue(name)
+                                        m.input.Focus()
                                         return m, nil
                                 }
                         }
@@ -429,14 +446,26 @@ func (m *appModel) viewOutlines() string {
         m.outlinesList.SetSize(contentW, bodyHeight)
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-        block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.outlinesList.View()
-        return lipgloss.PlaceHorizontal(w, lipgloss.Center, block)
+        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.outlinesList.View()
+        main = lipgloss.PlaceHorizontal(w, lipgloss.Center, main)
+        if m.modal == modalNone {
+                return main
+        }
+        bg := dimBackground(main)
+        fg := m.renderModal()
+        return overlayCenter(bg, fg, w, frameH)
 }
 
 func (m appModel) footerText() string {
         base := "enter: select  backspace/esc: back  q: quit"
         if m.view == viewItem {
                 return "backspace/esc: back  q: quit  y/Y: copy"
+        }
+        if m.view == viewOutlines && m.modal == modalNone {
+                return "enter: select  e: rename  backspace/esc: back  q: quit"
+        }
+        if m.modal == modalEditOutlineName {
+                return "rename outline: type, enter: save, esc: cancel"
         }
         if m.view != viewOutline {
                 return base
@@ -454,6 +483,9 @@ func (m appModel) footerText() string {
                 }
                 if m.modal == modalEditTitle {
                         return "edit title: type, enter: save, esc: cancel  " + focus
+                }
+                if m.modal == modalEditOutlineName {
+                        return "rename outline: type, enter: save, esc: cancel  " + focus
                 }
                 if m.modal == modalAddComment {
                         return "comment: tab: focus  ctrl+s: save  esc: cancel  " + focus
@@ -653,7 +685,7 @@ func (m *appModel) viewOutline() string {
                 return overlayCenter(bg, fg, w, frameH)
         }
 
-        crumb := lipgloss.NewStyle().Width(w).Padding(0, 1).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+        crumb := lipgloss.NewStyle().Width(w).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
         gapW := 2
         leftWidth := (w - gapW) / 2
         rightWidth := w - gapW - leftWidth
@@ -748,6 +780,8 @@ func (m *appModel) renderModal() string {
                 return renderModalBox(m.width, title, m.input.View()+"\n\nenter: save   esc: cancel")
         case modalEditTitle:
                 return renderModalBox(m.width, "Edit title", m.input.View()+"\n\nenter: save   esc: cancel")
+        case modalEditOutlineName:
+                return renderModalBox(m.width, "Rename outline", m.input.View()+"\n\nenter: save   esc: cancel")
         case modalPickStatus:
                 return renderModalBox(m.width, "Set status", m.statusList.View()+"\n\nenter: set   esc: cancel")
         case modalAddComment:
@@ -1047,17 +1081,23 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, nil
                         case "enter":
                                 val := strings.TrimSpace(m.input.Value())
-                                if val == "" {
-                                        return m, nil
-                                }
                                 switch m.modal {
                                 case modalEditTitle:
+                                        if val == "" {
+                                                return m, nil
+                                        }
                                         _ = m.setTitleFromModal(val)
+                                case modalEditOutlineName:
+                                        _ = m.setOutlineNameFromModal(val)
                                 default:
+                                        if val == "" {
+                                                return m, nil
+                                        }
                                         _ = m.createItemFromModal(val)
                                 }
                                 m.modal = modalNone
                                 m.modalForID = ""
+                                m.input.Placeholder = "Title"
                                 m.input.SetValue("")
                                 m.input.Blur()
                                 return m, nil
@@ -1845,6 +1885,47 @@ func (m *appModel) setTitleFromModal(title string) error {
                 m.refreshItems(*m.selectedOutline)
                 selectListItemByID(&m.itemsList, t.ID)
         }
+        return nil
+}
+
+func (m *appModel) setOutlineNameFromModal(name string) error {
+        outlineID := strings.TrimSpace(m.modalForID)
+        if outlineID == "" {
+                return nil
+        }
+        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        if actorID == "" {
+                return nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return err
+        }
+        m.db = db
+
+        o, ok := m.db.FindOutline(outlineID)
+        if !ok {
+                return nil
+        }
+
+        trim := strings.TrimSpace(name)
+        if trim == "" {
+                o.Name = nil
+        } else {
+                tmp := trim
+                o.Name = &tmp
+        }
+
+        if err := m.store.Save(m.db); err != nil {
+                return err
+        }
+        _ = m.store.AppendEvent(actorID, "outline.rename", o.ID, map[string]any{"name": o.Name})
+        m.captureStoreModTimes()
+
+        m.refreshOutlines(m.selectedProjectID)
+        selectListItemByID(&m.outlinesList, o.ID)
+        m.showMinibuffer("Renamed outline " + o.ID)
         return nil
 }
 

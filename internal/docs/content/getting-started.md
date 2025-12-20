@@ -14,7 +14,7 @@ clarity outlines create --project <project-id>
 ## Workspaces
 
 ```bash
-clarity workspace list
+clarity workspace current
 clarity workspace use <name>
 ```
 
@@ -30,7 +30,7 @@ clarity projects current
 
 ```bash
 clarity items create --title "First item"
-clarity items list --project <project-id>
+clarity items ready
 
 # Direct item lookup (shortcut for `clarity items show <item-id>`)
 clarity <item-id>

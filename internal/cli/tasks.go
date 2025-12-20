@@ -469,7 +469,19 @@ func newItemsSetStatusCmd(app *App) *cobra.Command {
 func newItemsReadyCmd(app *App) *cobra.Command {
         cmd := &cobra.Command{
                 Use:   "ready",
-                Short: "List items with no blocking dependencies (simple check)",
+                Short: "List ready items (good for picking the next task)",
+                Long: strings.TrimSpace(`
+List items that are not archived, not in an end-state, and have no blocking dependencies.
+
+This is the recommended way to find the next thing to work on.
+`),
+                Example: strings.TrimSpace(`
+clarity items ready
+clarity items ready --pretty
+
+# Open an item from the list
+clarity <item-id>
+`),
                 RunE: func(cmd *cobra.Command, args []string) error {
                         db, _, err := loadDB(app)
                         if err != nil {
@@ -496,7 +508,11 @@ func newItemsReadyCmd(app *App) *cobra.Command {
                                 }
                                 out = append(out, t)
                         }
-                        return writeOut(cmd, app, map[string]any{"data": out})
+                        hints := []string{
+                                "clarity <item-id>",
+                                "clarity items show <item-id>",
+                        }
+                        return writeOut(cmd, app, map[string]any{"data": out, "_hints": hints})
                 },
         }
         return cmd

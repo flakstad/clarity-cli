@@ -39,6 +39,7 @@ Outline movement (hold Alt):
 
 Editing:
 - `e`: edit title of the selected item (Enter saves, Esc cancels)
+- `e` (on outlines screen): rename selected outline (Enter saves, Esc cancels)
 
 Status:
 - `space`: open status picker for selected item (includes `(no status)`)

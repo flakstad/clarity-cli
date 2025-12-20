@@ -20,6 +20,7 @@ Use Clarity to:
 - High-level help: `clarity --help`
 - Feature-level help: `clarity <command> --help`
 - Item lookup shortcut: `clarity <item-id>` (equivalent to `clarity items show <item-id>`)
+- Find the next thing to work on: `clarity items ready`
 - Long-form docs (on demand): `clarity docs` and `clarity docs <topic>`
 - Output convention: `clarity docs output-contract`
 
@@ -59,6 +60,7 @@ clarity outlines create --project <project-id>
 
 ## First actions to try
 - Create an item: `clarity items create --project <project-id> --title "..." --description "..."`
+- Pick the next item to work on: `clarity items ready` then open it with `clarity <item-id>`
 - Add a blocker: `clarity deps add <item-id> --blocks <item-id>`
 - Comment: `clarity comments add <item-id> --body "..."`
 - Check status: `clarity status`
