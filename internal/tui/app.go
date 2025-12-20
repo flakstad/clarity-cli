@@ -13,6 +13,7 @@ import (
         "clarity-cli/internal/store"
 
         "github.com/charmbracelet/bubbles/list"
+        "github.com/charmbracelet/bubbles/textarea"
         "github.com/charmbracelet/bubbles/textinput"
         tea "github.com/charmbracelet/bubbletea"
         "github.com/charmbracelet/lipgloss"
@@ -46,6 +47,17 @@ const (
         modalNewChild
         modalConfirmArchive
         modalEditTitle
+        modalPickStatus
+        modalAddComment
+        modalAddWorklog
+)
+
+type textModalFocus int
+
+const (
+        textFocusBody textModalFocus = iota
+        textFocusSave
+        textFocusCancel
 )
 
 type appModel struct {
@@ -61,6 +73,7 @@ type appModel struct {
         projectsList list.Model
         outlinesList list.Model
         itemsList    list.Model
+        statusList   list.Model
 
         selectedProjectID string
         selectedOutlineID string
@@ -73,6 +86,8 @@ type appModel struct {
         modal      modalKind
         modalForID string
         input      textinput.Model
+        textarea   textarea.Model
+        textFocus  textModalFocus
 
         pendingEsc bool
 
@@ -98,10 +113,24 @@ func newAppModel(dir string, db *store.DB) appModel {
         m.itemsList.SetFilteringEnabled(false)
         m.itemsList.SetShowFilter(false)
 
+        m.statusList = newList("Status", "Select a status", []list.Item{})
+        m.statusList.SetFilteringEnabled(false)
+        m.statusList.SetShowFilter(false)
+        m.statusList.SetShowHelp(false)
+        m.statusList.SetShowStatusBar(false)
+        m.statusList.SetShowPagination(false)
+
         m.input = textinput.New()
         m.input.Placeholder = "Title"
         m.input.CharLimit = 200
         m.input.Width = 40
+
+        m.textarea = textarea.New()
+        m.textarea.Placeholder = "Write…"
+        m.textarea.CharLimit = 0
+        m.textarea.SetWidth(72)
+        m.textarea.SetHeight(10)
+        m.textarea.ShowLineNumbers = false
 
         m.refreshProjects()
         m.captureStoreModTimes()
@@ -220,14 +249,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m appModel) View() string {
-        header := lipgloss.NewStyle().
-                Bold(true).
-                Render(fmt.Sprintf("Clarity TUI  Dir=%s  Actor=%s  Project=%s",
-                        m.dir,
-                        emptyAsDash(m.db.CurrentActorID),
-                        emptyAsDash(m.db.CurrentProjectID),
-                ))
-
         var body string
         switch m.view {
         case viewProjects:
@@ -241,7 +262,7 @@ func (m appModel) View() string {
         }
 
         footer := m.footerBlock()
-        return strings.Join([]string{header, body, footer}, "\n\n")
+        return strings.Join([]string{body, footer}, "\n\n")
 }
 
 func (m appModel) footerText() string {
@@ -257,12 +278,21 @@ func (m appModel) footerText() string {
                 if m.modal == modalConfirmArchive {
                         return "archive: y/enter: confirm  n/esc: cancel  " + focus
                 }
+                if m.modal == modalPickStatus {
+                        return "status: enter: set  esc: cancel  " + focus
+                }
                 if m.modal == modalEditTitle {
                         return "edit title: type, enter: save, esc: cancel  " + focus
                 }
+                if m.modal == modalAddComment {
+                        return "comment: tab: focus  ctrl+s: save  esc: cancel  " + focus
+                }
+                if m.modal == modalAddWorklog {
+                        return "worklog: tab: focus  ctrl+s: save  esc: cancel  " + focus
+                }
                 return "new item: type title, enter: save, esc: cancel  " + focus
         }
-        return "enter: toggle detail  tab: toggle focus  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  r: archive  " + focus
+        return "enter: toggle detail  tab: toggle focus  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  space: status  Shift+←/→: cycle status  c: comment  w: worklog  r: archive  " + focus
 }
 
 func (m appModel) footerBlock() string {
@@ -359,6 +389,13 @@ func (m *appModel) refreshOutlines(projectID string) {
 
 func (m *appModel) refreshItems(outline model.Outline) {
         m.selectedOutline = &outline
+        title := "Outline"
+        if outline.Name != nil {
+                if t := strings.TrimSpace(*outline.Name); t != "" {
+                        title = t
+                }
+        }
+        m.itemsList.Title = title
         curID := ""
         switch it := m.itemsList.SelectedItem().(type) {
         case outlineRowItem:
@@ -388,7 +425,7 @@ func (m *appModel) refreshItems(outline model.Outline) {
                 m.collapseInitialized = true
         }
 
-        flat := flattenOutline(its, m.collapsed)
+        flat := flattenOutline(outline, its, m.collapsed)
         var items []list.Item
         for _, row := range flat {
                 items = append(items, outlineRowItem{row: row, outline: outline})
@@ -467,6 +504,12 @@ func (m *appModel) renderModal() string {
                 return renderModalBox(m.width, title, m.input.View()+"\n\nenter: save   esc: cancel")
         case modalEditTitle:
                 return renderModalBox(m.width, "Edit title", m.input.View()+"\n\nenter: save   esc: cancel")
+        case modalPickStatus:
+                return renderModalBox(m.width, "Set status", m.statusList.View()+"\n\nenter: set   esc: cancel")
+        case modalAddComment:
+                return m.renderTextAreaModal("Add comment")
+        case modalAddWorklog:
+                return m.renderTextAreaModal("Add worklog")
         case modalConfirmArchive:
                 title := "this item"
                 if it, ok := m.db.FindItem(m.modalForID); ok {
@@ -490,6 +533,39 @@ func (m *appModel) renderModal() string {
         default:
                 return ""
         }
+}
+
+func (m *appModel) renderTextAreaModal(title string) string {
+        // Avoid borders here: some terminals show background artifacts when nesting bordered
+        // components inside a modal with a background color.
+        btnBase := lipgloss.NewStyle().
+                Padding(0, 1).
+                Foreground(lipgloss.Color("252")).
+                Background(lipgloss.Color("235"))
+        btnActive := btnBase.Copy().
+                Foreground(lipgloss.Color("235")).
+                Background(lipgloss.Color("62")).
+                Bold(true)
+
+        save := btnBase.Render("Save")
+        cancel := btnBase.Render("Cancel")
+        if m.textFocus == textFocusSave {
+                save = btnActive.Render("Save")
+        }
+        if m.textFocus == textFocusCancel {
+                cancel = btnActive.Render("Cancel")
+        }
+
+        sep := lipgloss.NewStyle().Background(lipgloss.Color("235")).Render(" ")
+        controls := lipgloss.JoinHorizontal(lipgloss.Top, save, sep, cancel)
+        body := strings.Join([]string{
+                m.textarea.View(),
+                "",
+                controls,
+                "",
+                "ctrl+s: save    tab: focus    esc: cancel",
+        }, "\n")
+        return renderModalBox(m.width, title, body)
 }
 
 func tickReload() tea.Cmd {
@@ -596,6 +672,123 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, nil
                 }
 
+                if m.modal == modalAddComment || m.modal == modalAddWorklog {
+                        switch km := msg.(type) {
+                        case tea.KeyMsg:
+                                switch km.String() {
+                                case "esc":
+                                        m.modal = modalNone
+                                        m.modalForID = ""
+                                        m.textarea.Blur()
+                                        m.textFocus = textFocusBody
+                                        return m, nil
+                                case "tab":
+                                        switch m.textFocus {
+                                        case textFocusBody:
+                                                m.textFocus = textFocusSave
+                                        case textFocusSave:
+                                                m.textFocus = textFocusCancel
+                                        default:
+                                                m.textFocus = textFocusBody
+                                        }
+                                        if m.textFocus == textFocusBody {
+                                                m.textarea.Focus()
+                                        } else {
+                                                m.textarea.Blur()
+                                        }
+                                        return m, nil
+                                case "shift+tab", "backtab":
+                                        switch m.textFocus {
+                                        case textFocusBody:
+                                                m.textFocus = textFocusCancel
+                                        case textFocusCancel:
+                                                m.textFocus = textFocusSave
+                                        default:
+                                                m.textFocus = textFocusBody
+                                        }
+                                        if m.textFocus == textFocusBody {
+                                                m.textarea.Focus()
+                                        } else {
+                                                m.textarea.Blur()
+                                        }
+                                        return m, nil
+                                case "enter":
+                                        if m.textFocus == textFocusSave {
+                                                body := strings.TrimSpace(m.textarea.Value())
+                                                if body == "" {
+                                                        return m, nil
+                                                }
+                                                itemID := strings.TrimSpace(m.modalForID)
+                                                if m.modal == modalAddComment {
+                                                        _ = m.addComment(itemID, body)
+                                                } else {
+                                                        _ = m.addWorklog(itemID, body)
+                                                }
+                                                m.modal = modalNone
+                                                m.modalForID = ""
+                                                m.textarea.SetValue("")
+                                                m.textarea.Blur()
+                                                m.textFocus = textFocusBody
+                                                return m, nil
+                                        }
+                                        if m.textFocus == textFocusCancel {
+                                                m.modal = modalNone
+                                                m.modalForID = ""
+                                                m.textarea.Blur()
+                                                m.textFocus = textFocusBody
+                                                return m, nil
+                                        }
+                                        // else: newline in textarea
+                                case "ctrl+s":
+                                        body := strings.TrimSpace(m.textarea.Value())
+                                        if body == "" {
+                                                return m, nil
+                                        }
+                                        itemID := strings.TrimSpace(m.modalForID)
+                                        if m.modal == modalAddComment {
+                                                _ = m.addComment(itemID, body)
+                                        } else {
+                                                _ = m.addWorklog(itemID, body)
+                                        }
+                                        m.modal = modalNone
+                                        m.modalForID = ""
+                                        m.textarea.SetValue("")
+                                        m.textarea.Blur()
+                                        m.textFocus = textFocusBody
+                                        return m, nil
+                                }
+                        }
+                        var cmd tea.Cmd
+                        if m.textFocus == textFocusBody {
+                                m.textarea, cmd = m.textarea.Update(msg)
+                                return m, cmd
+                        }
+                        // Ignore all other keys when focus is on the buttons.
+                        return m, nil
+                }
+
+                if m.modal == modalPickStatus {
+                        switch km := msg.(type) {
+                        case tea.KeyMsg:
+                                switch km.String() {
+                                case "esc":
+                                        m.modal = modalNone
+                                        m.modalForID = ""
+                                        return m, nil
+                                case "enter":
+                                        if it, ok := m.statusList.SelectedItem().(statusOptionItem); ok {
+                                                _ = m.setStatusForItem(strings.TrimSpace(m.modalForID), it.id)
+                                        }
+                                        m.modal = modalNone
+                                        m.modalForID = ""
+                                        return m, nil
+                                }
+                        }
+                        var cmd tea.Cmd
+                        m.statusList, cmd = m.statusList.Update(msg)
+                        return m, cmd
+                }
+
                 switch km := msg.(type) {
                 case tea.KeyMsg:
                         switch km.String() {
@@ -662,6 +855,42 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
                 // Open item / create items.
                 switch msg.String() {
+                case "c":
+                        // Add comment to selected item.
+                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                m.openTextModal(modalAddComment, it.row.item.ID, "Write a comment…")
+                                return m, nil
+                        }
+                case "w":
+                        // Add worklog entry to selected item.
+                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                m.openTextModal(modalAddWorklog, it.row.item.ID, "Log work…")
+                                return m, nil
+                        }
+                case " ":
+                        // Set status via picker (outline pane only).
+                        if m.pane == paneOutline {
+                                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                        m.openStatusPicker(it.outline, it.row.item.ID, it.row.item.StatusID)
+                                        m.modal = modalPickStatus
+                                        m.modalForID = it.row.item.ID
+                                        return m, nil
+                                }
+                        }
+                case "shift+right":
+                        if m.pane == paneOutline {
+                                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                        _ = m.cycleItemStatus(it.outline, it.row.item.ID, +1)
+                                        return m, nil
+                                }
+                        }
+                case "shift+left":
+                        if m.pane == paneOutline {
+                                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                        _ = m.cycleItemStatus(it.outline, it.row.item.ID, -1)
+                                        return m, nil
+                                }
+                        }
                 case "enter":
                         if m.pane == paneOutline {
                                 switch m.itemsList.SelectedItem().(type) {
@@ -1353,6 +1582,136 @@ func defaultAssignedActorID(db *store.DB, actorID string) *string {
         return nil
 }
 
+func (m *appModel) openStatusPicker(outline model.Outline, itemID, currentStatusID string) {
+        opts := []list.Item{statusOptionItem{id: "", label: "(no status)"}}
+        for _, def := range outline.StatusDefs {
+                opts = append(opts, statusOptionItem{id: def.ID, label: def.Label})
+        }
+
+        m.statusList.Title = ""
+        m.statusList.SetItems(opts)
+
+        // Size the picker to something reasonable.
+        modalW := m.width - 12
+        if modalW > m.width-4 {
+                modalW = m.width - 4
+        }
+        if modalW < 20 {
+                modalW = 20
+        }
+        if modalW > 96 {
+                modalW = 96
+        }
+        h := len(opts) + 2
+        if h > 14 {
+                h = 14
+        }
+        if h < 6 {
+                h = 6
+        }
+        m.statusList.SetSize(modalW-6, h)
+
+        // Preselect current.
+        selected := 0
+        for i := 0; i < len(opts); i++ {
+                if s, ok := opts[i].(statusOptionItem); ok && s.id == currentStatusID {
+                        selected = i
+                        break
+                }
+        }
+        m.statusList.Select(selected)
+}
+
+func (m *appModel) cycleItemStatus(outline model.Outline, itemID string, delta int) error {
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" || delta == 0 {
+                return nil
+        }
+        cur, ok := m.db.FindItem(itemID)
+        if !ok {
+                return nil
+        }
+        opts := []string{""}
+        for _, def := range outline.StatusDefs {
+                opts = append(opts, def.ID)
+        }
+        if len(opts) == 0 {
+                return nil
+        }
+
+        curIdx := 0
+        for i, sid := range opts {
+                if sid == cur.StatusID {
+                        curIdx = i
+                        break
+                }
+        }
+        next := (curIdx + delta) % len(opts)
+        if next < 0 {
+                next += len(opts)
+        }
+        return m.setStatusForItem(itemID, opts[next])
+}
+
+func (m *appModel) setStatusForItem(itemID, statusID string) error {
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" {
+                return nil
+        }
+        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        if actorID == "" {
+                return nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return err
+        }
+        m.db = db
+
+        t, ok := m.db.FindItem(itemID)
+        if !ok {
+                return nil
+        }
+        if !canEditItem(m.db, actorID, t) {
+                return nil
+        }
+
+        // Validate against outline status defs (empty is always allowed).
+        if strings.TrimSpace(statusID) != "" {
+                o, ok := m.db.FindOutline(t.OutlineID)
+                if ok {
+                        valid := false
+                        for _, def := range o.StatusDefs {
+                                if def.ID == statusID {
+                                        valid = true
+                                        break
+                                }
+                        }
+                        if !valid {
+                                return nil
+                        }
+                }
+        }
+
+        t.StatusID = strings.TrimSpace(statusID)
+        t.UpdatedAt = time.Now().UTC()
+        if err := m.store.Save(m.db); err != nil {
+                return err
+        }
+        _ = m.store.AppendEvent(actorID, "item.set_status", t.ID, map[string]any{"status": t.StatusID})
+        m.captureStoreModTimes()
+
+        if m.selectedOutline != nil {
+                if o, ok := m.db.FindOutline(m.selectedOutline.ID); ok {
+                        m.selectedOutline = o
+                }
+                m.refreshItems(*m.selectedOutline)
+                selectListItemByID(&m.itemsList, t.ID)
+        }
+        return nil
+}
+
 func (m *appModel) moveSelected(dir string) error {
         it, ok := m.itemsList.SelectedItem().(outlineRowItem)
         if !ok {
@@ -1697,4 +2056,134 @@ func nextSiblingRank(db *store.DB, outlineID string, parentID *string) string {
                 return max + "0"
         }
         return r
+}
+
+func (m *appModel) openTextModal(kind modalKind, itemID, placeholder string) {
+        if strings.TrimSpace(itemID) == "" {
+                return
+        }
+        m.modal = kind
+        m.modalForID = itemID
+        m.textFocus = textFocusBody
+
+        w := m.width - 12
+        if w > m.width-4 {
+                w = m.width - 4
+        }
+        if w < 20 {
+                w = 20
+        }
+        if w > 96 {
+                w = 96
+        }
+        bodyW := w - 6 // renderModalBox has padding 1,2
+        if bodyW < 10 {
+                bodyW = 10
+        }
+
+        h := m.height - 12
+        if h < 6 {
+                h = 6
+        }
+        if h > 16 {
+                h = 16
+        }
+
+        m.textarea.Placeholder = placeholder
+        m.textarea.SetWidth(bodyW)
+        m.textarea.SetHeight(h)
+        m.textarea.SetValue("")
+        m.textarea.Focus()
+}
+
+func (m *appModel) addComment(itemID, body string) error {
+        itemID = strings.TrimSpace(itemID)
+        body = strings.TrimSpace(body)
+        if itemID == "" || body == "" {
+                return nil
+        }
+        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        if actorID == "" {
+                return nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return err
+        }
+        m.db = db
+
+        if _, ok := m.db.FindItem(itemID); !ok {
+                return nil
+        }
+
+        c := model.Comment{
+                ID:        m.store.NextID(m.db, "cmt"),
+                ItemID:    itemID,
+                AuthorID:  actorID,
+                Body:      body,
+                CreatedAt: time.Now().UTC(),
+        }
+        m.db.Comments = append(m.db.Comments, c)
+        if err := m.store.Save(m.db); err != nil {
+                return err
+        }
+        _ = m.store.AppendEvent(actorID, "comment.add", c.ID, c)
+        m.captureStoreModTimes()
+
+        if m.selectedOutline != nil {
+                if o, ok := m.db.FindOutline(m.selectedOutline.ID); ok {
+                        m.selectedOutline = o
+                }
+                m.refreshItems(*m.selectedOutline)
+                selectListItemByID(&m.itemsList, itemID)
+        }
+        m.showMinibuffer("Comment added")
+        return nil
+}
+
+func (m *appModel) addWorklog(itemID, body string) error {
+        itemID = strings.TrimSpace(itemID)
+        body = strings.TrimSpace(body)
+        if itemID == "" || body == "" {
+                return nil
+        }
+        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        if actorID == "" {
+                return nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return err
+        }
+        m.db = db
+
+        if _, ok := m.db.FindItem(itemID); !ok {
+                return nil
+        }
+
+        w := model.WorklogEntry{
+                ID:        m.store.NextID(m.db, "wlg"),
+                ItemID:    itemID,
+                AuthorID:  actorID,
+                Body:      body,
+                CreatedAt: time.Now().UTC(),
+        }
+        m.db.Worklog = append(m.db.Worklog, w)
+        if err := m.store.Save(m.db); err != nil {
+                return err
+        }
+        _ = m.store.AppendEvent(actorID, "worklog.add", w.ID, w)
+        m.captureStoreModTimes()
+
+        if m.selectedOutline != nil {
+                if o, ok := m.db.FindOutline(m.selectedOutline.ID); ok {
+                        m.selectedOutline = o
+                }
+                m.refreshItems(*m.selectedOutline)
+                selectListItemByID(&m.itemsList, itemID)
+        }
+        m.showMinibuffer("Worklog added")
+        return nil
 }

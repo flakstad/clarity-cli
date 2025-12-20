@@ -2,11 +2,13 @@ package tui
 
 import (
         "fmt"
+        "math"
         "strings"
 
         "clarity-cli/internal/model"
 
         "github.com/charmbracelet/bubbles/list"
+        "github.com/charmbracelet/lipgloss"
 )
 
 type projectItem struct {
@@ -42,10 +44,12 @@ func (i outlineItem) Title() string {
 func (i outlineItem) Description() string { return i.outline.ID }
 
 type outlineRow struct {
-        item        model.Item
-        depth       int
-        hasChildren bool
-        collapsed   bool
+        item          model.Item
+        depth         int
+        hasChildren   bool
+        collapsed     bool
+        doneChildren  int
+        totalChildren int
 }
 
 type outlineRowItem struct {
@@ -56,7 +60,7 @@ type outlineRowItem struct {
 func (i outlineRowItem) FilterValue() string { return i.row.item.Title }
 func (i outlineRowItem) Title() string {
         prefix := strings.Repeat("  ", i.row.depth)
-        status := statusLabel(i.outline, i.row.item.StatusID)
+        status := renderStatus(i.outline, i.row.item.StatusID)
         twisty := " "
         if i.row.hasChildren {
                 if i.row.collapsed {
@@ -65,19 +69,32 @@ func (i outlineRowItem) Title() string {
                         twisty = "▾"
                 }
         }
-        return fmt.Sprintf("%s%s [%s] %s", prefix, twisty, status, i.row.item.Title)
+        progress := renderProgressCookie(i.row.doneChildren, i.row.totalChildren)
+        if strings.TrimSpace(status) == "" {
+                return fmt.Sprintf("%s%s %s%s", prefix, twisty, i.row.item.Title, progress)
+        }
+        return fmt.Sprintf("%s%s %s %s%s", prefix, twisty, status, i.row.item.Title, progress)
 }
 func (i outlineRowItem) Description() string { return i.row.item.ID }
 
 type addItemRow struct{}
 
 func (i addItemRow) FilterValue() string { return "" }
-func (i addItemRow) Title() string       { return "+ Add" }
+func (i addItemRow) Title() string       { return "+ Add item" }
 func (i addItemRow) Description() string { return "__add__" }
+
+type statusOptionItem struct {
+        id    string
+        label string
+}
+
+func (i statusOptionItem) FilterValue() string { return "" }
+func (i statusOptionItem) Title() string       { return i.label }
+func (i statusOptionItem) Description() string { return i.id }
 
 func statusLabel(outline model.Outline, statusID string) string {
         if strings.TrimSpace(statusID) == "" {
-                return "-"
+                return ""
         }
         for _, def := range outline.StatusDefs {
                 if def.ID == statusID {
@@ -86,6 +103,86 @@ func statusLabel(outline model.Outline, statusID string) string {
         }
         // fallback: show raw id
         return statusID
+}
+
+var (
+        progressFillBg  = lipgloss.Color("242")
+        progressEmptyBg = lipgloss.Color("237")
+        progressFillFg  = lipgloss.Color("255")
+        progressEmptyFg = lipgloss.Color("252")
+)
+
+func renderProgressCookie(done, total int) string {
+        if total <= 0 {
+                return ""
+        }
+        if done < 0 {
+                done = 0
+        }
+        if done > total {
+                done = total
+        }
+
+        // Add a touch of padding so the bar reads like a "pill" behind the numbers.
+        txt := " " + fmt.Sprintf("%d/%d", done, total) + " "
+        runes := []rune(txt)
+        if len(runes) == 0 {
+                return ""
+        }
+
+        ratio := float64(done) / float64(total)
+        filledN := int(math.Round(ratio * float64(len(runes))))
+        if filledN < 0 {
+                filledN = 0
+        }
+        if filledN > len(runes) {
+                filledN = len(runes)
+        }
+
+        var b strings.Builder
+        for i, r := range runes {
+                bg := progressEmptyBg
+                fg := progressEmptyFg
+                if i < filledN {
+                        bg = progressFillBg
+                        fg = progressFillFg
+                }
+                b.WriteString(lipgloss.NewStyle().Background(bg).Foreground(fg).Render(string(r)))
+        }
+        return " " + b.String()
+}
+
+var (
+        statusTodoStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)  // blue
+        statusDoingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true) // orange
+        statusDoneStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)  // green
+        statusOtherStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Bold(true) // gray
+)
+
+func renderStatus(outline model.Outline, statusID string) string {
+        label := strings.TrimSpace(statusLabel(outline, statusID))
+        if label == "" {
+                return ""
+        }
+        txt := strings.ToUpper(label)
+
+        // Prefer explicit end-state styling.
+        for _, def := range outline.StatusDefs {
+                if def.ID == statusID && def.IsEndState {
+                        return statusDoneStyle.Render(txt)
+                }
+        }
+
+        switch strings.ToLower(strings.TrimSpace(statusID)) {
+        case "todo":
+                return statusTodoStyle.Render(txt)
+        case "doing":
+                return statusDoingStyle.Render(txt)
+        case "done":
+                return statusDoneStyle.Render(txt)
+        default:
+                return statusOtherStyle.Render(txt)
+        }
 }
 
 func newList(title, help string, items []list.Item) list.Model {

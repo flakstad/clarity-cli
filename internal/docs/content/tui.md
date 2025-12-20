@@ -6,6 +6,7 @@ Current scope (early):
 - Navigate projects → outlines → items
 - Read item details in a split view (outline on the left, details on the right)
 - Auto-refresh when the local store changes (polls file mtimes)
+- Outline shows progress cookies for items with children (e.g. `[1/2]`)
 - Create items directly from the TUI (sibling and subitem)
 - Reorder and restructure items (reorder, indent, outdent)
 
@@ -14,6 +15,8 @@ Key bindings:
 - `o`: open selected item (outline view)
 - `backspace` or `esc`: go back (from detail → outline; from outline → previous screen)
 - `r`: archive selected item (with confirm)
+- `c`: add a comment (selected item)
+- `w`: add a worklog entry (selected item)
 - `q` or `ctrl+c`: quit
 - `tab`: toggle focus (outline/detail) (optional)
 
@@ -32,10 +35,19 @@ Outline movement (hold Alt):
 Editing:
 - `e`: edit title of the selected item (Enter saves, Esc cancels)
 
+Status:
+- `space`: open status picker for selected item (includes `(no status)`)
+- `Shift+←/→`: cycle status backward/forward (includes `(no status)`)
+  - `(no status)` renders as empty (no placeholder)
+
 Creating items:
 - `n`: create a new sibling after the selected item (outline pane)
 - `N`: create a new subitem under the selected item (either pane)
 - `+ Add item` row: select it and press `enter` to add an item (handy for empty outlines)
 
 Notes:
-- The TUI still leans on the CLI for some features (for example: comments/worklog input, tags, due/schedule).
+- The TUI still leans on the CLI for some features (for example: tags, due/schedule, advanced queries).
+
+Comment/worklog editor:
+- `ctrl+s`: save
+- `tab` / `shift+tab`: focus body/save/cancel, `enter` activates buttons
