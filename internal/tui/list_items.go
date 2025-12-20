@@ -72,7 +72,7 @@ func (i outlineRowItem) Description() string { return i.row.item.ID }
 type addItemRow struct{}
 
 func (i addItemRow) FilterValue() string { return "" }
-func (i addItemRow) Title() string       { return "+ Add item" }
+func (i addItemRow) Title() string       { return "+ Add" }
 func (i addItemRow) Description() string { return "__add__" }
 
 func statusLabel(outline model.Outline, statusID string) string {
