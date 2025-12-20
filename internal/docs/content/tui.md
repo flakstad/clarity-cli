@@ -6,16 +6,16 @@ Current scope (early):
 - Navigate projects → outlines → items
 - Read item details in a split view (outline on the left, details on the right)
 - Auto-refresh when the local store changes (polls file mtimes)
-- Manual reload state from disk (so changes made via CLI show up immediately)
 - Create items directly from the TUI (sibling and subitem)
 - Reorder and restructure items (reorder, indent, outdent)
 
 Key bindings:
-- `enter`: select / drill down
-- `backspace` or `esc`: go back
-- `r`: reload from disk
+- `enter`: open selected item (outline view)
+- `o`: open selected item (outline view)
+- `backspace` or `esc`: go back (from detail → outline; from outline → previous screen)
+- `r`: archive selected item (with confirm)
 - `q` or `ctrl+c`: quit
-- `tab`: toggle focus (outline/detail)
+- `tab`: toggle focus (outline/detail) (optional)
 
 Outline navigation (outline.js-style):
 - `↑/↓`, `j/k`, `ctrl+n/ctrl+p`: previous/next visible item
@@ -28,6 +28,9 @@ Outline movement (hold Alt):
 - `alt+↑/↓` (or `alt+k/j`, `alt+p/n`): move item up/down among siblings
 - `alt+→` (or `alt+l/f`): indent (become child of previous sibling)
 - `alt+←` (or `alt+h/b`): outdent (become sibling after parent)
+
+Editing:
+- `e`: edit title of the selected item (Enter saves, Esc cancels)
 
 Creating items:
 - `n`: create a new sibling after the selected item (outline pane)

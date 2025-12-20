@@ -12,8 +12,18 @@ func flattenOutline(items []model.Item, collapsed map[string]bool) []outlineRow 
         children := map[string][]model.Item{}
         hasChildren := map[string]bool{}
         var roots []model.Item
+        present := map[string]bool{}
         for _, it := range items {
-                if it.ParentID == nil || *it.ParentID == "" {
+                present[it.ID] = true
+        }
+        for _, it := range items {
+                if it.ParentID == nil || strings.TrimSpace(*it.ParentID) == "" {
+                        roots = append(roots, it)
+                        continue
+                }
+                // If a parent is missing (e.g. archived), treat this as a root to avoid "orphaning"
+                // the subtree in the outline view.
+                if !present[*it.ParentID] {
                         roots = append(roots, it)
                         continue
                 }

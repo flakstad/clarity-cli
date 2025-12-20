@@ -16,6 +16,7 @@ import (
         "github.com/charmbracelet/bubbles/textinput"
         tea "github.com/charmbracelet/bubbletea"
         "github.com/charmbracelet/lipgloss"
+        xansi "github.com/charmbracelet/x/ansi"
 )
 
 type view int
@@ -43,6 +44,8 @@ const (
         modalNone modalKind = iota
         modalNewSibling
         modalNewChild
+        modalConfirmArchive
+        modalEditTitle
 )
 
 type appModel struct {
@@ -75,6 +78,8 @@ type appModel struct {
 
         lastDBModTime     time.Time
         lastEventsModTime time.Time
+
+        minibufferText string
 }
 
 func newAppModel(dir string, db *store.DB) appModel {
@@ -130,18 +135,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 return m, nil
 
         case tea.KeyMsg:
+                // If a modal is open in the outline view, route all keys to the modal handler
+                // so text inputs behave normally (e.g. backspace edits).
+                if m.view == viewOutline && m.modal != modalNone {
+                        return m.updateOutline(msg)
+                }
                 switch msg.String() {
                 case "ctrl+c", "q":
                         return m, tea.Quit
-                case "r":
-                        // Reload from disk (so running CLI commands in another terminal is reflected).
-                        _ = m.reloadFromDisk()
-                        return m, nil
                 case "backspace":
-                        if m.view == viewOutline && m.modal != modalNone {
-                                m.modal = modalNone
-                                m.input.Blur()
-                                m.modalForID = ""
+                        if m.view == viewOutline && m.modal == modalNone && m.pane == paneDetail {
+                                m.pane = paneOutline
                                 return m, nil
                         }
                         switch m.view {
@@ -155,15 +159,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, nil
                         }
                 case "esc":
-                        if m.view == viewOutline && m.modal != modalNone {
-                                m.modal = modalNone
-                                m.input.Blur()
-                                m.modalForID = ""
+                        if m.view == viewOutline && m.modal == modalNone && m.pane == paneDetail {
+                                m.pane = paneOutline
                                 return m, nil
                         }
                         if m.view == viewOutline && m.modal == modalNone {
                                 // Some terminals send Alt+<key> as ESC then <key>.
-                                // Delay treating ESC as "back" so we can interpret ESC+Enter as Alt+Enter, etc.
+                                // Delay treating ESC as "back" so we can interpret ESC+<key> as Alt+<key>.
                                 m.pendingEsc = true
                                 return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return escTimeoutMsg{} })
                         }
@@ -181,6 +183,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.selectedProjectID = it.project.ID
                                         m.db.CurrentProjectID = it.project.ID
                                         _ = m.store.Save(m.db)
+                                        m.captureStoreModTimes()
                                         m.view = viewOutlines
                                         m.refreshOutlines(it.project.ID)
                                         return m, nil
@@ -237,12 +240,12 @@ func (m appModel) View() string {
                 body = ""
         }
 
-        footer := lipgloss.NewStyle().Faint(true).Render(m.footerText())
+        footer := m.footerBlock()
         return strings.Join([]string{header, body, footer}, "\n\n")
 }
 
 func (m appModel) footerText() string {
-        base := "enter: select  tab: focus  backspace/esc: back  r: reload  q: quit"
+        base := "enter: select  backspace/esc: back  q: quit"
         if m.view != viewOutline {
                 return base
         }
@@ -251,9 +254,49 @@ func (m appModel) footerText() string {
                 focus = "focus=detail"
         }
         if m.modal != modalNone {
+                if m.modal == modalConfirmArchive {
+                        return "archive: y/enter: confirm  n/esc: cancel  " + focus
+                }
+                if m.modal == modalEditTitle {
+                        return "edit title: type, enter: save, esc: cancel  " + focus
+                }
                 return "new item: type title, enter: save, esc: cancel  " + focus
         }
-        return "arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  " + focus
+        return "enter: toggle detail  tab: toggle focus  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  r: archive  " + focus
+}
+
+func (m appModel) footerBlock() string {
+        keyHelp := lipgloss.NewStyle().Faint(true).Render(m.footerText())
+        return m.minibufferView() + "\n" + keyHelp
+}
+
+func (m appModel) minibufferView() string {
+        w := m.width
+        if w <= 0 {
+                w = 80
+        }
+        // Replace newlines so we always render a single-line minibuffer.
+        txt := strings.TrimSpace(strings.ReplaceAll(m.minibufferText, "\n", " "))
+        if txt == "" {
+                txt = " "
+        }
+        innerW := w - 2
+        if innerW < 10 {
+                innerW = 10
+        }
+        if xansi.StringWidth(txt) > innerW {
+                txt = xansi.Cut(txt, 0, innerW-1) + "…"
+        }
+        return lipgloss.NewStyle().
+                Width(w).
+                Padding(0, 1).
+                Background(lipgloss.Color("236")).
+                Foreground(lipgloss.Color("255")).
+                Render(txt)
+}
+
+func (m *appModel) showMinibuffer(text string) {
+        m.minibufferText = text
 }
 
 func (m *appModel) resizeLists() {
@@ -263,8 +306,8 @@ func (m *appModel) resizeLists() {
                 h = 8
         }
         w := m.width
-        if w < 40 {
-                w = 40
+        if w < 10 {
+                w = 10
         }
         m.projectsList.SetSize(w, h)
         m.outlinesList.SetSize(w, h)
@@ -360,21 +403,17 @@ func (m *appModel) refreshItems(outline model.Outline) {
 
 func (m *appModel) viewOutline() string {
         bodyHeight := m.height - 6
-        if m.modal != modalNone {
-                bodyHeight -= 3
-        }
         if bodyHeight < 8 {
                 bodyHeight = 8
         }
 
-        leftWidth := m.width / 2
-        if leftWidth < 40 {
-                leftWidth = 40
+        w := m.width
+        if w < 10 {
+                w = 10
         }
-        rightWidth := m.width - leftWidth - 2
-        if rightWidth < 30 {
-                rightWidth = 30
-        }
+        gapW := 2
+        leftWidth := (w - gapW) / 2
+        rightWidth := w - gapW - leftWidth
 
         m.itemsList.SetSize(leftWidth, bodyHeight)
 
@@ -407,32 +446,54 @@ func (m *appModel) viewOutline() string {
                 detail = lipgloss.NewStyle().Width(rightWidth).Height(bodyHeight).Render("No item selected.")
         }
 
-        main := lipgloss.JoinHorizontal(lipgloss.Top, left, detail)
+        gap := lipgloss.NewStyle().Width(gapW).Render("")
+        main := lipgloss.JoinHorizontal(lipgloss.Top, left, gap, detail)
         if m.modal == modalNone {
                 return main
         }
-        return lipgloss.JoinVertical(lipgloss.Left, main, m.renderModal())
+
+        bg := dimBackground(main)
+        fg := m.renderModal()
+        return overlayCenter(bg, fg, w, bodyHeight)
 }
 
 func (m *appModel) renderModal() string {
-        w := m.width
-        if w < 40 {
-                w = 40
+        switch m.modal {
+        case modalNewSibling, modalNewChild:
+                title := "New item"
+                if m.modal == modalNewChild {
+                        title = "New subitem"
+                }
+                return renderModalBox(m.width, title, m.input.View()+"\n\nenter: save   esc: cancel")
+        case modalEditTitle:
+                return renderModalBox(m.width, "Edit title", m.input.View()+"\n\nenter: save   esc: cancel")
+        case modalConfirmArchive:
+                title := "this item"
+                if it, ok := m.db.FindItem(m.modalForID); ok {
+                        if strings.TrimSpace(it.Title) != "" {
+                                title = fmt.Sprintf("%q", it.Title)
+                        }
+                }
+                extra := countUnarchivedDescendants(m.db, m.modalForID)
+                cascade := "This will archive this item."
+                if extra == 1 {
+                        cascade = "This will archive this item and 1 subitem."
+                } else if extra > 1 {
+                        cascade = fmt.Sprintf("This will archive this item and %d subitems.", extra)
+                }
+                body := strings.Join([]string{
+                        "Archive " + title + "?",
+                        cascade,
+                        "You can unarchive later via the CLI.",
+                }, "\n")
+                return renderModalBox(m.width, "Confirm", body+"\n\nenter/y: archive   esc/n: cancel")
+        default:
+                return ""
         }
-        label := "New item"
-        if m.modal == modalNewChild {
-                label = "New subitem"
-        }
-        box := lipgloss.NewStyle().
-                Width(w).
-                Padding(0, 1).
-                Border(lipgloss.RoundedBorder()).
-                BorderForeground(lipgloss.Color("62"))
-        return box.Render(label + ": " + m.input.View())
 }
 
 func tickReload() tea.Cmd {
-        return tea.Tick(750*time.Millisecond, func(time.Time) tea.Msg { return reloadTickMsg{} })
+        return tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg { return reloadTickMsg{} })
 }
 
 func (m *appModel) captureStoreModTimes() {
@@ -506,6 +567,35 @@ func selectListItemByID(l *list.Model, id string) {
 func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
         // Modal input takes over all keys.
         if m.modal != modalNone {
+                if m.modal == modalConfirmArchive {
+                        if km, ok := msg.(tea.KeyMsg); ok {
+                                switch km.String() {
+                                case "esc", "n":
+                                        m.modal = modalNone
+                                        m.modalForID = ""
+                                        return m, nil
+                                case "enter", "y":
+                                        target := m.modalForID
+                                        prevIdx := m.itemsList.Index()
+                                        nextID := m.nearestSelectableItemID(prevIdx)
+                                        archived, err := m.archiveItemTree(target)
+                                        m.modal = modalNone
+                                        m.modalForID = ""
+                                        if m.selectedOutline != nil {
+                                                m.refreshItems(*m.selectedOutline)
+                                                selectListItemByID(&m.itemsList, nextID)
+                                        }
+                                        if err != nil {
+                                                m.showMinibuffer("Archive failed: " + err.Error())
+                                        } else if archived > 0 {
+                                                m.showMinibuffer(fmt.Sprintf("Archived %d item(s)", archived))
+                                        }
+                                        return m, nil
+                                }
+                        }
+                        return m, nil
+                }
+
                 switch km := msg.(type) {
                 case tea.KeyMsg:
                         switch km.String() {
@@ -515,11 +605,16 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 m.input.Blur()
                                 return m, nil
                         case "enter":
-                                title := strings.TrimSpace(m.input.Value())
-                                if title == "" {
+                                val := strings.TrimSpace(m.input.Value())
+                                if val == "" {
                                         return m, nil
                                 }
-                                _ = m.createItemFromModal(title)
+                                switch m.modal {
+                                case modalEditTitle:
+                                        _ = m.setTitleFromModal(val)
+                                default:
+                                        _ = m.createItemFromModal(val)
+                                }
                                 m.modal = modalNone
                                 m.modalForID = ""
                                 m.input.SetValue("")
@@ -537,22 +632,6 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                 // Handle ESC-prefix Alt sequences (ESC then key).
                 if m.pendingEsc {
                         m.pendingEsc = false
-                        if msg.Type == tea.KeyEnter || msg.String() == "enter" {
-                                // ESC+Enter => treat as Alt+Enter.
-                                m.modalForID = ""
-                                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-                                        m.modalForID = it.row.item.ID
-                                }
-                                if m.pane == paneDetail {
-                                        m.modal = modalNewChild
-                                } else {
-                                        m.modal = modalNewSibling
-                                }
-                                m.input.SetValue("")
-                                m.input.Focus()
-                                return m, nil
-                        }
-
                         // ESC + navigation keys => treat as Alt+...
                         switch msg.String() {
                         case "up", "k", "p":
@@ -581,18 +660,37 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, nil
                 }
 
-                // Create items.
+                // Open item / create items.
                 switch msg.String() {
                 case "enter":
-                        // On the "+ Add item" row, enter creates a new root item.
                         if m.pane == paneOutline {
-                                if _, ok := m.itemsList.SelectedItem().(addItemRow); ok {
+                                switch m.itemsList.SelectedItem().(type) {
+                                case outlineRowItem:
+                                        m.pane = paneDetail
+                                        return m, nil
+                                case addItemRow:
                                         m.modal = modalNewSibling
                                         m.modalForID = ""
                                         m.input.SetValue("")
                                         m.input.Focus()
                                         return m, nil
                                 }
+                        }
+                case "o":
+                        if m.pane == paneOutline {
+                                if _, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                        m.pane = paneDetail
+                                        return m, nil
+                                }
+                        }
+                case "e":
+                        // Edit title for selected item.
+                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                m.modal = modalEditTitle
+                                m.modalForID = it.row.item.ID
+                                m.input.SetValue(it.row.item.Title)
+                                m.input.Focus()
+                                return m, nil
                         }
                 case "n":
                         // New sibling (after selected) in outline pane.
@@ -618,6 +716,14 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.input.SetValue("")
                         m.input.Focus()
                         return m, nil
+                case "r":
+                        // Archive/remove selected item (with confirmation).
+                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                m.modal = modalConfirmArchive
+                                m.modalForID = it.row.item.ID
+                                m.input.Blur()
+                                return m, nil
+                        }
                 }
 
                 // When focused on detail, don't let navigation keys change the outline cursor.
@@ -651,6 +757,265 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
         var cmd tea.Cmd
         m.itemsList, cmd = m.itemsList.Update(msg)
         return m, cmd
+}
+
+func (m *appModel) nearestSelectableItemID(fromIdx int) string {
+        items := m.itemsList.Items()
+        if fromIdx < 0 {
+                fromIdx = 0
+        }
+        for i := fromIdx + 1; i < len(items); i++ {
+                if it, ok := items[i].(outlineRowItem); ok {
+                        return it.row.item.ID
+                }
+        }
+        for i := fromIdx - 1; i >= 0; i-- {
+                if it, ok := items[i].(outlineRowItem); ok {
+                        return it.row.item.ID
+                }
+        }
+        return "__add__"
+}
+
+func (m *appModel) archiveItem(itemID string) error {
+        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        if actorID == "" {
+                return nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return err
+        }
+        m.db = db
+
+        t, ok := m.db.FindItem(itemID)
+        if !ok {
+                return nil
+        }
+        if !canEditItem(m.db, actorID, t) {
+                return nil
+        }
+
+        t.Archived = true
+        t.UpdatedAt = time.Now().UTC()
+        if err := m.store.Save(m.db); err != nil {
+                return err
+        }
+        _ = m.store.AppendEvent(actorID, "item.archive", t.ID, map[string]any{"archived": t.Archived})
+        m.captureStoreModTimes()
+        return nil
+}
+
+func (m *appModel) archiveItemTree(rootID string) (int, error) {
+        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        if actorID == "" {
+                return 0, nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return 0, err
+        }
+        m.db = db
+
+        ids := subtreeItemIDs(m.db, rootID)
+        if len(ids) == 0 {
+                return 0, nil
+        }
+
+        now := time.Now().UTC()
+        archived := 0
+        for _, id := range ids {
+                t, ok := m.db.FindItem(id)
+                if !ok {
+                        continue
+                }
+                if !canEditItem(m.db, actorID, t) {
+                        continue
+                }
+                if t.Archived {
+                        continue
+                }
+                t.Archived = true
+                t.UpdatedAt = now
+                _ = m.store.AppendEvent(actorID, "item.archive", t.ID, map[string]any{"archived": true})
+                archived++
+        }
+
+        if err := m.store.Save(m.db); err != nil {
+                return archived, err
+        }
+        m.captureStoreModTimes()
+        return archived, nil
+}
+
+func countUnarchivedDescendants(db *store.DB, rootID string) int {
+        if db == nil || strings.TrimSpace(rootID) == "" {
+                return 0
+        }
+        ids := subtreeItemIDs(db, rootID)
+        if len(ids) <= 1 {
+                return 0
+        }
+        n := 0
+        for _, id := range ids[1:] {
+                it, ok := db.FindItem(id)
+                if !ok {
+                        continue
+                }
+                if !it.Archived {
+                        n++
+                }
+        }
+        return n
+}
+
+func subtreeItemIDs(db *store.DB, rootID string) []string {
+        if db == nil || strings.TrimSpace(rootID) == "" {
+                return nil
+        }
+
+        children := map[string][]string{}
+        for _, it := range db.Items {
+                if it.ParentID == nil || strings.TrimSpace(*it.ParentID) == "" {
+                        continue
+                }
+                pid := strings.TrimSpace(*it.ParentID)
+                if pid == "" {
+                        continue
+                }
+                children[pid] = append(children[pid], it.ID)
+        }
+
+        seen := map[string]bool{}
+        var out []string
+        queue := []string{rootID}
+        for len(queue) > 0 {
+                id := queue[0]
+                queue = queue[1:]
+                if seen[id] {
+                        continue
+                }
+                seen[id] = true
+                out = append(out, id)
+                for _, ch := range children[id] {
+                        if !seen[ch] {
+                                queue = append(queue, ch)
+                        }
+                }
+        }
+        return out
+}
+
+func overlayCenter(bg, fg string, w, h int) string {
+        bgLines := splitLinesN(bg, h)
+        fgLines := strings.Split(fg, "\n")
+        fgH := len(fgLines)
+        fgW := 0
+        for _, ln := range fgLines {
+                if n := xansi.StringWidth(ln); n > fgW {
+                        fgW = n
+                }
+        }
+        if fgW <= 0 || fgH <= 0 {
+                return strings.Join(bgLines, "\n")
+        }
+        if fgW > w {
+                fgW = w
+        }
+        if fgH > h {
+                fgH = h
+        }
+
+        x := (w - fgW) / 2
+        y := (h - fgH) / 2
+        if x < 0 {
+                x = 0
+        }
+        if y < 0 {
+                y = 0
+        }
+
+        // Shadow to give the modal depth.
+        shadowStyle := lipgloss.NewStyle().Background(lipgloss.Color("236"))
+        shadowLine := shadowStyle.Render(strings.Repeat(" ", fgW))
+        shadow := make([]string, 0, fgH)
+        for i := 0; i < fgH; i++ {
+                shadow = append(shadow, shadowLine)
+        }
+        overlayAt(bgLines, shadow, w, x+1, y+1, fgW)
+        overlayAt(bgLines, fgLines, w, x, y, fgW)
+        return strings.Join(bgLines, "\n")
+}
+
+func overlayAt(bgLines []string, fgLines []string, w, x, y, fgW int) {
+        if fgW <= 0 {
+                return
+        }
+        if x < 0 {
+                x = 0
+        }
+        if y < 0 {
+                y = 0
+        }
+        for i := 0; i < len(fgLines) && y+i < len(bgLines); i++ {
+                bgLine := bgLines[y+i]
+                left := xansi.Cut(bgLine, 0, x)
+                right := xansi.Cut(bgLine, x+fgW, w)
+
+                fgLine := fgLines[i]
+                if n := xansi.StringWidth(fgLine); n < fgW {
+                        fgLine += strings.Repeat(" ", fgW-n)
+                } else if n > fgW {
+                        fgLine = xansi.Cut(fgLine, 0, fgW)
+                }
+
+                bgLines[y+i] = left + fgLine + right
+        }
+}
+
+func dimBackground(s string) string {
+        // A simple "scrim" effect: desaturate + faint. This keeps layout identical and
+        // makes the modal feel closer without destroying the context behind it.
+        return lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Faint(true).Render(s)
+}
+
+func renderModalBox(screenWidth int, title, body string) string {
+        w := screenWidth - 12
+        if w > screenWidth-4 {
+                w = screenWidth - 4
+        }
+        if w < 20 {
+                w = 20
+        }
+        if w > 96 {
+                w = 96
+        }
+
+        header := lipgloss.NewStyle().Bold(true).Render(title)
+        content := header + "\n\n" + body
+
+        box := lipgloss.NewStyle().
+                Width(w).
+                Padding(1, 2).
+                Border(lipgloss.RoundedBorder()).
+                BorderForeground(lipgloss.Color("62")).
+                Background(lipgloss.Color("235"))
+        return box.Render(content)
+}
+
+func splitLinesN(s string, n int) []string {
+        lines := strings.Split(s, "\n")
+        if len(lines) >= n {
+                return lines[:n]
+        }
+        out := make([]string, 0, n)
+        out = append(out, lines...)
+        for len(out) < n {
+                out = append(out, "")
+        }
+        return out
 }
 
 func isAltEnter(msg tea.KeyMsg) bool {
@@ -921,6 +1286,8 @@ func (m *appModel) createItemFromModal(title string) error {
                 return err
         }
         _ = m.store.AppendEvent(actorID, "item.create", newItem.ID, newItem)
+        m.captureStoreModTimes()
+        m.showMinibuffer("Created " + newItem.ID)
 
         // Expand parent if we created a child.
         if parentID != nil {
@@ -929,6 +1296,48 @@ func (m *appModel) createItemFromModal(title string) error {
 
         m.refreshItems(outline)
         selectListItemByID(&m.itemsList, newItem.ID)
+        return nil
+}
+
+func (m *appModel) setTitleFromModal(title string) error {
+        itemID := strings.TrimSpace(m.modalForID)
+        if itemID == "" {
+                return nil
+        }
+        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        if actorID == "" {
+                return nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return err
+        }
+        m.db = db
+
+        t, ok := m.db.FindItem(itemID)
+        if !ok {
+                return nil
+        }
+        if !canEditItem(m.db, actorID, t) {
+                return nil
+        }
+
+        t.Title = strings.TrimSpace(title)
+        t.UpdatedAt = time.Now().UTC()
+        if err := m.store.Save(m.db); err != nil {
+                return err
+        }
+        _ = m.store.AppendEvent(actorID, "item.set_title", t.ID, map[string]any{"title": t.Title})
+        m.captureStoreModTimes()
+
+        if m.selectedOutline != nil {
+                if o, ok := m.db.FindOutline(m.selectedOutline.ID); ok {
+                        m.selectedOutline = o
+                }
+                m.refreshItems(*m.selectedOutline)
+                selectListItemByID(&m.itemsList, t.ID)
+        }
         return nil
 }
 
@@ -1032,6 +1441,8 @@ func (m *appModel) reorderItem(t *model.Item, afterID, beforeID string) error {
         }
         actorID := strings.TrimSpace(m.db.CurrentActorID)
         _ = m.store.AppendEvent(actorID, "item.move", t.ID, map[string]any{"before": beforeID, "after": afterID, "rank": t.Rank})
+        m.captureStoreModTimes()
+        m.showMinibuffer("Moved " + t.ID)
         if m.selectedOutline != nil {
                 m.refreshItems(*m.selectedOutline)
                 selectListItemByID(&m.itemsList, t.ID)
@@ -1079,6 +1490,8 @@ func (m *appModel) indentSelected() error {
                 return err
         }
         _ = m.store.AppendEvent(actorID, "item.set_parent", t.ID, map[string]any{"parent": newParentID, "rank": t.Rank})
+        m.captureStoreModTimes()
+        m.showMinibuffer("Indented " + t.ID)
         // Expand new parent so the moved item stays visible.
         m.collapsed[newParentID] = false
         if m.selectedOutline != nil {
@@ -1154,6 +1567,8 @@ func (m *appModel) outdentSelected() error {
                 payload["parent"] = *destParentID
         }
         _ = m.store.AppendEvent(actorID, "item.set_parent", t.ID, payload)
+        m.captureStoreModTimes()
+        m.showMinibuffer("Outdented " + t.ID)
         if m.selectedOutline != nil {
                 m.refreshItems(*m.selectedOutline)
                 selectListItemByID(&m.itemsList, t.ID)
