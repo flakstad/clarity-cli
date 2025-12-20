@@ -7,9 +7,10 @@ import (
         "clarity-cli/internal/model"
 )
 
-func flattenOutline(items []model.Item) []outlineRow {
+func flattenOutline(items []model.Item, collapsed map[string]bool) []outlineRow {
         // Build parent -> children map (siblings sorted by Order).
         children := map[string][]model.Item{}
+        hasChildren := map[string]bool{}
         var roots []model.Item
         for _, it := range items {
                 if it.ParentID == nil || *it.ParentID == "" {
@@ -17,6 +18,11 @@ func flattenOutline(items []model.Item) []outlineRow {
                         continue
                 }
                 children[*it.ParentID] = append(children[*it.ParentID], it)
+        }
+        for pid, ch := range children {
+                if len(ch) > 0 {
+                        hasChildren[pid] = true
+                }
         }
 
         sort.Slice(roots, func(i, j int) bool { return compareOutlineItems(roots[i], roots[j]) < 0 })
@@ -29,7 +35,15 @@ func flattenOutline(items []model.Item) []outlineRow {
         var out []outlineRow
         var walk func(it model.Item, depth int)
         walk = func(it model.Item, depth int) {
-                out = append(out, outlineRow{item: it, depth: depth})
+                out = append(out, outlineRow{
+                        item:        it,
+                        depth:       depth,
+                        hasChildren: hasChildren[it.ID],
+                        collapsed:   collapsed[it.ID],
+                })
+                if collapsed[it.ID] {
+                        return
+                }
                 for _, ch := range children[it.ID] {
                         walk(ch, depth+1)
                 }

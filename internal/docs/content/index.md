@@ -15,3 +15,4 @@ Recommended starting topics:
 - `items-outlines`
 - `deps`
 - `tui`
+- `quick-capture`

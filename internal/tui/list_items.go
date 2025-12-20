@@ -42,8 +42,10 @@ func (i outlineItem) Title() string {
 func (i outlineItem) Description() string { return i.outline.ID }
 
 type outlineRow struct {
-        item  model.Item
-        depth int
+        item        model.Item
+        depth       int
+        hasChildren bool
+        collapsed   bool
 }
 
 type outlineRowItem struct {
@@ -55,9 +57,23 @@ func (i outlineRowItem) FilterValue() string { return i.row.item.Title }
 func (i outlineRowItem) Title() string {
         prefix := strings.Repeat("  ", i.row.depth)
         status := statusLabel(i.outline, i.row.item.StatusID)
-        return fmt.Sprintf("%s[%s] %s", prefix, status, i.row.item.Title)
+        twisty := " "
+        if i.row.hasChildren {
+                if i.row.collapsed {
+                        twisty = "▸"
+                } else {
+                        twisty = "▾"
+                }
+        }
+        return fmt.Sprintf("%s%s [%s] %s", prefix, twisty, status, i.row.item.Title)
 }
 func (i outlineRowItem) Description() string { return i.row.item.ID }
+
+type addItemRow struct{}
+
+func (i addItemRow) FilterValue() string { return "" }
+func (i addItemRow) Title() string       { return "+ Add item" }
+func (i addItemRow) Description() string { return "__add__" }
 
 func statusLabel(outline model.Outline, statusID string) string {
         if strings.TrimSpace(statusID) == "" {
