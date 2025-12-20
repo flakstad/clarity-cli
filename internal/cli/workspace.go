@@ -11,7 +11,7 @@ import (
 func newWorkspaceCmd(app *App) *cobra.Command {
         cmd := &cobra.Command{
                 Use:   "workspace",
-                Short: "Workspace management (workspace-first)",
+                Short: "Workspace management (default workspace is recommended unless explicitly told otherwise)",
         }
 
         cmd.AddCommand(newWorkspaceInitCmd(app))

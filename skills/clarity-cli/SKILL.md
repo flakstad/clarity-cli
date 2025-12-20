@@ -14,7 +14,9 @@ Use Clarity to:
 
 ## Preconditions (local-only)
 - `clarity` is installed and available on `PATH` (or use a direct binary path).
-- You can access a Clarity workspace (default local location: `~/.clarity/workspaces/<name>/`) or pass `--dir <path>`.
+- **Default workspace is the norm**: assume all work happens in the implicit `default` workspace unless the user explicitly tells you otherwise.
+- Storage lives under `~/.clarity/workspaces/<name>/` (by default: `~/.clarity/workspaces/default/`).
+- Only use `--workspace <name>` or `--dir <path>` when the user explicitly asks for a specific workspace or an isolated store (fixtures/tests).
 
 ## How to discover capabilities (progressive disclosure)
 - High-level help: `clarity --help`
@@ -40,13 +42,52 @@ You must set an active actor before doing writes:
 
 Ownership rules are enforced by the CLI (V1). If you can’t edit, comment instead.
 
+## Agent workflow (recommended for autonomous agents)
+If you are an autonomous agent (Cursor/Codex/etc), you should operate under your own `agent` identity and explicitly claim items you work on.
+
+Two supported patterns:
+
+- **Stable identity per session (recommended)**:
+  - Set a session key once (e.g. `CLARITY_AGENT_SESSION=codex-123`)
+  - Run `clarity agent start <item-id>` to ensure identity + claim item
+
+- **New identity per run (sufficient default)**:
+  - Omit the session key; Clarity will generate one automatically
+  - Run `clarity agent start <item-id>`
+
+Minimal loop:
+
+```bash
+# 1) Find work
+clarity items ready
+
+# 2) Start work (ensure identity + claim ownership)
+clarity agent start <item-id>
+
+# If another agent already claimed it, you must be explicit:
+clarity agent start <item-id> --take-assigned
+
+# 3) Do work and record updates (prefer worklog for private notes, comments for collaboration)
+clarity worklog add <item-id> --body "Implemented X; next: Y"
+clarity comments add <item-id> --body "FYI: shipped X; open question: Y"
+```
+
+Environment variables (optional conveniences):
+- `CLARITY_AGENT_SESSION`: stable identity within a session; omit for new identity per run
+- `CLARITY_AGENT_NAME`: display name used when creating agent identities
+- `CLARITY_AGENT_USER`: parent human actor id (if not resolvable from current actor)
+
 ## Workspace-first usage
-Typical (recommended) workflow:
+Typical (recommended) workflow (default workspace):
 
 ```bash
 clarity init
-clarity workspace init default
-clarity workspace use default
+```
+
+If (and only if) you are explicitly told to use a different workspace:
+
+```bash
+clarity workspace use <name>
 ```
 
 ## Bootstrap (minimum to start tracking work)

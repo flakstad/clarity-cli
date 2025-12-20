@@ -113,7 +113,10 @@ func newItemsSetParentCmd(app *App) *cobra.Command {
         cmd := &cobra.Command{
                 Use:   "set-parent <item-id>",
                 Short: "Reparent an item (owner-only); ordering uses ranks",
-                Args:  cobra.ExactArgs(1),
+                Aliases: []string{
+                        "parent",
+                },
+                Args: cobra.ExactArgs(1),
                 RunE: func(cmd *cobra.Command, args []string) error {
                         db, s, err := loadDB(app)
                         if err != nil {

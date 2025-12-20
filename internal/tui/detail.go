@@ -14,11 +14,24 @@ import (
 
 func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width, height int, focused bool) string {
         titleStyle := lipgloss.NewStyle().Bold(true)
+        if isEndState(outline, it.StatusID) {
+                titleStyle = lipgloss.NewStyle().
+                        Foreground(lipgloss.Color("243")).
+                        Faint(true).
+                        Strikethrough(true)
+        }
         labelStyle := lipgloss.NewStyle().Faint(true)
+        // NOTE: The returned string must be exactly `width` columns wide (ANSI-aware) so that
+        // split-view rendering with lipgloss.JoinHorizontal stays stable.
+        padX := 1
+        innerW := width - (2 * padX)
+        if innerW < 0 {
+                innerW = 0
+        }
         box := lipgloss.NewStyle().
-                Width(width).
+                Width(innerW).
                 Height(height).
-                Padding(0, 1)
+                Padding(0, padX)
 
         status := renderStatus(outline, it.StatusID)
         assigned := "-"
@@ -119,7 +132,8 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
                 lines = append(lines[:4], append([]string{labelStyle.Render("Status: ") + status}, lines[4:]...)...)
         }
 
-        return box.Render(strings.Join(lines, "\n"))
+        // Normalize to guarantee stable split-pane rendering even with unbroken long tokens.
+        return normalizePane(box.Render(strings.Join(lines, "\n")), width, height)
 }
 
 func truncateLines(s string, maxLines int) string {

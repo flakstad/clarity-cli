@@ -15,7 +15,7 @@ Primary codepaths:
 From `clarity-cli/`:
 - Build: `make build`
 - Run (CLI/TUI): `make run` (or `go run ./cmd/clarity`)
-- Install: `make install`
+- Install: `make install` (runs tests first)
 - Tests: `make test` (or `go test ./...`)
 - Format: `make fmt` (or `gofmt -w .`)
 - Tidy deps: `make tidy`

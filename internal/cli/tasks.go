@@ -21,6 +21,7 @@ func newItemsCmd(app *App) *cobra.Command {
         cmd.AddCommand(newItemsCreateCmd(app))
         cmd.AddCommand(newItemsListCmd(app))
         cmd.AddCommand(newItemsShowCmd(app))
+        cmd.AddCommand(newItemsClaimCmd(app))
         cmd.AddCommand(newItemsSetTitleCmd(app))
         cmd.AddCommand(newItemsSetDescriptionCmd(app))
         cmd.AddCommand(newItemsSetStatusCmd(app))
@@ -378,7 +379,10 @@ func newItemsSetTitleCmd(app *App) *cobra.Command {
         cmd := &cobra.Command{
                 Use:   "set-title <item-id>",
                 Short: "Set item title (owner-only)",
-                Args:  cobra.ExactArgs(1),
+                Aliases: []string{
+                        "title",
+                },
+                Args: cobra.ExactArgs(1),
                 RunE: func(cmd *cobra.Command, args []string) error {
                         db, s, err := loadDB(app)
                         if err != nil {
@@ -415,7 +419,10 @@ func newItemsSetStatusCmd(app *App) *cobra.Command {
         cmd := &cobra.Command{
                 Use:   "set-status <item-id>",
                 Short: "Set item status (owner-only)",
-                Args:  cobra.ExactArgs(1),
+                Aliases: []string{
+                        "status",
+                },
+                Args: cobra.ExactArgs(1),
                 RunE: func(cmd *cobra.Command, args []string) error {
                         db, s, err := loadDB(app)
                         if err != nil {
@@ -467,6 +474,7 @@ func newItemsSetStatusCmd(app *App) *cobra.Command {
 }
 
 func newItemsReadyCmd(app *App) *cobra.Command {
+        var includeAssigned bool
         cmd := &cobra.Command{
                 Use:   "ready",
                 Short: "List ready items (good for picking the next task)",
@@ -478,6 +486,7 @@ This is the recommended way to find the next thing to work on.
                 Example: strings.TrimSpace(`
 clarity items ready
 clarity items ready --pretty
+clarity items ready --include-assigned
 
 # Open an item from the list
 clarity <item-id>
@@ -503,6 +512,9 @@ clarity <item-id>
                                 if blocked[t.ID] {
                                         continue
                                 }
+                                if !includeAssigned && t.AssignedActorID != nil && strings.TrimSpace(*t.AssignedActorID) != "" {
+                                        continue
+                                }
                                 if isEndState(db, t.OutlineID, t.StatusID) {
                                         continue
                                 }
@@ -511,10 +523,12 @@ clarity <item-id>
                         hints := []string{
                                 "clarity <item-id>",
                                 "clarity items show <item-id>",
+                                "clarity items claim <item-id>",
                         }
                         return writeOut(cmd, app, map[string]any{"data": out, "_hints": hints})
                 },
         }
+        cmd.Flags().BoolVar(&includeAssigned, "include-assigned", false, "Include items already assigned to an actor")
         return cmd
 }
 

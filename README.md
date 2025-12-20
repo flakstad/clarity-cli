@@ -5,7 +5,7 @@ This is a Go CLI + Bubble Tea TUI for Clarity V1: items + dependencies + project
 ## Install / build
 
 ```bash
-make install
+make install # runs unit tests first
 ```
 
 Or:

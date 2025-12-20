@@ -15,7 +15,10 @@ func newItemsSetPriorityCmd(app *App) *cobra.Command {
         cmd := &cobra.Command{
                 Use:   "set-priority <item-id>",
                 Short: "Set/unset priority (owner-only)",
-                Args:  cobra.ExactArgs(1),
+                Aliases: []string{
+                        "priority",
+                },
+                Args: cobra.ExactArgs(1),
                 RunE: func(cmd *cobra.Command, args []string) error {
                         db, s, err := loadDB(app)
                         if err != nil {
@@ -67,7 +70,11 @@ func newItemsSetOnHoldCmd(app *App) *cobra.Command {
         cmd := &cobra.Command{
                 Use:   "set-on-hold <item-id>",
                 Short: "Set/unset on-hold (owner-only)",
-                Args:  cobra.ExactArgs(1),
+                Aliases: []string{
+                        "on-hold",
+                        "hold",
+                },
+                Args: cobra.ExactArgs(1),
                 RunE: func(cmd *cobra.Command, args []string) error {
                         db, s, err := loadDB(app)
                         if err != nil {
@@ -117,7 +124,10 @@ func newItemsSetDueCmd(app *App) *cobra.Command {
         cmd := &cobra.Command{
                 Use:   "set-due <item-id>",
                 Short: "Set/clear due date (owner-only); accepts RFC3339 or local date/time",
-                Args:  cobra.ExactArgs(1),
+                Aliases: []string{
+                        "due",
+                },
+                Args: cobra.ExactArgs(1),
                 RunE: func(cmd *cobra.Command, args []string) error {
                         db, s, err := loadDB(app)
                         if err != nil {
@@ -169,7 +179,10 @@ func newItemsSetScheduleCmd(app *App) *cobra.Command {
         cmd := &cobra.Command{
                 Use:   "set-schedule <item-id>",
                 Short: "Set/clear schedule date (owner-only); accepts RFC3339 or local date/time",
-                Args:  cobra.ExactArgs(1),
+                Aliases: []string{
+                        "schedule",
+                },
+                Args: cobra.ExactArgs(1),
                 RunE: func(cmd *cobra.Command, args []string) error {
                         db, s, err := loadDB(app)
                         if err != nil {
@@ -216,12 +229,15 @@ func newItemsSetScheduleCmd(app *App) *cobra.Command {
 }
 
 func newItemsSetAssignCmd(app *App) *cobra.Command {
-        var actor string
+        var assignee string
         var clear bool
         cmd := &cobra.Command{
                 Use:   "set-assign <item-id>",
                 Short: "Set/clear assigned actor (owner-only; agents can self-assign unassigned items)",
-                Args:  cobra.ExactArgs(1),
+                Aliases: []string{
+                        "assign",
+                },
+                Args: cobra.ExactArgs(1),
                 RunE: func(cmd *cobra.Command, args []string) error {
                         db, s, err := loadDB(app)
                         if err != nil {
@@ -252,17 +268,17 @@ func newItemsSetAssignCmd(app *App) *cobra.Command {
                                 return writeOut(cmd, app, map[string]any{"data": t})
                         }
 
-                        if strings.TrimSpace(actor) == "" {
-                                return writeErr(cmd, errors.New("missing --actor (or pass --clear)"))
+                        if strings.TrimSpace(assignee) == "" {
+                                return writeErr(cmd, errors.New("missing --assignee (or pass --clear)"))
                         }
-                        if _, ok := db.FindActor(actor); !ok {
-                                return writeErr(cmd, errNotFound("actor", actor))
+                        if _, ok := db.FindActor(assignee); !ok {
+                                return writeErr(cmd, errNotFound("actor", assignee))
                         }
 
                         // Special case: allow an agent to self-assign an unassigned item
                         // belonging to the same human user, even if they're not the current owner.
                         isUnassigned := t.AssignedActorID == nil
-                        isSelfAssign := actor == actorID
+                        isSelfAssign := assignee == actorID
                         if isUnassigned && isSelfAssign {
                                 curHuman, ok1 := db.HumanUserIDForActor(actorID)
                                 ownerHuman, ok2 := db.HumanUserIDForActor(t.OwnerActorID)
@@ -283,14 +299,14 @@ func newItemsSetAssignCmd(app *App) *cobra.Command {
                                 }
 
                                 // Transfer ownership when assigning to someone else.
-                                if actor != t.OwnerActorID {
+                                if assignee != t.OwnerActorID {
                                         now := time.Now().UTC()
                                         prev := t.OwnerActorID
                                         t.OwnerDelegatedFrom = &prev
                                         t.OwnerDelegatedAt = &now
-                                        t.OwnerActorID = actor
+                                        t.OwnerActorID = assignee
                                 }
-                                tmp := actor
+                                tmp := assignee
                                 t.AssignedActorID = &tmp
                         }
 
@@ -302,7 +318,8 @@ func newItemsSetAssignCmd(app *App) *cobra.Command {
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }
-        cmd.Flags().StringVar(&actor, "actor", "", "Actor id to assign to")
+        cmd.Flags().StringVar(&assignee, "assignee", "", "Actor id to assign to")
+        cmd.Flags().StringVar(&assignee, "to", "", "Alias for --assignee")
         cmd.Flags().BoolVar(&clear, "clear", false, "Clear assignment")
         return cmd
 }

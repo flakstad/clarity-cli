@@ -41,6 +41,23 @@ clarity items get <item-id>
 clarity <item-id>
 ```
 
+## Short aliases (ergonomics)
+The canonical mutation commands use `set-*` naming, and there are **short verb aliases**
+for interactive use. These aliases are **additive**; scripts can keep using the canonical
+commands unchanged.
+
+```bash
+clarity items title <item-id> --title "New title"              # alias for set-title
+clarity items desc <item-id> --description "Markdown..."       # alias for set-description
+clarity items status <item-id> --status doing                  # alias for set-status
+clarity items priority <item-id> --on                          # alias for set-priority
+clarity items on-hold <item-id> --on                           # alias for set-on-hold
+clarity items due <item-id> --at 2025-12-31                    # alias for set-due
+clarity items schedule <item-id> --at 2025-12-20T09:00:00Z     # alias for set-schedule
+clarity items parent <item-id> --parent none                   # alias for set-parent
+clarity items move-to-outline <item-id> --to <outline-id>      # alias for move-outline
+```
+
 ## Reorder and reparent (CLI)
 The CLI intentionally avoids `indent`/`outdent`. Use explicit operations:
 
@@ -52,6 +69,19 @@ clarity items move <item-id> --after <sibling-id>
 # Reparent (and place at end by default)
 clarity items set-parent <item-id> --parent <new-parent-id>
 clarity items set-parent <item-id> --parent none
+```
+
+## Assign an item
+
+```bash
+# Assign (transfers ownership to the assignee)
+clarity items set-assign <item-id> --assignee <actor-id>
+
+# Short alias
+clarity items assign <item-id> --to <actor-id>
+
+# Clear assignment (owner-only; does not transfer ownership)
+clarity items set-assign <item-id> --clear
 ```
 
 ## Status

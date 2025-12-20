@@ -179,7 +179,14 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
         }
 
         titleTrunc := truncateText(title, maxTitleW)
-        titleSeg := base.Render(titleTrunc)
+        titleStyle := base
+        if isEndState(it.outline, statusID) {
+                titleStyle = base.Copy().
+                        Foreground(lipgloss.Color("243")).
+                        Faint(true).
+                        Strikethrough(true)
+        }
+        titleSeg := titleStyle.Render(titleTrunc)
 
         spacerSeg := ""
         if rightSeg != "" {

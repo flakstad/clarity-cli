@@ -14,9 +14,14 @@ clarity outlines create --project <project-id>
 ## Workspaces
 
 ```bash
+clarity init
 clarity workspace current
 clarity workspace use <name>
 ```
+
+Clarity is **workspace-first** and will use the implicit **`default`** workspace unless you explicitly select a different one.
+
+For most users (and for agents), you should **stick to the default workspace** unless you were specifically instructed to use a different workspace.
 
 ## Projects (set context)
 
@@ -39,6 +44,7 @@ clarity <item-id>
 ## If you want an isolated store
 
 ```bash
+## Use this for fixtures/tests or truly isolated experiments only.
 clarity --dir ./.clarity init
 clarity --dir ./.clarity identity create --kind human --name "me" --use
 ```

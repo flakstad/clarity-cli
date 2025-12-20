@@ -50,8 +50,8 @@ func NewRootCmd() *cobra.Command {
                 },
         }
 
-        cmd.PersistentFlags().StringVar(&app.Dir, "dir", envOr("CLARITY_DIR", ""), "Path to store dir (overrides workspace resolution)")
-        cmd.PersistentFlags().StringVar(&app.Workspace, "workspace", envOr("CLARITY_WORKSPACE", ""), "Workspace name (stored under ~/.clarity/workspaces/<name>)")
+        cmd.PersistentFlags().StringVar(&app.Dir, "dir", envOr("CLARITY_DIR", ""), "Path to store dir (advanced: overrides workspace resolution; use only when explicitly told or for fixtures/tests)")
+        cmd.PersistentFlags().StringVar(&app.Workspace, "workspace", envOr("CLARITY_WORKSPACE", ""), "Workspace name (default: 'default'; use only when explicitly selecting a non-default workspace)")
         cmd.PersistentFlags().StringVar(&app.ActorID, "actor", envOr("CLARITY_ACTOR", ""), "Actor id (overrides currentActorId in db.json)")
         cmd.PersistentFlags().BoolVar(&app.PrettyJSON, "pretty", false, "Pretty-print JSON output")
         cmd.PersistentFlags().StringVar(&app.Format, "format", envOr("CLARITY_FORMAT", "json"), "Output format (json|edn)")
@@ -68,6 +68,7 @@ func NewRootCmd() *cobra.Command {
         cmd.AddCommand(newCommentsCmd(app))
         cmd.AddCommand(newEventsCmd(app))
         cmd.AddCommand(newWorklogCmd(app))
+        cmd.AddCommand(newAgentCmd(app))
 
         return cmd
 }

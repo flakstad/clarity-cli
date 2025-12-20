@@ -14,7 +14,10 @@ func newItemsMoveOutlineCmd(app *App) *cobra.Command {
         cmd := &cobra.Command{
                 Use:   "move-outline <item-id>",
                 Short: "Move an item to another outline (owner-only) and optionally set status",
-                Args:  cobra.ExactArgs(1),
+                Aliases: []string{
+                        "move-to-outline",
+                },
+                Args: cobra.ExactArgs(1),
                 RunE: func(cmd *cobra.Command, args []string) error {
                         db, s, err := loadDB(app)
                         if err != nil {

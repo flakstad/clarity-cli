@@ -5,11 +5,11 @@ import (
         "os"
         "path/filepath"
         "sort"
-        "strconv"
         "strings"
         "time"
 
         "clarity-cli/internal/model"
+        "clarity-cli/internal/perm"
         "clarity-cli/internal/store"
 
         "github.com/charmbracelet/bubbles/list"
@@ -693,13 +693,20 @@ func (m *appModel) viewOutline() string {
         m.itemsList.SetSize(leftWidth, bodyHeight)
 
         left := lipgloss.NewStyle().Width(leftWidth).Height(bodyHeight).Padding(0, 0).Render(m.itemsList.View())
+        left = normalizePane(left, leftWidth, bodyHeight)
 
         var detail string
         switch it := m.itemsList.SelectedItem().(type) {
         case outlineRowItem:
                 detail = renderItemDetail(m.db, it.outline, it.row.item, rightWidth, bodyHeight, m.pane == paneDetail)
         case addItemRow:
-                detailBox := lipgloss.NewStyle().Width(rightWidth).Height(bodyHeight).Padding(0, 1)
+                // Keep the right pane exactly `rightWidth` columns wide; padding must be accounted for.
+                padX := 1
+                innerW := rightWidth - (2 * padX)
+                if innerW < 0 {
+                        innerW = 0
+                }
+                detailBox := lipgloss.NewStyle().Width(innerW).Height(bodyHeight).Padding(0, padX)
                 detail = detailBox.Render(strings.Join([]string{
                         "(no item selected)",
                         "",
@@ -708,8 +715,11 @@ func (m *appModel) viewOutline() string {
         default:
                 detail = lipgloss.NewStyle().Width(rightWidth).Height(bodyHeight).Render("No item selected.")
         }
+        detail = normalizePane(detail, rightWidth, bodyHeight)
 
-        gap := lipgloss.NewStyle().Width(gapW).Render("")
+        // Normalize the gap too; otherwise it only exists on the first line and the
+        // right pane "slides left" on subsequent lines.
+        gap := normalizePane(lipgloss.NewStyle().Width(gapW).Render(""), gapW, bodyHeight)
         main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + lipgloss.JoinHorizontal(lipgloss.Top, left, gap, detail)
         if m.modal == modalNone {
                 return main
@@ -2295,37 +2305,7 @@ func (m *appModel) outdentSelected() error {
 }
 
 func canEditItem(db *store.DB, actorID string, t *model.Item) bool {
-        if t.OwnerActorID == actorID {
-                return true
-        }
-
-        // Human override: a human user can edit items owned by their own agents.
-        if actorHuman, ok := db.HumanUserIDForActor(actorID); ok {
-                if ownerHuman, ok := db.HumanUserIDForActor(t.OwnerActorID); ok && actorHuman == ownerHuman {
-                        owner, _ := db.FindActor(t.OwnerActorID)
-                        if owner != nil && owner.Kind == model.ActorKindAgent {
-                                return true
-                        }
-                }
-        }
-
-        if t.OwnerDelegatedFrom == nil || t.OwnerDelegatedAt == nil {
-                return false
-        }
-        if *t.OwnerDelegatedFrom != actorID {
-                return false
-        }
-        return time.Now().UTC().Before(t.OwnerDelegatedAt.Add(assignGraceDuration()))
-}
-
-func assignGraceDuration() time.Duration {
-        // Default 1 hour. Override with CLARITY_ASSIGN_GRACE_SECONDS.
-        if s := os.Getenv("CLARITY_ASSIGN_GRACE_SECONDS"); s != "" {
-                if n, err := strconv.Atoi(s); err == nil && n >= 0 {
-                        return time.Duration(n) * time.Second
-                }
-        }
-        return 1 * time.Hour
+        return perm.CanEditItem(db, actorID, t)
 }
 
 func sameParent(a, b *string) bool {

@@ -17,6 +17,7 @@ func newIdentityCmd(app *App) *cobra.Command {
         }
 
         cmd.AddCommand(newIdentityCreateCmd(app))
+        cmd.AddCommand(newIdentityAgentCmd(app))
         cmd.AddCommand(newIdentityUseCmd(app))
         cmd.AddCommand(newIdentityListCmd(app))
         cmd.AddCommand(newIdentityWhoamiCmd(app))
