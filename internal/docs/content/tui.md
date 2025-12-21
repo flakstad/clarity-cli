@@ -54,6 +54,7 @@ Editing:
 - `Shift+D` (`D`): edit description of the selected item (multiline Markdown; `ctrl+s` saves)
 - `e` (on outlines screen): rename selected outline (Enter saves, Esc cancels)
 - `e` (on projects screen): rename selected project (Enter saves, Esc cancels)
+- `m`: move the selected (or open) item to another outline (prompts for a compatible status if needed)
 
 Status:
 - `space`: open status picker for selected item (includes `(no status)`)

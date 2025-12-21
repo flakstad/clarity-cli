@@ -1,6 +1,7 @@
 package tui
 
 import (
+        "regexp"
         "strings"
         "testing"
         "time"
@@ -12,6 +13,12 @@ import (
         tea "github.com/charmbracelet/bubbletea"
         xansi "github.com/charmbracelet/x/ansi"
 )
+
+var sgrRE = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+func stripSGR(s string) string {
+        return sgrRE.ReplaceAllString(s, "")
+}
 
 func TestViewOutline_SplitPreview_RendersDetailPaneAndUsesOneThirdWidth(t *testing.T) {
         db := &store.DB{
@@ -122,6 +129,159 @@ func TestViewOutline_SplitPreview_RendersDetailPaneAndUsesOneThirdWidth(t *testi
                 if w := xansi.StringWidth(lines[i]); w != m.width {
                         t.Fatalf("expected line %d width=%d, got %d (line=%q)", i, m.width, w, lines[i])
                 }
+        }
+}
+
+func TestViewOutline_SinglePane_IsLeftAlignedWithOuterMargin(t *testing.T) {
+        db := &store.DB{
+                CurrentActorID: "act-test",
+                Actors:         []model.Actor{{ID: "act-test", Kind: model.ActorKindHuman, Name: "tester"}},
+                Projects: []model.Project{{
+                        ID:        "proj-a",
+                        Name:      "Project A",
+                        CreatedBy: "act-test",
+                        CreatedAt: time.Now().UTC(),
+                }},
+                Outlines: []model.Outline{{
+                        ID:         "out-a",
+                        ProjectID:  "proj-a",
+                        StatusDefs: store.DefaultOutlineStatusDefs(),
+                        CreatedBy:  "act-test",
+                        CreatedAt:  time.Now().UTC(),
+                }},
+                Items: []model.Item{{
+                        ID:           "item-a",
+                        ProjectID:    "proj-a",
+                        OutlineID:    "out-a",
+                        Rank:         "h",
+                        Title:        "Title",
+                        StatusID:     "todo",
+                        OwnerActorID: "act-test",
+                        CreatedBy:    "act-test",
+                        CreatedAt:    time.Now().UTC(),
+                        UpdatedAt:    time.Now().UTC(),
+                }},
+        }
+
+        m := newAppModel(t.TempDir(), db)
+        m.view = viewOutline
+        m.showPreview = false // force single-pane
+        m.modal = modalNone
+        m.selectedProjectID = "proj-a"
+        m.selectedOutlineID = "out-a"
+        m.width = 120
+        m.height = 30
+
+        m.itemsList.SetItems([]list.Item{
+                outlineRowItem{row: outlineRow{item: db.Items[0]}, outline: db.Outlines[0]},
+        })
+
+        out := m.viewOutline()
+        wantListW := m.width - 2*splitOuterMargin
+        if wantListW < 10 {
+                wantListW = m.width
+        }
+        if got := m.itemsList.Width(); got != wantListW {
+                t.Fatalf("expected outline list width=%d, got %d", wantListW, got)
+        }
+        lines := strings.Split(out, "\n")
+        if len(lines) <= topPadLines {
+                t.Fatalf("expected output to include top padding + content; got %d lines", len(lines))
+        }
+
+        headerLine := stripSGR(lines[topPadLines])
+        idx := strings.Index(headerLine, m.breadcrumbText())
+        if idx < 0 {
+                t.Fatalf("expected breadcrumb row to contain breadcrumb; got: %q", headerLine)
+        }
+        if idx != splitOuterMargin {
+                t.Fatalf("expected breadcrumb to start at column=%d (outer margin), got %d (line=%q)", splitOuterMargin, idx, headerLine)
+        }
+}
+
+func TestViewProjects_IsLeftAlignedWithOuterMarginAndFullWidth(t *testing.T) {
+        db := &store.DB{
+                CurrentActorID: "act-test",
+                Actors:         []model.Actor{{ID: "act-test", Kind: model.ActorKindHuman, Name: "tester"}},
+                Projects: []model.Project{{
+                        ID:        "proj-a",
+                        Name:      "Project A",
+                        CreatedBy: "act-test",
+                        CreatedAt: time.Now().UTC(),
+                }},
+        }
+        m := newAppModel(t.TempDir(), db)
+        m.view = viewProjects
+        m.modal = modalNone
+        m.width = 120
+        m.height = 30
+
+        out := m.viewProjects()
+        wantW := m.width - 2*splitOuterMargin
+        if wantW < 10 {
+                wantW = m.width
+        }
+        if got := m.projectsList.Width(); got != wantW {
+                t.Fatalf("expected projects list width=%d, got %d", wantW, got)
+        }
+        lines := strings.Split(out, "\n")
+        if len(lines) <= topPadLines {
+                t.Fatalf("expected output to include top padding + content; got %d lines", len(lines))
+        }
+        headerLine := stripSGR(lines[topPadLines])
+        idx := strings.Index(headerLine, m.breadcrumbText())
+        if idx < 0 {
+                t.Fatalf("expected breadcrumb row to contain breadcrumb; got: %q", headerLine)
+        }
+        if idx != splitOuterMargin {
+                t.Fatalf("expected breadcrumb to start at column=%d (outer margin), got %d (line=%q)", splitOuterMargin, idx, headerLine)
+        }
+}
+
+func TestViewOutlines_IsLeftAlignedWithOuterMarginAndFullWidth(t *testing.T) {
+        db := &store.DB{
+                CurrentActorID: "act-test",
+                Actors:         []model.Actor{{ID: "act-test", Kind: model.ActorKindHuman, Name: "tester"}},
+                Projects: []model.Project{{
+                        ID:        "proj-a",
+                        Name:      "Project A",
+                        CreatedBy: "act-test",
+                        CreatedAt: time.Now().UTC(),
+                }},
+                Outlines: []model.Outline{{
+                        ID:         "out-a",
+                        ProjectID:  "proj-a",
+                        StatusDefs: store.DefaultOutlineStatusDefs(),
+                        CreatedBy:  "act-test",
+                        CreatedAt:  time.Now().UTC(),
+                }},
+        }
+        m := newAppModel(t.TempDir(), db)
+        m.view = viewOutlines
+        m.modal = modalNone
+        m.selectedProjectID = "proj-a"
+        m.width = 120
+        m.height = 30
+
+        out := m.viewOutlines()
+        wantW := m.width - 2*splitOuterMargin
+        if wantW < 10 {
+                wantW = m.width
+        }
+        if got := m.outlinesList.Width(); got != wantW {
+                t.Fatalf("expected outlines list width=%d, got %d", wantW, got)
+        }
+        lines := strings.Split(out, "\n")
+        if len(lines) <= topPadLines {
+                t.Fatalf("expected output to include top padding + content; got %d lines", len(lines))
+        }
+        headerLine := stripSGR(lines[topPadLines])
+        idx := strings.Index(headerLine, m.breadcrumbText())
+        if idx < 0 {
+                t.Fatalf("expected breadcrumb row to contain breadcrumb; got: %q", headerLine)
+        }
+        if idx != splitOuterMargin {
+                t.Fatalf("expected breadcrumb to start at column=%d (outer margin), got %d (line=%q)", splitOuterMargin, idx, headerLine)
         }
 }
 

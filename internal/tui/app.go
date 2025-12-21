@@ -114,6 +114,7 @@ const (
         modalEditDescription
         modalEditOutlineName
         modalPickStatus
+        modalPickOutline
         modalAddComment
         modalAddWorklog
         modalActionPanel
@@ -179,11 +180,12 @@ type appModel struct {
 
         view view
 
-        projectsList list.Model
-        outlinesList list.Model
-        itemsList    list.Model
-        statusList   list.Model
-        agendaList   list.Model
+        projectsList    list.Model
+        outlinesList    list.Model
+        itemsList       list.Model
+        statusList      list.Model
+        outlinePickList list.Model
+        agendaList      list.Model
 
         selectedProjectID string
         selectedOutlineID string
@@ -208,6 +210,10 @@ type appModel struct {
         input      textinput.Model
         textarea   textarea.Model
         textFocus  textModalFocus
+
+        // pendingMoveOutlineTo is set when a move-outline flow needs the user to pick a status
+        // compatible with the target outline. While set, the status picker "enter" applies the move.
+        pendingMoveOutlineTo string
 
         actionPanelStack []actionPanelKind
 
@@ -517,6 +523,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                 case viewItem:
                         actions["y"] = actionPanelAction{label: "Copy item ID", kind: actionPanelActionExec}
                         actions["Y"] = actionPanelAction{label: "Copy CLI show command", kind: actionPanelActionExec}
+                        actions["m"] = actionPanelAction{label: "Move to outline…", kind: actionPanelActionExec}
                         actions["r"] = actionPanelAction{label: "Archive item", kind: actionPanelActionExec}
                         actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
                 case viewOutline:
@@ -543,6 +550,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                                 actions[" "] = actionPanelAction{label: "Change status", kind: actionPanelActionExec}
                                 actions["shift+left"] = actionPanelAction{label: "Cycle status (prev)", kind: actionPanelActionExec}
                                 actions["shift+right"] = actionPanelAction{label: "Cycle status (next)", kind: actionPanelActionExec}
+                                actions["m"] = actionPanelAction{label: "Move to outline…", kind: actionPanelActionExec}
                         }
                 }
         }
@@ -606,6 +614,13 @@ func newAppModel(dir string, db *store.DB) appModel {
         m.statusList.SetShowHelp(false)
         m.statusList.SetShowStatusBar(false)
         m.statusList.SetShowPagination(false)
+
+        m.outlinePickList = newList("Outlines", "Select an outline", []list.Item{})
+        m.outlinePickList.SetDelegate(newCompactItemDelegate())
+        // Keep list chrome minimal inside the modal.
+        m.outlinePickList.SetShowHelp(false)
+        m.outlinePickList.SetShowStatusBar(false)
+        m.outlinePickList.SetShowPagination(false)
 
         m.input = textinput.New()
         m.input.Placeholder = "Title"
@@ -1300,6 +1315,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         return m, nil
                                 }
                         }
+                case "m":
+                        // Move open item to another outline (item view).
+                        if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
+                                m.openMoveOutlinePicker(strings.TrimSpace(m.openItemID))
+                                return m, nil
+                        }
                 case "r":
                         // Archive selected item/project/outline (with confirm; depends on screen).
                         //
@@ -1598,15 +1619,15 @@ func (m *appModel) viewProjects() string {
                 w = 10
         }
 
-        contentW := w
-        if contentW > maxContentW {
-                contentW = maxContentW
+        contentW := w - 2*splitOuterMargin
+        if contentW < 10 {
+                contentW = w
         }
         m.projectsList.SetSize(contentW, bodyHeight)
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
         main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.projectsList.View()
-        main = lipgloss.PlaceHorizontal(w, lipgloss.Center, main)
+        main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
         if m.modal == modalNone {
                 return main
         }
@@ -1630,15 +1651,15 @@ func (m *appModel) viewOutlines() string {
                 w = 10
         }
 
-        contentW := w
-        if contentW > maxContentW {
-                contentW = maxContentW
+        contentW := w - 2*splitOuterMargin
+        if contentW < 10 {
+                contentW = w
         }
         m.outlinesList.SetSize(contentW, bodyHeight)
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
         main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.outlinesList.View()
-        main = lipgloss.PlaceHorizontal(w, lipgloss.Center, main)
+        main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
         if m.modal == modalNone {
                 return main
         }
@@ -1704,6 +1725,9 @@ func (m appModel) footerText() string {
                 }
                 if m.modal == modalPickStatus {
                         return "status: enter: set  esc: cancel"
+                }
+                if m.modal == modalPickOutline {
+                        return "move outline: enter: move  esc: cancel"
                 }
                 if m.modal == modalEditTitle {
                         return "edit title: type, enter: save, esc: cancel"
@@ -1962,13 +1986,14 @@ func (m *appModel) outlineLayout() (frameH, bodyH, contentW int) {
         if w < 10 {
                 w = 10
         }
-        contentW = w
-        // In split/column view we use full width (with outer margins) instead of centering to maxContentW.
-        if m.curOutlineViewMode() == outlineViewModeColumns || m.splitPreviewVisible() {
-                contentW = w - 2*splitOuterMargin
-        } else if contentW > maxContentW {
-                contentW = maxContentW
+        // The outline view uses an outer margin (like split view) and should be left-aligned.
+        // Compute the usable inner width and clamp it for stable rendering.
+        innerW := w - 2*splitOuterMargin
+        if innerW < 10 {
+                innerW = w
         }
+        // Use the full available inner width (no maxContentW cap). This keeps outline rows truly full-width.
+        contentW = innerW
         if contentW < 10 {
                 contentW = 10
         }
@@ -2329,13 +2354,8 @@ func (m *appModel) viewOutline() string {
                 body = lipgloss.NewStyle().Width(contentW).Height(contentH).Render(body)
                 main = strings.Repeat("\n", topPadLines) + body
         }
-        if !m.splitPreviewVisible() {
-                // Single-pane view stays centered at maxContentW.
-                main = lipgloss.PlaceHorizontal(w, lipgloss.Center, main)
-        } else {
-                // Split view uses full terminal width with a small outer margin.
-                main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
-        }
+        // Outline content should be left-aligned with a small outer margin (same feel as split view).
+        main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
 
         if m.modal == modalNone {
                 if m.debugEnabled && m.debugOverlay {
@@ -2366,9 +2386,9 @@ func (m *appModel) viewItem() string {
                 w = 10
         }
 
-        contentW := w
-        if contentW > maxContentW {
-                contentW = maxContentW
+        contentW := w - 2*splitOuterMargin
+        if contentW < 10 {
+                contentW = w
         }
 
         itemID := strings.TrimSpace(m.openItemID)
@@ -2376,7 +2396,7 @@ func (m *appModel) viewItem() string {
                 crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
                 msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("No item selected.")
                 block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
-                return lipgloss.PlaceHorizontal(w, lipgloss.Center, block)
+                return lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(block)
         }
 
         outline, ok := m.db.FindOutline(m.selectedOutlineID)
@@ -2384,7 +2404,7 @@ func (m *appModel) viewItem() string {
                 crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
                 msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("Outline not found.")
                 block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
-                return lipgloss.PlaceHorizontal(w, lipgloss.Center, block)
+                return lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(block)
         }
 
         it, ok := m.db.FindItem(itemID)
@@ -2392,13 +2412,13 @@ func (m *appModel) viewItem() string {
                 crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
                 msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("Item not found.")
                 block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
-                return lipgloss.PlaceHorizontal(w, lipgloss.Center, block)
+                return lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(block)
         }
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
         card := renderItemDetail(m.db, *outline, *it, contentW, bodyHeight, true, m.eventsTail)
         block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + card
-        return lipgloss.PlaceHorizontal(w, lipgloss.Center, block)
+        return lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(block)
 }
 
 func (m *appModel) renderModal() string {
@@ -2425,6 +2445,8 @@ func (m *appModel) renderModal() string {
                 return renderModalBox(m.width, "Rename outline", m.input.View()+"\n\nenter: save   esc: cancel")
         case modalPickStatus:
                 return renderModalBox(m.width, "Set status", m.statusList.View()+"\n\nenter: set   esc: cancel")
+        case modalPickOutline:
+                return renderModalBox(m.width, "Move to outline", m.outlinePickList.View()+"\n\nenter: move   esc: cancel")
         case modalAddComment:
                 return m.renderTextAreaModal("Add comment")
         case modalAddWorklog:
@@ -2850,6 +2872,68 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, nil
                 }
 
+                if m.modal == modalPickOutline {
+                        switch km := msg.(type) {
+                        case tea.KeyMsg:
+                                switch km.String() {
+                                case "esc":
+                                        m.pendingMoveOutlineTo = ""
+                                        m.modal = modalNone
+                                        m.modalForID = ""
+                                        return m, nil
+                                case "enter":
+                                        itemID := strings.TrimSpace(m.modalForID)
+                                        to := ""
+                                        if it, ok := m.outlinePickList.SelectedItem().(outlineItem); ok {
+                                                to = strings.TrimSpace(it.outline.ID)
+                                        }
+
+                                        // Close the outline picker; we may reopen a status picker.
+                                        m.modal = modalNone
+                                        m.modalForID = ""
+
+                                        if itemID == "" || to == "" || m.db == nil {
+                                                return m, nil
+                                        }
+                                        curItem, ok := m.db.FindItem(itemID)
+                                        if !ok {
+                                                return m, nil
+                                        }
+                                        if strings.TrimSpace(curItem.OutlineID) == strings.TrimSpace(to) {
+                                                m.showMinibuffer("Already in that outline")
+                                                return m, nil
+                                        }
+                                        o, ok := m.db.FindOutline(to)
+                                        if !ok {
+                                                m.showMinibuffer("Error: outline not found")
+                                                return m, nil
+                                        }
+                                        if strings.TrimSpace(o.ProjectID) != strings.TrimSpace(curItem.ProjectID) {
+                                                m.showMinibuffer("Error: target outline must be in the same project")
+                                                return m, nil
+                                        }
+
+                                        // If any status in the subtree isn't valid in the target outline, prompt for one.
+                                        if subtreeHasInvalidStatusInOutline(m.db, curItem.ID, o.ID) {
+                                                m.pendingMoveOutlineTo = o.ID
+                                                // No "(no status)" option: moved items must have a valid status in the target outline.
+                                                m.openStatusPickerForOutline(*o, curItem.StatusID, false)
+                                                m.modal = modalPickStatus
+                                                m.modalForID = itemID
+                                                return m, nil
+                                        }
+
+                                        if err := m.moveItemToOutline(itemID, o.ID, "", false); err != nil {
+                                                return m, m.reportError(itemID, err)
+                                        }
+                                        return m, nil
+                                }
+                        }
+                        var cmd tea.Cmd
+                        m.outlinePickList, cmd = m.outlinePickList.Update(msg)
+                        return m, cmd
+                }
+
                 if m.modal == modalPickStatus {
                         switch km := msg.(type) {
                         case tea.KeyMsg:
@@ -2861,8 +2945,16 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 case "enter":
                                         if it, ok := m.statusList.SelectedItem().(statusOptionItem); ok {
                                                 itemID := strings.TrimSpace(m.modalForID)
-                                                if err := m.setStatusForItem(itemID, it.id); err != nil {
-                                                        return m, m.reportError(itemID, err)
+                                                if strings.TrimSpace(m.pendingMoveOutlineTo) != "" {
+                                                        to := strings.TrimSpace(m.pendingMoveOutlineTo)
+                                                        m.pendingMoveOutlineTo = ""
+                                                        if err := m.moveItemToOutline(itemID, to, it.id, true); err != nil {
+                                                                return m, m.reportError(itemID, err)
+                                                        }
+                                                } else {
+                                                        if err := m.setStatusForItem(itemID, it.id); err != nil {
+                                                                return m, m.reportError(itemID, err)
+                                                        }
                                                 }
                                                 lbl := strings.TrimSpace(it.label)
                                                 if lbl == "" {
@@ -3079,6 +3171,14 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.openStatusPicker(it.outline, it.row.item.ID, it.row.item.StatusID)
                                         m.modal = modalPickStatus
                                         m.modalForID = it.row.item.ID
+                                        return m, nil
+                                }
+                        }
+                case "m":
+                        // Move selected item to another outline (outline pane only).
+                        if m.pane == paneOutline {
+                                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                        m.openMoveOutlinePicker(it.row.item.ID)
                                         return m, nil
                                 }
                         }
@@ -4695,7 +4795,15 @@ func defaultAssignedActorID(db *store.DB, actorID string) *string {
 }
 
 func (m *appModel) openStatusPicker(outline model.Outline, itemID, currentStatusID string) {
-        opts := []list.Item{statusOptionItem{id: "", label: "(no status)"}}
+        _ = itemID // reserved for future (e.g. contextual hints)
+        m.openStatusPickerForOutline(outline, currentStatusID, true)
+}
+
+func (m *appModel) openStatusPickerForOutline(outline model.Outline, currentStatusID string, includeEmpty bool) {
+        opts := []list.Item{}
+        if includeEmpty {
+                opts = append(opts, statusOptionItem{id: "", label: "(no status)"})
+        }
         for _, def := range outline.StatusDefs {
                 opts = append(opts, statusOptionItem{id: def.ID, label: def.Label})
         }
@@ -4732,6 +4840,246 @@ func (m *appModel) openStatusPicker(outline model.Outline, itemID, currentStatus
                 }
         }
         m.statusList.Select(selected)
+}
+
+func (m *appModel) openMoveOutlinePicker(itemID string) {
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" || m == nil || m.db == nil {
+                return
+        }
+        it, ok := m.db.FindItem(itemID)
+        if !ok {
+                return
+        }
+        projectID := strings.TrimSpace(it.ProjectID)
+        if projectID == "" {
+                return
+        }
+
+        opts := []list.Item{}
+        for _, o := range m.db.Outlines {
+                if strings.TrimSpace(o.ProjectID) != projectID {
+                        continue
+                }
+                if o.Archived {
+                        continue
+                }
+                opts = append(opts, outlineItem{outline: o})
+        }
+        if len(opts) <= 1 {
+                m.showMinibuffer("No other outlines in this project")
+                return
+        }
+
+        m.outlinePickList.Title = ""
+        m.outlinePickList.SetItems(opts)
+
+        // Size the picker similarly to the status picker, but allow a bit more height.
+        modalW := m.width - 12
+        if modalW > m.width-4 {
+                modalW = m.width - 4
+        }
+        if modalW < 20 {
+                modalW = 20
+        }
+        if modalW > 96 {
+                modalW = 96
+        }
+        h := len(opts) + 2
+        if h > 18 {
+                h = 18
+        }
+        if h < 6 {
+                h = 6
+        }
+        m.outlinePickList.SetSize(modalW-6, h)
+
+        // Preselect current outline.
+        selected := 0
+        for i := 0; i < len(opts); i++ {
+                if oi, ok := opts[i].(outlineItem); ok && strings.TrimSpace(oi.outline.ID) == strings.TrimSpace(it.OutlineID) {
+                        selected = i
+                        break
+                }
+        }
+        m.outlinePickList.Select(selected)
+
+        m.pendingMoveOutlineTo = ""
+        m.modal = modalPickOutline
+        m.modalForID = itemID
+}
+
+func (m *appModel) moveItemToOutline(itemID, toOutlineID, statusOverride string, applyStatusToInvalidSubtree bool) error {
+        itemID = strings.TrimSpace(itemID)
+        toOutlineID = strings.TrimSpace(toOutlineID)
+        statusOverride = strings.TrimSpace(statusOverride)
+        if itemID == "" || toOutlineID == "" {
+                return nil
+        }
+
+        err := m.mutateItem(itemID, func(db *store.DB, it *model.Item) (bool, itemMutationResult, error) {
+                o, ok := db.FindOutline(toOutlineID)
+                if !ok {
+                        return false, itemMutationResult{}, errors.New("outline not found")
+                }
+                if strings.TrimSpace(o.ProjectID) != strings.TrimSpace(it.ProjectID) {
+                        return false, itemMutationResult{}, errors.New("target outline must belong to the same project")
+                }
+
+                actorID := m.editActorID()
+                if actorID == "" {
+                        return false, itemMutationResult{}, errors.New("no current actor")
+                }
+
+                // If the caller wants to apply a chosen status to invalid subtree items, validate it first.
+                if applyStatusToInvalidSubtree {
+                        if statusOverride == "" {
+                                return false, itemMutationResult{}, errors.New("missing status")
+                        }
+                        if _, ok := db.StatusDef(o.ID, statusOverride); !ok {
+                                return false, itemMutationResult{}, errors.New("invalid status id for target outline")
+                        }
+                }
+
+                // Collect the subtree (root + descendants). We must move children too to avoid cross-outline parent links.
+                ids := collectSubtreeItemIDs(db, it.ID)
+                if len(ids) == 0 {
+                        return false, itemMutationResult{}, nil
+                }
+
+                // Permission check: all items in the subtree must be editable by the current actor.
+                for _, id := range ids {
+                        x, ok := db.FindItem(id)
+                        if !ok {
+                                continue
+                        }
+                        if !canEditItem(db, actorID, x) {
+                                return false, itemMutationResult{}, errors.New("permission denied")
+                        }
+                }
+
+                changed := false
+                now := time.Now().UTC()
+
+                // Move every item in the subtree.
+                for _, id := range ids {
+                        x, ok := db.FindItem(id)
+                        if !ok {
+                                continue
+                        }
+
+                        // Determine status to use:
+                        // - root item: use override if provided, else keep.
+                        // - descendants: keep current unless invalid; if invalid and applyStatusToInvalidSubtree=true, apply override.
+                        nextStatus := strings.TrimSpace(x.StatusID)
+                        if id == it.ID && statusOverride != "" {
+                                nextStatus = statusOverride
+                        }
+                        if _, ok := db.StatusDef(o.ID, nextStatus); !ok {
+                                if applyStatusToInvalidSubtree {
+                                        nextStatus = statusOverride
+                                } else {
+                                        return false, itemMutationResult{}, errors.New("invalid status id for target outline; pick a compatible status")
+                                }
+                        }
+
+                        if strings.TrimSpace(x.OutlineID) != strings.TrimSpace(o.ID) {
+                                x.OutlineID = o.ID
+                                changed = true
+                        }
+                        if strings.TrimSpace(x.StatusID) != strings.TrimSpace(nextStatus) {
+                                x.StatusID = nextStatus
+                                changed = true
+                        }
+                        if !x.UpdatedAt.Equal(now) {
+                                x.UpdatedAt = now
+                                changed = true
+                        }
+                }
+
+                // Root-specific adjustments: detach and re-rank under destination root.
+                if it.ParentID != nil {
+                        it.ParentID = nil
+                        changed = true
+                }
+                nextRank := nextSiblingRank(db, o.ID, nil)
+                if strings.TrimSpace(it.Rank) != strings.TrimSpace(nextRank) {
+                        it.Rank = nextRank
+                        changed = true
+                }
+
+                if !changed {
+                        return false, itemMutationResult{}, nil
+                }
+
+                name := "(unnamed outline)"
+                if o.Name != nil && strings.TrimSpace(*o.Name) != "" {
+                        name = strings.TrimSpace(*o.Name)
+                }
+
+                return true, itemMutationResult{
+                        eventType:    "item.move_outline",
+                        eventPayload: map[string]any{"to": o.ID, "status": it.StatusID},
+                        minibuffer:   fmt.Sprintf("Moved %d item(s) to outline: %s", len(ids), name),
+                }, nil
+        })
+        if err != nil {
+                return err
+        }
+
+        // If the moved item is currently open, keep the item-view context consistent.
+        if m.view == viewItem && strings.TrimSpace(m.openItemID) == itemID {
+                m.selectedOutlineID = toOutlineID
+                if m.db != nil {
+                        if o, ok := m.db.FindOutline(toOutlineID); ok {
+                                m.selectedOutline = o
+                        }
+                }
+        }
+
+        return nil
+}
+
+func collectSubtreeItemIDs(db *store.DB, rootID string) []string {
+        rootID = strings.TrimSpace(rootID)
+        if db == nil || rootID == "" {
+                return nil
+        }
+        out := []string{}
+        seen := map[string]bool{}
+        var walk func(id string)
+        walk = func(id string) {
+                id = strings.TrimSpace(id)
+                if id == "" || seen[id] {
+                        return
+                }
+                seen[id] = true
+                out = append(out, id)
+                for _, ch := range db.ChildrenOf(id) {
+                        walk(ch.ID)
+                }
+        }
+        walk(rootID)
+        return out
+}
+
+func subtreeHasInvalidStatusInOutline(db *store.DB, rootID, outlineID string) bool {
+        rootID = strings.TrimSpace(rootID)
+        outlineID = strings.TrimSpace(outlineID)
+        if db == nil || rootID == "" || outlineID == "" {
+                return false
+        }
+        ids := collectSubtreeItemIDs(db, rootID)
+        for _, id := range ids {
+                it, ok := db.FindItem(id)
+                if !ok {
+                        continue
+                }
+                if _, ok := db.StatusDef(outlineID, strings.TrimSpace(it.StatusID)); !ok {
+                        return true
+                }
+        }
+        return false
 }
 
 func (m *appModel) cycleItemStatus(outline model.Outline, itemID string, delta int) error {

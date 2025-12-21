@@ -84,41 +84,25 @@ func computeChildProgress(outline model.Outline, children map[string][]model.Ite
                 return strings.ToLower(strings.TrimSpace(statusID)) == "done"
         }
 
-        memo := map[string][2]int{}
-        visiting := map[string]bool{}
-
-        var rec func(id string) (int, int)
-        rec = func(id string) (int, int) {
-                if v, ok := memo[id]; ok {
-                        return v[0], v[1]
-                }
-                if visiting[id] {
-                        return 0, 0
-                }
-                visiting[id] = true
-
+        // Progress cookies are based on *direct children* only.
+        //
+        // This keeps parent nodes stable and predictable:
+        // - If item A has a single child B, A's cookie is 0/1 until B itself is DONE,
+        //   regardless of B's internal subtree.
+        // - Deep hierarchies don't inflate denominators for ancestors.
+        out := map[string][2]int{}
+        for pid, ch := range children {
                 done := 0
                 total := 0
-                for _, ch := range children[id] {
+                for _, c := range ch {
                         total++
-                        if isDone(ch.StatusID) {
+                        if isDone(c.StatusID) {
                                 done++
                         }
-                        d2, t2 := rec(ch.ID)
-                        done += d2
-                        total += t2
                 }
-
-                visiting[id] = false
-                memo[id] = [2]int{done, total}
-                return done, total
+                out[pid] = [2]int{done, total}
         }
-
-        // Ensure every node in the adjacency list has an entry.
-        for pid := range children {
-                _, _ = rec(pid)
-        }
-        return memo
+        return out
 }
 
 func compareOutlineItems(a, b model.Item) int {

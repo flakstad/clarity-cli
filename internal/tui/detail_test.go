@@ -13,6 +13,63 @@ import (
         "github.com/muesli/termenv"
 )
 
+func TestViewItem_IsLeftAlignedWithOuterMargin(t *testing.T) {
+        db := &store.DB{
+                CurrentActorID: "act-test",
+                Actors:         []model.Actor{{ID: "act-test", Kind: model.ActorKindHuman, Name: "tester"}},
+                Projects: []model.Project{{
+                        ID:        "proj-a",
+                        Name:      "Project A",
+                        CreatedBy: "act-test",
+                        CreatedAt: time.Now().UTC(),
+                }},
+                Outlines: []model.Outline{{
+                        ID:         "out-a",
+                        ProjectID:  "proj-a",
+                        StatusDefs: store.DefaultOutlineStatusDefs(),
+                        CreatedBy:  "act-test",
+                        CreatedAt:  time.Now().UTC(),
+                }},
+                Items: []model.Item{{
+                        ID:           "item-a",
+                        ProjectID:    "proj-a",
+                        OutlineID:    "out-a",
+                        Rank:         "h",
+                        Title:        "Title",
+                        Description:  "desc",
+                        StatusID:     "todo",
+                        OwnerActorID: "act-test",
+                        CreatedBy:    "act-test",
+                        CreatedAt:    time.Now().UTC(),
+                        UpdatedAt:    time.Now().UTC(),
+                }},
+        }
+
+        m := newAppModel(t.TempDir(), db)
+        m.view = viewItem
+        m.modal = modalNone
+        m.selectedProjectID = "proj-a"
+        m.selectedOutlineID = "out-a"
+        m.openItemID = "item-a"
+        m.width = 120
+        m.height = 30
+
+        out := m.viewItem()
+        lines := strings.Split(out, "\n")
+        if len(lines) <= topPadLines {
+                t.Fatalf("expected output to include top padding + content; got %d lines", len(lines))
+        }
+
+        headerLine := stripSGR(lines[topPadLines])
+        idx := strings.Index(headerLine, m.breadcrumbText())
+        if idx < 0 {
+                t.Fatalf("expected breadcrumb row to contain breadcrumb; got: %q", headerLine)
+        }
+        if idx != splitOuterMargin {
+                t.Fatalf("expected breadcrumb to start at column=%d (outer margin), got %d (line=%q)", splitOuterMargin, idx, headerLine)
+        }
+}
+
 func TestRenderItemDetail_RespectsWidth(t *testing.T) {
         db := &store.DB{
                 CurrentActorID: "act-test",
