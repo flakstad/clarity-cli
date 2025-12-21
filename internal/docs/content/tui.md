@@ -17,15 +17,16 @@ Key bindings:
 - `x`: open the action panel (shows available commands for the current context)
 - `esc` / `backspace`: go back within the action panel; from the root, closes the panel
 - `ctrl+g`: close the action panel immediately
-- `A`: agenda (coming soon)
-- `C`: capture (coming soon)
+- `g`: open the Navigate menu (action panel)
+- `a`: open the Agenda menu (action panel) (coming soon)
+- `c`: open the Capture menu (action panel) (coming soon)
 - `enter`: open selected item (single-pane item view)
 - `o`: toggle preview pane (split view; auto-collapses on narrow terminals `<80` cols)
 - `backspace` or `esc`: go back (from item view → outline; from outline → previous screen)
 - `r`: archive selected item / outline / project (with confirm; depends on screen)
 - `y`: copy selected item ID to clipboard
 - `Y`: copy `clarity items show <id>` to clipboard
-- `c`: add a comment (selected item)
+- `C`: add a comment (selected item)
 - `w`: add a worklog entry (selected item)
 - `q` or `ctrl+c`: quit
 - `tab`: toggle focus (outline/preview) (only when preview is visible)

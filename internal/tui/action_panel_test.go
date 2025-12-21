@@ -141,3 +141,49 @@ func TestActionPanel_ExecutesActionAndCloses(t *testing.T) {
                 t.Fatalf("expected showPreview=true after executing 'o' from action panel")
         }
 }
+
+func TestActionPanel_GlobalKeys_OpenPanels(t *testing.T) {
+        dir := t.TempDir()
+        s := store.Store{Dir: dir}
+
+        actorID := "act-human"
+        db := &store.DB{
+                CurrentActorID: actorID,
+                Actors:         []model.Actor{{ID: actorID, Kind: model.ActorKindHuman, Name: "human"}},
+        }
+        if err := s.Save(db); err != nil {
+                t.Fatalf("save db: %v", err)
+        }
+
+        m := newAppModel(dir, db)
+
+        // Global g opens Navigate.
+        mAny, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+        m2 := mAny.(appModel)
+        if m2.modal != modalActionPanel {
+                t.Fatalf("expected modalActionPanel, got %v", m2.modal)
+        }
+        if got := m2.curActionPanelKind(); got != actionPanelNav {
+                t.Fatalf("expected nav panel, got %v", got)
+        }
+
+        // Global a opens Agenda.
+        mAny, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+        m3 := mAny.(appModel)
+        if m3.modal != modalActionPanel {
+                t.Fatalf("expected modalActionPanel, got %v", m3.modal)
+        }
+        if got := m3.curActionPanelKind(); got != actionPanelAgenda {
+                t.Fatalf("expected agenda panel, got %v", got)
+        }
+
+        // Global c opens Capture.
+        mAny, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+        m4 := mAny.(appModel)
+        if m4.modal != modalActionPanel {
+                t.Fatalf("expected modalActionPanel, got %v", m4.modal)
+        }
+        if got := m4.curActionPanelKind(); got != actionPanelCapture {
+                t.Fatalf("expected capture panel, got %v", got)
+        }
+}

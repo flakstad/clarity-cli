@@ -92,6 +92,8 @@ type actionPanelKind int
 const (
         actionPanelContext actionPanelKind = iota
         actionPanelNav
+        actionPanelAgenda
+        actionPanelCapture
 )
 
 type actionPanelAction struct {
@@ -262,6 +264,10 @@ func (m appModel) actionPanelTitle() string {
         switch m.curActionPanelKind() {
         case actionPanelNav:
                 return "Navigate"
+        case actionPanelAgenda:
+                return "Agenda"
+        case actionPanelCapture:
+                return "Capture"
         default:
                 return "Actions"
         }
@@ -272,8 +278,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
         actions := map[string]actionPanelAction{}
 
         // Always-available global actions.
-        actions["A"] = actionPanelAction{label: "Agenda (coming soon)", kind: actionPanelActionExec}
-        actions["C"] = actionPanelAction{label: "Capture (coming soon)", kind: actionPanelActionExec}
+        actions["a"] = actionPanelAction{label: "Agenda…", kind: actionPanelActionNav, next: actionPanelAgenda}
+        actions["c"] = actionPanelAction{label: "Capture…", kind: actionPanelActionNav, next: actionPanelCapture}
 
         switch cur {
         case actionPanelNav:
@@ -366,6 +372,52 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         }
                 }
 
+        case actionPanelAgenda:
+                actions["g"] = actionPanelAction{label: "Navigate…", kind: actionPanelActionNav, next: actionPanelNav}
+                actions["t"] = actionPanelAction{
+                        label: "Today's agenda (coming soon)",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                mm.showMinibuffer("Agenda: coming soon")
+                                return mm, nil
+                        },
+                }
+                actions["w"] = actionPanelAction{
+                        label: "This week (coming soon)",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                mm.showMinibuffer("Agenda: coming soon")
+                                return mm, nil
+                        },
+                }
+                actions["s"] = actionPanelAction{
+                        label: "Search (coming soon)",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                mm.showMinibuffer("Agenda: coming soon")
+                                return mm, nil
+                        },
+                }
+
+        case actionPanelCapture:
+                actions["g"] = actionPanelAction{label: "Navigate…", kind: actionPanelActionNav, next: actionPanelNav}
+                actions["q"] = actionPanelAction{
+                        label: "Quick capture (coming soon)",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                mm.showMinibuffer("Capture: coming soon")
+                                return mm, nil
+                        },
+                }
+                actions["t"] = actionPanelAction{
+                        label: "Templates… (coming soon)",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                mm.showMinibuffer("Capture templates: coming soon")
+                                return mm, nil
+                        },
+                }
+
         default:
                 // Contextual (depends on current view/pane).
                 actions["g"] = actionPanelAction{label: "Navigate…", kind: actionPanelActionNav, next: actionPanelNav}
@@ -398,7 +450,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         actions["Z"] = actionPanelAction{label: "Collapse/expand all", kind: actionPanelActionExec}
                         actions["y"] = actionPanelAction{label: "Copy item ID", kind: actionPanelActionExec}
                         actions["Y"] = actionPanelAction{label: "Copy CLI show command", kind: actionPanelActionExec}
-                        actions["c"] = actionPanelAction{label: "Add comment", kind: actionPanelActionExec}
+                        actions["C"] = actionPanelAction{label: "Add comment", kind: actionPanelActionExec}
                         actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
                         actions["r"] = actionPanelAction{label: "Archive item", kind: actionPanelActionExec}
                         actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
@@ -659,11 +711,14 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "x":
                         m.openActionPanel(actionPanelContext)
                         return m, nil
-                case "A":
-                        m.showMinibuffer("Agenda (coming soon)")
+                case "g":
+                        m.openActionPanel(actionPanelNav)
                         return m, nil
-                case "C":
-                        m.showMinibuffer("Capture (coming soon)")
+                case "a":
+                        m.openActionPanel(actionPanelAgenda)
+                        return m, nil
+                case "c":
+                        m.openActionPanel(actionPanelCapture)
                         return m, nil
                 case "y":
                         if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
@@ -1069,9 +1124,9 @@ func (m appModel) footerText() string {
                 return "new item: type title, enter: save, esc: cancel"
         }
         if m.splitPreviewVisible() {
-                return "enter: open  o: preview  tab: toggle focus  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  space: status  Shift+←/→: cycle status  c: comment  w: worklog  r: archive  y/Y: copy"
+                return "enter: open  o: preview  tab: toggle focus  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  space: status  Shift+←/→: cycle status  C: comment  w: worklog  r: archive  y/Y: copy"
         }
-        return "enter: open  o: preview  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  space: status  Shift+←/→: cycle status  c: comment  w: worklog  r: archive  y/Y: copy"
+        return "enter: open  o: preview  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  space: status  Shift+←/→: cycle status  C: comment  w: worklog  r: archive  y/Y: copy"
 }
 
 func (m appModel) footerBlock() string {
@@ -1116,7 +1171,7 @@ func (m appModel) renderActionPanel() string {
         }
 
         // Group global actions first, then nav, then everything else.
-        globalOrder := []string{"A", "C"}
+        globalOrder := []string{"a", "c"}
         navOrder := []string{"g", "p", "o", "l", "i"}
         seen := map[string]bool{}
         lines := []string{}
@@ -1769,7 +1824,13 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 if a, ok := actions[km.String()]; ok {
                                         switch a.kind {
                                         case actionPanelActionNav:
-                                                (&m).pushActionPanel(a.next)
+                                                // Root -> subpanel: push (so esc/backspace returns to root).
+                                                // Subpanel -> subpanel: switch (avoid infinite nesting).
+                                                if len(m.actionPanelStack) <= 1 {
+                                                        (&m).pushActionPanel(a.next)
+                                                } else {
+                                                        m.actionPanelStack[len(m.actionPanelStack)-1] = a.next
+                                                }
                                                 return m, nil
                                         default:
                                                 // Execute and close (panel takes over keys; only listed keys run).
@@ -2142,7 +2203,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 }
                                 return m, nil
                         }
-                case "c":
+                case "C":
                         // Add comment to selected item.
                         if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
                                 m.openTextModal(modalAddComment, it.row.item.ID, "Write a comment…")
