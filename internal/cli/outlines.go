@@ -19,6 +19,7 @@ func newOutlinesCmd(app *App) *cobra.Command {
         cmd.AddCommand(newOutlinesCreateCmd(app))
         cmd.AddCommand(newOutlinesListCmd(app))
         cmd.AddCommand(newOutlinesShowCmd(app))
+        cmd.AddCommand(newOutlinesArchiveCmd(app))
         cmd.AddCommand(newOutlinesStatusCmd(app))
         return cmd
 }
@@ -124,5 +125,41 @@ func newOutlinesShowCmd(app *App) *cobra.Command {
                         return writeOut(cmd, app, map[string]any{"data": o})
                 },
         }
+        return cmd
+}
+
+func newOutlinesArchiveCmd(app *App) *cobra.Command {
+        var unarchive bool
+        cmd := &cobra.Command{
+                Use:   "archive <outline-id>",
+                Short: "Archive (or unarchive) an outline",
+                Args:  cobra.ExactArgs(1),
+                RunE: func(cmd *cobra.Command, args []string) error {
+                        db, s, err := loadDB(app)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        actorID, err := currentActorID(app, db)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if _, ok := db.FindActor(actorID); !ok {
+                                return writeErr(cmd, errNotFound("actor", actorID))
+                        }
+
+                        oid := strings.TrimSpace(args[0])
+                        o, ok := db.FindOutline(oid)
+                        if !ok {
+                                return writeErr(cmd, errNotFound("outline", oid))
+                        }
+                        o.Archived = !unarchive
+                        if err := s.Save(db); err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        _ = s.AppendEvent(actorID, "outline.archive", o.ID, map[string]any{"archived": o.Archived})
+                        return writeOut(cmd, app, map[string]any{"data": o})
+                },
+        }
+        cmd.Flags().BoolVar(&unarchive, "unarchive", false, "Unarchive instead of archive")
         return cmd
 }

@@ -1,79 +1,82 @@
 package tui
 
 import (
-	"fmt"
-	"math"
-	"strings"
+        "fmt"
+        "math"
+        "strings"
 
-	"clarity-cli/internal/model"
+        "clarity-cli/internal/model"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/lipgloss"
+        "github.com/charmbracelet/bubbles/list"
+        "github.com/charmbracelet/lipgloss"
 )
 
 type projectItem struct {
-	project model.Project
-	current bool
+        project model.Project
+        current bool
 }
 
 func (i projectItem) FilterValue() string { return i.project.Name }
 func (i projectItem) Title() string {
-	if i.current {
-		return "• " + i.project.Name
-	}
-	return i.project.Name
+        if i.current {
+                return "• " + i.project.Name
+        }
+        return i.project.Name
 }
 func (i projectItem) Description() string { return i.project.ID }
 
 type outlineItem struct {
-	outline model.Outline
+        outline model.Outline
 }
 
 func (i outlineItem) FilterValue() string {
-	if i.outline.Name != nil {
-		return *i.outline.Name
-	}
-	return ""
+        if i.outline.Name != nil {
+                return *i.outline.Name
+        }
+        return ""
 }
 func (i outlineItem) Title() string {
-	if i.outline.Name != nil && strings.TrimSpace(*i.outline.Name) != "" {
-		return *i.outline.Name
-	}
-	return "(unnamed outline)"
+        if i.outline.Name != nil && strings.TrimSpace(*i.outline.Name) != "" {
+                return *i.outline.Name
+        }
+        return "(unnamed outline)"
 }
 func (i outlineItem) Description() string { return i.outline.ID }
 
 type outlineRow struct {
-	item          model.Item
-	depth         int
-	hasChildren   bool
-	collapsed     bool
-	doneChildren  int
-	totalChildren int
+        item          model.Item
+        depth         int
+        hasChildren   bool
+        collapsed     bool
+        doneChildren  int
+        totalChildren int
 }
 
 type outlineRowItem struct {
-	row     outlineRow
-	outline model.Outline
+        row     outlineRow
+        outline model.Outline
+        // flashKind is used for short-lived visual feedback (e.g. permission denied).
+        // Known values: "", "error".
+        flashKind string
 }
 
 func (i outlineRowItem) FilterValue() string { return i.row.item.Title }
 func (i outlineRowItem) Title() string {
-	prefix := strings.Repeat("  ", i.row.depth)
-	status := renderStatus(i.outline, i.row.item.StatusID)
-	twisty := " "
-	if i.row.hasChildren {
-		if i.row.collapsed {
-			twisty = "▸"
-		} else {
-			twisty = "▾"
-		}
-	}
-	progress := renderProgressCookie(i.row.doneChildren, i.row.totalChildren)
-	if strings.TrimSpace(status) == "" {
-		return fmt.Sprintf("%s%s %s%s", prefix, twisty, i.row.item.Title, progress)
-	}
-	return fmt.Sprintf("%s%s %s %s%s", prefix, twisty, status, i.row.item.Title, progress)
+        prefix := strings.Repeat("  ", i.row.depth)
+        status := renderStatus(i.outline, i.row.item.StatusID)
+        twisty := " "
+        if i.row.hasChildren {
+                if i.row.collapsed {
+                        twisty = "▸"
+                } else {
+                        twisty = "▾"
+                }
+        }
+        progress := renderProgressCookie(i.row.doneChildren, i.row.totalChildren)
+        if strings.TrimSpace(status) == "" {
+                return fmt.Sprintf("%s%s %s%s", prefix, twisty, i.row.item.Title, progress)
+        }
+        return fmt.Sprintf("%s%s %s %s%s", prefix, twisty, status, i.row.item.Title, progress)
 }
 func (i outlineRowItem) Description() string { return "" }
 
@@ -84,8 +87,8 @@ func (i addItemRow) Title() string       { return "+ Add item" }
 func (i addItemRow) Description() string { return "" }
 
 type statusOptionItem struct {
-	id    string
-	label string
+        id    string
+        label string
 }
 
 func (i statusOptionItem) FilterValue() string { return "" }
@@ -93,118 +96,118 @@ func (i statusOptionItem) Title() string       { return i.label }
 func (i statusOptionItem) Description() string { return i.id }
 
 func statusLabel(outline model.Outline, statusID string) string {
-	if strings.TrimSpace(statusID) == "" {
-		return ""
-	}
-	for _, def := range outline.StatusDefs {
-		if def.ID == statusID {
-			return def.Label
-		}
-	}
-	// fallback: show raw id
-	return statusID
+        if strings.TrimSpace(statusID) == "" {
+                return ""
+        }
+        for _, def := range outline.StatusDefs {
+                if def.ID == statusID {
+                        return def.Label
+                }
+        }
+        // fallback: show raw id
+        return statusID
 }
 
 var (
-	progressFillBg  = lipgloss.Color("242")
-	progressEmptyBg = lipgloss.Color("237")
-	progressFillFg  = lipgloss.Color("255")
-	progressEmptyFg = lipgloss.Color("252")
+        progressFillBg  = ac("189", "242") // light: very light cyan; dark: gray fill
+        progressEmptyBg = ac("255", "237") // light: white; dark: dark gray empty
+        progressFillFg  = ac("235", "255") // light: dark text; dark: light text
+        progressEmptyFg = ac("240", "252") // light: muted; dark: light-ish
 )
 
 func renderProgressCookie(done, total int) string {
-	if total <= 0 {
-		return ""
-	}
-	if done < 0 {
-		done = 0
-	}
-	if done > total {
-		done = total
-	}
+        if total <= 0 {
+                return ""
+        }
+        if done < 0 {
+                done = 0
+        }
+        if done > total {
+                done = total
+        }
 
-	inner := fmt.Sprintf("%d/%d", done, total)
-	innerRunes := []rune(inner)
-	if len(innerRunes) == 0 {
-		return ""
-	}
+        inner := fmt.Sprintf("%d/%d", done, total)
+        innerRunes := []rune(inner)
+        if len(innerRunes) == 0 {
+                return ""
+        }
 
-	ratio := float64(done) / float64(total)
-	width := 10
-	minW := len(innerRunes) + 2
-	if minW > width {
-		width = minW
-	}
-	filledN := int(math.Round(ratio * float64(width)))
-	if filledN < 0 {
-		filledN = 0
-	}
-	if filledN > width {
-		filledN = width
-	}
-	start := (width - len(innerRunes)) / 2
+        ratio := float64(done) / float64(total)
+        width := 10
+        minW := len(innerRunes) + 2
+        if minW > width {
+                width = minW
+        }
+        filledN := int(math.Round(ratio * float64(width)))
+        if filledN < 0 {
+                filledN = 0
+        }
+        if filledN > width {
+                filledN = width
+        }
+        start := (width - len(innerRunes)) / 2
 
-	var b strings.Builder
-	for i := 0; i < width; i++ {
-		bg := progressEmptyBg
-		fg := progressEmptyFg
-		if i < filledN {
-			bg = progressFillBg
-			fg = progressFillFg
-		}
-		ch := " "
-		if i >= start && i < start+len(innerRunes) {
-			ch = string(innerRunes[i-start])
-		}
-		b.WriteString(lipgloss.NewStyle().Background(bg).Foreground(fg).Render(ch))
-	}
-	return " " + b.String()
+        var b strings.Builder
+        for i := 0; i < width; i++ {
+                bg := progressEmptyBg
+                fg := progressEmptyFg
+                if i < filledN {
+                        bg = progressFillBg
+                        fg = progressFillFg
+                }
+                ch := " "
+                if i >= start && i < start+len(innerRunes) {
+                        ch = string(innerRunes[i-start])
+                }
+                b.WriteString(lipgloss.NewStyle().Background(bg).Foreground(fg).Render(ch))
+        }
+        return " " + b.String()
 }
 
 var (
-	statusTodoStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)  // blue
-	statusDoingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true) // orange
-	statusDoneStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)  // green
-	statusOtherStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Bold(true) // gray
+        statusTodoStyle  = lipgloss.NewStyle().Foreground(ac("27", "39")).Bold(true)   // blue
+        statusDoingStyle = lipgloss.NewStyle().Foreground(ac("130", "214")).Bold(true) // orange
+        statusDoneStyle  = lipgloss.NewStyle().Foreground(ac("28", "42")).Bold(true)   // green
+        statusOtherStyle = lipgloss.NewStyle().Foreground(colorMuted).Bold(true)       // gray
 )
 
 func renderStatus(outline model.Outline, statusID string) string {
-	label := strings.TrimSpace(statusLabel(outline, statusID))
-	if label == "" {
-		return ""
-	}
-	txt := strings.ToUpper(label)
+        label := strings.TrimSpace(statusLabel(outline, statusID))
+        if label == "" {
+                return ""
+        }
+        txt := strings.ToUpper(label)
 
-	// Prefer explicit end-state styling.
-	for _, def := range outline.StatusDefs {
-		if def.ID == statusID && def.IsEndState {
-			return statusDoneStyle.Render(txt)
-		}
-	}
+        // Prefer explicit end-state styling.
+        for _, def := range outline.StatusDefs {
+                if def.ID == statusID && def.IsEndState {
+                        return statusDoneStyle.Render(txt)
+                }
+        }
 
-	switch strings.ToLower(strings.TrimSpace(statusID)) {
-	case "todo":
-		return statusTodoStyle.Render(txt)
-	case "doing":
-		return statusDoingStyle.Render(txt)
-	case "done":
-		return statusDoneStyle.Render(txt)
-	default:
-		return statusOtherStyle.Render(txt)
-	}
+        switch strings.ToLower(strings.TrimSpace(statusID)) {
+        case "todo":
+                return statusTodoStyle.Render(txt)
+        case "doing":
+                return statusDoingStyle.Render(txt)
+        case "done":
+                return statusDoneStyle.Render(txt)
+        default:
+                return statusOtherStyle.Render(txt)
+        }
 }
 
 func newList(title, help string, items []list.Item) list.Model {
-	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
-	l.Title = title
-	// We render our own global footer + breadcrumb, so keep list chrome minimal.
-	l.SetShowTitle(false)
-	l.SetShowHelp(false)
-	l.SetShowStatusBar(false)
-	l.SetShowPagination(false)
-	l.SetFilteringEnabled(true)
-	l.SetStatusBarItemName("item", "items")
-	// Bubble list defaults to quitting on ESC; in Clarity ESC is "back/cancel".
-	l.KeyMap.Quit.SetKeys("q")
-	return l
+        l := list.New(items, list.NewDefaultDelegate(), 0, 0)
+        l.Title = title
+        // We render our own global footer + breadcrumb, so keep list chrome minimal.
+        l.SetShowTitle(false)
+        l.SetShowHelp(false)
+        l.SetShowStatusBar(false)
+        l.SetShowPagination(false)
+        l.SetFilteringEnabled(true)
+        l.SetStatusBarItemName("item", "items")
+        // Bubble list defaults to quitting on ESC; in Clarity ESC is "back/cancel".
+        l.KeyMap.Quit.SetKeys("q")
+        return l
 }

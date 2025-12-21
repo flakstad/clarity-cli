@@ -20,8 +20,8 @@ func newCompactItemDelegate() compactItemDelegate {
         return compactItemDelegate{
                 normal: lipgloss.NewStyle(),
                 selected: lipgloss.NewStyle().
-                        Foreground(lipgloss.Color("255")).
-                        Background(lipgloss.Color("236")).
+                        Foreground(colorSelectedFg).
+                        Background(colorSelectedBg).
                         Bold(true),
         }
 }

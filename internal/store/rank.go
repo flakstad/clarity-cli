@@ -84,3 +84,39 @@ func RankBetween(a, b string) (string, error) {
 func RankAfter(a string) (string, error)  { return RankBetween(a, "") }
 func RankBefore(b string) (string, error) { return RankBetween("", b) }
 func RankInitial() (string, error)        { return RankBetween("", "") }
+
+// RankBetweenUnique returns a rank between lower and upper that is not already present in existing.
+//
+// existing keys should be normalized (lowercase + trimmed). This function will also normalize the
+// generated rank before checking existence.
+//
+// This is used to enforce "from now on, newly assigned ranks are unique" without rewriting other
+// items in the sibling set.
+func RankBetweenUnique(existing map[string]bool, lower, upper string) (string, error) {
+        if existing == nil {
+                existing = map[string]bool{}
+        }
+        lower = strings.ToLower(strings.TrimSpace(lower))
+        upper = strings.ToLower(strings.TrimSpace(upper))
+
+        // Try repeatedly tightening the lower bound. RankBetween guarantees strictly between bounds
+        // when both are non-empty, so each iteration produces a different value.
+        curLower := lower
+        for i := 0; i < 256; i++ {
+                r, err := RankBetween(curLower, upper)
+                if err != nil {
+                        return "", err
+                }
+                rn := strings.ToLower(strings.TrimSpace(r))
+                if rn == "" {
+                        // Extremely defensive: should never happen, but avoid infinite loops.
+                        return "", errors.New("generated empty rank")
+                }
+                if !existing[rn] {
+                        return rn, nil
+                }
+                // Collision: move the lower bound up and try again.
+                curLower = rn
+        }
+        return "", errors.New("unable to find unique rank")
+}

@@ -7,6 +7,7 @@ import (
 )
 
 func Run(dir string, db *store.DB) error {
+        applyThemePreference()
         m := newAppModel(dir, db)
         _, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
         return err

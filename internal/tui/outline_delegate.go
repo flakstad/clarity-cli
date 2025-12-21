@@ -21,11 +21,11 @@ func newOutlineItemDelegate() outlineItemDelegate {
         return outlineItemDelegate{
                 normal: lipgloss.NewStyle(),
                 selected: lipgloss.NewStyle().
-                        Foreground(lipgloss.Color("255")).
-                        Background(lipgloss.Color("236")).
+                        Foreground(colorSelectedFg).
+                        Background(colorSelectedBg).
                         Bold(true),
                 addRow: lipgloss.NewStyle().
-                        Foreground(lipgloss.Color("245")).
+                        Foreground(ac("240", "245")).
                         Italic(true),
         }
 }
@@ -88,10 +88,20 @@ func (d outlineItemDelegate) Render(w io.Writer, m list.Model, index int, item l
 func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outlineRowItem, focused bool) string {
         bg := d.selected.GetBackground()
 
+        // Short-lived error flash (e.g. permission denied).
+        flashFg := colorSelectedFg
+        flashBg := ac("196", "160") // red
+        if it.flashKind == "error" {
+                bg = flashBg
+        }
+
         base := d.normal
+        if it.flashKind == "error" {
+                base = base.Copy().Foreground(flashFg).Background(bg).Bold(true)
+        }
         if focused {
                 base = lipgloss.NewStyle().
-                        Foreground(d.selected.GetForeground()).
+                        Foreground(flashFg).
                         Background(bg).
                         Bold(true)
         }
@@ -129,7 +139,7 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
                 case "done":
                         style = statusDoneStyle
                 }
-                if focused {
+                if focused || it.flashKind == "error" {
                         style = style.Copy().Background(bg)
                 }
                 statusSeg = style.Render(statusTxt) + base.Render(" ")
@@ -146,7 +156,7 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
                 metaParts = append(metaParts, st.Render("priority"))
         }
         if it.row.item.OnHold {
-                st := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+                st := lipgloss.NewStyle().Foreground(ac("240", "245"))
                 if focused {
                         st = st.Background(bg)
                 }
@@ -181,9 +191,8 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
         titleTrunc := truncateText(title, maxTitleW)
         titleStyle := base
         if isEndState(it.outline, statusID) {
-                titleStyle = base.Copy().
-                        Foreground(lipgloss.Color("243")).
-                        Faint(true).
+                titleStyle = faintIfDark(base.Copy()).
+                        Foreground(colorMuted).
                         Strikethrough(true)
         }
         titleSeg := titleStyle.Render(titleTrunc)

@@ -21,6 +21,7 @@ type Project struct {
         Name      string    `json:"name"`
         CreatedBy string    `json:"createdBy"`
         CreatedAt time.Time `json:"createdAt"`
+        Archived  bool      `json:"archived"`
 }
 
 type OutlineStatusDef struct {
@@ -36,6 +37,7 @@ type Outline struct {
         StatusDefs []OutlineStatusDef `json:"statusDefs"`
         CreatedBy  string             `json:"createdBy"`
         CreatedAt  time.Time          `json:"createdAt"`
+        Archived   bool               `json:"archived"`
 }
 
 type Item struct {

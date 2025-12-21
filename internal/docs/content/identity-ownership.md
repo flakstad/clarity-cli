@@ -31,8 +31,12 @@ To explicitly take an item that is already assigned, pass:
 - `--take-assigned`
 
 ## Ownership rules (V1)
-- Only the **owner** can edit an item.
-- Assigning transfers ownership to the assignee (with a grace period for the previous owner).
-- A human can edit items owned by their own agents.
+- **Assignment is the edit lock**: if an item is assigned to another human (including their agents), you can't edit it.
+- Otherwise, a human can edit:
+  - items they **own**
+  - items **assigned to them**
+  - items **assigned to their agents**
+  - items **owned by their agents**
+- Assigning typically transfers ownership to the assignee (with a grace period for the previous owner).
 - Anyone can add comments.
 - Worklog is private per human user.

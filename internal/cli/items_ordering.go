@@ -64,6 +64,13 @@ func newItemsMoveCmd(app *App) *cobra.Command {
                         sibs := siblingItems(db, t.OutlineID, t.ParentID)
                         // Remove the moved item.
                         sibs = filterItems(sibs, func(x *model.Item) bool { return x.ID != id })
+                        existing := map[string]bool{}
+                        for _, s := range sibs {
+                                rn := strings.ToLower(strings.TrimSpace(s.Rank))
+                                if rn != "" {
+                                        existing[rn] = true
+                                }
+                        }
 
                         refIdx := indexOfItem(sibs, refID)
                         if refIdx < 0 {
@@ -86,7 +93,7 @@ func newItemsMoveCmd(app *App) *cobra.Command {
                                 }
                         }
 
-                        r, err := store.RankBetween(lower, upper)
+                        r, err := store.RankBetweenUnique(existing, lower, upper)
                         if err != nil {
                                 return writeErr(cmd, err)
                         }
@@ -161,6 +168,13 @@ func newItemsSetParentCmd(app *App) *cobra.Command {
                         var sibs []*model.Item
                         sibs = siblingItems(db, t.OutlineID, newParentID)
                         sibs = filterItems(sibs, func(x *model.Item) bool { return x.ID != t.ID })
+                        existing := map[string]bool{}
+                        for _, s := range sibs {
+                                rn := strings.ToLower(strings.TrimSpace(s.Rank))
+                                if rn != "" {
+                                        existing[rn] = true
+                                }
+                        }
 
                         var lower string
                         var upper string
@@ -195,7 +209,7 @@ func newItemsSetParentCmd(app *App) *cobra.Command {
                                 }
                         }
 
-                        r, err := store.RankBetween(lower, upper)
+                        r, err := store.RankBetweenUnique(existing, lower, upper)
                         if err != nil {
                                 return writeErr(cmd, err)
                         }

@@ -1,6 +1,7 @@
 package tui
 
 import (
+        "errors"
         "fmt"
         "os"
         "path/filepath"
@@ -33,6 +34,10 @@ type reloadTickMsg struct{}
 
 type escTimeoutMsg struct{}
 
+type resizeDoneMsg struct{ seq int }
+
+type flashDoneMsg struct{ seq int }
+
 type pane int
 
 const (
@@ -47,11 +52,22 @@ const (
         modalNewSibling
         modalNewChild
         modalConfirmArchive
+        modalNewProject
+        modalRenameProject
+        modalNewOutline
         modalEditTitle
         modalEditOutlineName
         modalPickStatus
         modalAddComment
         modalAddWorklog
+)
+
+type archiveTarget int
+
+const (
+        archiveTargetItem archiveTarget = iota
+        archiveTargetOutline
+        archiveTargetProject
 )
 
 type textModalFocus int
@@ -69,6 +85,10 @@ type appModel struct {
 
         width  int
         height int
+
+        // We treat the very first WindowSizeMsg as "initial sizing" rather than a user-driven
+        // resize. Otherwise we briefly render the full-height "Resizing…" overlay on startup.
+        seenWindowSize bool
 
         view view
 
@@ -89,11 +109,19 @@ type appModel struct {
 
         modal      modalKind
         modalForID string
+        archiveFor archiveTarget
         input      textinput.Model
         textarea   textarea.Model
         textFocus  textModalFocus
 
         pendingEsc bool
+
+        resizing  bool
+        resizeSeq int
+
+        flashItemID string
+        flashKind   string
+        flashSeq    int
 
         lastDBModTime     time.Time
         lastEventsModTime time.Time
@@ -105,6 +133,9 @@ const (
         topPadLines   = 1
         breadcrumbGap = 1
         maxContentW   = 96
+        // Split preview is great on wide terminals, but on narrow screens it becomes unusable.
+        // We don't enforce a minimum terminal width; we just automatically collapse to single-pane.
+        minSplitPreviewW = 80
 )
 
 func newAppModel(dir string, db *store.DB) appModel {
@@ -159,6 +190,32 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 m.width = msg.Width
                 m.height = msg.Height
                 m.resizeLists()
+                // Don't show the resize overlay on startup; only after we've seen an initial size.
+                if !m.seenWindowSize {
+                        m.seenWindowSize = true
+                        m.resizing = false
+                        return m, nil
+                }
+                m.resizing = true
+                m.resizeSeq++
+                seq := m.resizeSeq
+                return m, tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return resizeDoneMsg{seq: seq} })
+
+        case resizeDoneMsg:
+                // Debounce: only clear if this corresponds to the latest resize seq.
+                if msg.seq == m.resizeSeq {
+                        m.resizing = false
+                }
+                return m, nil
+
+        case flashDoneMsg:
+                if msg.seq == m.flashSeq {
+                        m.flashItemID = ""
+                        m.flashKind = ""
+                        if m.view == viewOutline && m.selectedOutline != nil {
+                                m.refreshItems(*m.selectedOutline)
+                        }
+                }
                 return m, nil
 
         case reloadTickMsg:
@@ -285,7 +342,38 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         return m, nil
                                 }
                         }
+                case "r":
+                        // Archive selected project/outline (with confirm), similar to archiving items.
+                        if m.view == viewProjects {
+                                if it, ok := m.projectsList.SelectedItem().(projectItem); ok {
+                                        m.modal = modalConfirmArchive
+                                        m.modalForID = it.project.ID
+                                        m.archiveFor = archiveTargetProject
+                                        m.input.Blur()
+                                        return m, nil
+                                }
+                        }
+                        if m.view == viewOutlines {
+                                if it, ok := m.outlinesList.SelectedItem().(outlineItem); ok {
+                                        m.modal = modalConfirmArchive
+                                        m.modalForID = it.outline.ID
+                                        m.archiveFor = archiveTargetOutline
+                                        m.input.Blur()
+                                        return m, nil
+                                }
+                        }
                 case "e":
+                        if m.view == viewProjects {
+                                // Rename project.
+                                if it, ok := m.projectsList.SelectedItem().(projectItem); ok {
+                                        m.modal = modalRenameProject
+                                        m.modalForID = it.project.ID
+                                        m.input.Placeholder = "Project name"
+                                        m.input.SetValue(strings.TrimSpace(it.project.Name))
+                                        m.input.Focus()
+                                        return m, nil
+                                }
+                        }
                         if m.view == viewOutlines {
                                 // Rename outline.
                                 if it, ok := m.outlinesList.SelectedItem().(outlineItem); ok {
@@ -300,6 +388,25 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.input.Focus()
                                         return m, nil
                                 }
+                        }
+                case "n":
+                        if m.view == viewProjects {
+                                // New project.
+                                m.modal = modalNewProject
+                                m.modalForID = ""
+                                m.input.Placeholder = "Project name"
+                                m.input.SetValue("")
+                                m.input.Focus()
+                                return m, nil
+                        }
+                        if m.view == viewOutlines {
+                                // New outline (name optional).
+                                m.modal = modalNewOutline
+                                m.modalForID = ""
+                                m.input.Placeholder = "Outline name (optional)"
+                                m.input.SetValue("")
+                                m.input.Focus()
+                                return m, nil
                         }
                 }
         }
@@ -325,6 +432,24 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m appModel) View() string {
+        if m.resizing {
+                // Stable full-height overlay during terminal resize to avoid flicker/layout jumps.
+                h := m.height
+                if h < 0 {
+                        h = 0
+                }
+                w := m.width
+                if w < 0 {
+                        w = 0
+                }
+                line := lipgloss.NewStyle().Width(w).Align(lipgloss.Center).Render("Resizing…")
+                lines := make([]string, 0, h)
+                for i := 0; i < h; i++ {
+                        lines = append(lines, line)
+                }
+                return strings.Join(lines, "\n")
+        }
+
         var body string
         switch m.view {
         case viewProjects:
@@ -420,8 +545,14 @@ func (m *appModel) viewProjects() string {
         m.projectsList.SetSize(contentW, bodyHeight)
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-        block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.projectsList.View()
-        return lipgloss.PlaceHorizontal(w, lipgloss.Center, block)
+        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.projectsList.View()
+        main = lipgloss.PlaceHorizontal(w, lipgloss.Center, main)
+        if m.modal == modalNone {
+                return main
+        }
+        bg := dimBackground(main)
+        fg := m.renderModal()
+        return overlayCenter(bg, fg, w, frameH)
 }
 
 func (m *appModel) viewOutlines() string {
@@ -461,8 +592,20 @@ func (m appModel) footerText() string {
         if m.view == viewItem {
                 return "backspace/esc: back  q: quit  y/Y: copy"
         }
+        if m.view == viewProjects && m.modal == modalNone {
+                return "enter: select  n: new  e: rename  r: archive  q: quit"
+        }
         if m.view == viewOutlines && m.modal == modalNone {
-                return "enter: select  e: rename  backspace/esc: back  q: quit"
+                return "enter: select  n: new  e: rename  r: archive  backspace/esc: back  q: quit"
+        }
+        if m.modal == modalNewProject {
+                return "new project: type, enter: save, esc: cancel"
+        }
+        if m.modal == modalRenameProject {
+                return "rename project: type, enter: save, esc: cancel"
+        }
+        if m.modal == modalNewOutline {
+                return "new outline: type (optional), enter: save, esc: cancel"
         }
         if m.modal == modalEditOutlineName {
                 return "rename outline: type, enter: save, esc: cancel"
@@ -496,7 +639,8 @@ func (m appModel) footerText() string {
                 return "new item: type title, enter: save, esc: cancel  " + focus
         }
         tabHelp := ""
-        if m.showPreview {
+        // Only show focus toggle if split preview is actually visible at this width.
+        if m.showPreview && m.width >= minSplitPreviewW {
                 tabHelp = "  tab: toggle focus"
         }
         return "enter: open  o: preview" + tabHelp + "  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  space: status  Shift+←/→: cycle status  c: comment  w: worklog  r: archive  y/Y: copy  " + focus
@@ -536,6 +680,83 @@ func (m *appModel) showMinibuffer(text string) {
         m.minibufferText = text
 }
 
+func (m *appModel) reportError(itemID string, err error) tea.Cmd {
+        if m == nil || err == nil {
+                return nil
+        }
+        msg := strings.TrimSpace(err.Error())
+        if msg == "" {
+                msg = "unknown error"
+        }
+        m.showMinibuffer("Error: " + msg)
+        if strings.TrimSpace(itemID) == "" {
+                return nil
+        }
+        m.flashSeq++
+        seq := m.flashSeq
+        m.flashItemID = strings.TrimSpace(itemID)
+        m.flashKind = "error"
+        if m.view == viewOutline && m.selectedOutline != nil {
+                m.refreshItems(*m.selectedOutline)
+        }
+        return tea.Tick(900*time.Millisecond, func(time.Time) tea.Msg { return flashDoneMsg{seq: seq} })
+}
+
+func findPrevRankLessThan(items []*model.Item, fromIdx int, upper string) string {
+        upper = strings.TrimSpace(upper)
+        for i := fromIdx - 1; i >= 0; i-- {
+                r := strings.TrimSpace(items[i].Rank)
+                if r == "" || upper == "" {
+                        continue
+                }
+                if r < upper {
+                        return r
+                }
+        }
+        return ""
+}
+
+func findNextRankGreaterThan(items []*model.Item, fromIdx int, lower string) string {
+        lower = strings.TrimSpace(lower)
+        for i := fromIdx + 1; i < len(items); i++ {
+                r := strings.TrimSpace(items[i].Rank)
+                if r == "" || lower == "" {
+                        continue
+                }
+                if r > lower {
+                        return r
+                }
+        }
+        return ""
+}
+
+// rankBoundsForInsert returns (lower, upper) bounds suitable for store.RankBetween.
+// It intentionally skips duplicate/out-of-order neighbor ranks, and may return an empty bound
+// (meaning open-ended) to avoid errors. This updates only the moved item.
+func rankBoundsForInsert(sibs []*model.Item, afterID, beforeID string) (lower, upper string, ok bool) {
+        afterID = strings.TrimSpace(afterID)
+        beforeID = strings.TrimSpace(beforeID)
+        if (afterID == "" && beforeID == "") || (afterID != "" && beforeID != "") {
+                return "", "", false
+        }
+        if beforeID != "" {
+                refIdx := indexOfItem(sibs, beforeID)
+                if refIdx < 0 {
+                        return "", "", false
+                }
+                upper = sibs[refIdx].Rank
+                lower = findPrevRankLessThan(sibs, refIdx, upper)
+                return lower, upper, true
+        }
+        refIdx := indexOfItem(sibs, afterID)
+        if refIdx < 0 {
+                return "", "", false
+        }
+        lower = sibs[refIdx].Rank
+        upper = findNextRankGreaterThan(sibs, refIdx, lower)
+        return lower, upper, true
+}
+
 func (m *appModel) resizeLists() {
         // Leave room for header/footer.
         h := m.height - 6
@@ -573,6 +794,9 @@ func (m *appModel) refreshProjects() {
         }
         var items []list.Item
         for _, p := range m.db.Projects {
+                if p.Archived {
+                        continue
+                }
                 items = append(items, projectItem{project: p, current: p.ID == m.db.CurrentProjectID})
         }
         m.projectsList.SetItems(items)
@@ -592,6 +816,9 @@ func (m *appModel) refreshOutlines(projectID string) {
         var items []list.Item
         for _, o := range m.db.Outlines {
                 if o.ProjectID == projectID {
+                        if o.Archived {
+                                continue
+                        }
                         items = append(items, outlineItem{outline: o})
                 }
         }
@@ -642,7 +869,11 @@ func (m *appModel) refreshItems(outline model.Outline) {
         flat := flattenOutline(outline, its, m.collapsed)
         var items []list.Item
         for _, row := range flat {
-                items = append(items, outlineRowItem{row: row, outline: outline})
+                flash := ""
+                if m.flashKind != "" && m.flashItemID != "" && row.item.ID == m.flashItemID {
+                        flash = m.flashKind
+                }
+                items = append(items, outlineRowItem{row: row, outline: outline, flashKind: flash})
         }
         // Always-present affordance for adding an item (useful for empty outlines).
         items = append(items, addItemRow{})
@@ -667,7 +898,8 @@ func (m *appModel) viewOutline() string {
                 w = 10
         }
 
-        if !m.showPreview {
+        // Even if the user toggled preview on, narrow terminals should auto-collapse it.
+        if !m.showPreview || w < minSplitPreviewW {
                 contentW := w
                 if contentW > maxContentW {
                         contentW = maxContentW
@@ -788,6 +1020,12 @@ func (m *appModel) renderModal() string {
                         title = "New subitem"
                 }
                 return renderModalBox(m.width, title, m.input.View()+"\n\nenter: save   esc: cancel")
+        case modalNewProject:
+                return renderModalBox(m.width, "New project", m.input.View()+"\n\nenter: save   esc: cancel")
+        case modalRenameProject:
+                return renderModalBox(m.width, "Rename project", m.input.View()+"\n\nenter: save   esc: cancel")
+        case modalNewOutline:
+                return renderModalBox(m.width, "New outline", m.input.View()+"\n\nenter: save   esc: cancel")
         case modalEditTitle:
                 return renderModalBox(m.width, "Edit title", m.input.View()+"\n\nenter: save   esc: cancel")
         case modalEditOutlineName:
@@ -799,19 +1037,51 @@ func (m *appModel) renderModal() string {
         case modalAddWorklog:
                 return m.renderTextAreaModal("Add worklog")
         case modalConfirmArchive:
-                title := "this item"
-                if it, ok := m.db.FindItem(m.modalForID); ok {
-                        if strings.TrimSpace(it.Title) != "" {
-                                title = fmt.Sprintf("%q", it.Title)
+                title := ""
+                cascade := ""
+                switch m.archiveFor {
+                case archiveTargetProject:
+                        title = "this project"
+                        if p, ok := m.db.FindProject(m.modalForID); ok {
+                                if strings.TrimSpace(p.Name) != "" {
+                                        title = fmt.Sprintf("%q", p.Name)
+                                }
+                        }
+                        outN := countUnarchivedOutlinesInProject(m.db, m.modalForID)
+                        itemN := countUnarchivedItemsInProject(m.db, m.modalForID)
+                        cascade = fmt.Sprintf("This will archive this project, %d outline(s), and %d item(s).", outN, itemN)
+
+                case archiveTargetOutline:
+                        title = "this outline"
+                        if o, ok := m.db.FindOutline(m.modalForID); ok {
+                                name := ""
+                                if o.Name != nil {
+                                        name = strings.TrimSpace(*o.Name)
+                                }
+                                if name != "" {
+                                        title = fmt.Sprintf("%q", name)
+                                }
+                        }
+                        itemN := countUnarchivedItemsInOutline(m.db, m.modalForID)
+                        cascade = fmt.Sprintf("This will archive this outline and %d item(s).", itemN)
+
+                default:
+                        // archiveTargetItem
+                        title = "this item"
+                        if it, ok := m.db.FindItem(m.modalForID); ok {
+                                if strings.TrimSpace(it.Title) != "" {
+                                        title = fmt.Sprintf("%q", it.Title)
+                                }
+                        }
+                        extra := countUnarchivedDescendants(m.db, m.modalForID)
+                        cascade = "This will archive this item."
+                        if extra == 1 {
+                                cascade = "This will archive this item and 1 subitem."
+                        } else if extra > 1 {
+                                cascade = fmt.Sprintf("This will archive this item and %d subitems.", extra)
                         }
                 }
-                extra := countUnarchivedDescendants(m.db, m.modalForID)
-                cascade := "This will archive this item."
-                if extra == 1 {
-                        cascade = "This will archive this item and 1 subitem."
-                } else if extra > 1 {
-                        cascade = fmt.Sprintf("This will archive this item and %d subitems.", extra)
-                }
+
                 body := strings.Join([]string{
                         "Archive " + title + "?",
                         cascade,
@@ -943,22 +1213,82 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.modalForID = ""
                                         return m, nil
                                 case "enter", "y":
-                                        target := m.modalForID
-                                        prevIdx := m.itemsList.Index()
-                                        nextID := m.nearestSelectableItemID(prevIdx)
-                                        archived, err := m.archiveItemTree(target)
+                                        target := strings.TrimSpace(m.modalForID)
                                         m.modal = modalNone
                                         m.modalForID = ""
-                                        if m.selectedOutline != nil {
-                                                m.refreshItems(*m.selectedOutline)
-                                                selectListItemByID(&m.itemsList, nextID)
+
+                                        switch m.archiveFor {
+                                        case archiveTargetProject:
+                                                prevIdx := m.projectsList.Index()
+                                                outlinesArchived, itemsArchived, err := m.archiveProjectTree(target)
+                                                m.refreshProjects()
+                                                if n := len(m.projectsList.Items()); n > 0 {
+                                                        idx := prevIdx
+                                                        if idx < 0 {
+                                                                idx = 0
+                                                        }
+                                                        if idx >= n {
+                                                                idx = n - 1
+                                                        }
+                                                        m.projectsList.Select(idx)
+                                                }
+                                                if err != nil {
+                                                        m.showMinibuffer("Archive failed: " + err.Error())
+                                                } else {
+                                                        msg := "Archived project"
+                                                        if outlinesArchived > 0 || itemsArchived > 0 {
+                                                                msg = fmt.Sprintf("Archived project (%d outline(s), %d item(s))", outlinesArchived, itemsArchived)
+                                                        }
+                                                        m.showMinibuffer(msg)
+                                                }
+                                                return m, nil
+
+                                        case archiveTargetOutline:
+                                                prevIdx := m.outlinesList.Index()
+                                                itemsArchived, err := m.archiveOutlineTree(target)
+                                                // If we just archived the outline we were looking at, clear selection state.
+                                                if m.selectedOutlineID == target {
+                                                        m.selectedOutlineID = ""
+                                                        m.selectedOutline = nil
+                                                }
+                                                m.refreshOutlines(m.selectedProjectID)
+                                                if n := len(m.outlinesList.Items()); n > 0 {
+                                                        idx := prevIdx
+                                                        if idx < 0 {
+                                                                idx = 0
+                                                        }
+                                                        if idx >= n {
+                                                                idx = n - 1
+                                                        }
+                                                        m.outlinesList.Select(idx)
+                                                }
+                                                if err != nil {
+                                                        m.showMinibuffer("Archive failed: " + err.Error())
+                                                } else {
+                                                        msg := "Archived outline"
+                                                        if itemsArchived > 0 {
+                                                                msg = fmt.Sprintf("Archived outline (%d item(s))", itemsArchived)
+                                                        }
+                                                        m.showMinibuffer(msg)
+                                                }
+                                                return m, nil
+
+                                        default:
+                                                // archiveTargetItem
+                                                prevIdx := m.itemsList.Index()
+                                                nextID := m.nearestSelectableItemID(prevIdx)
+                                                archived, err := m.archiveItemTree(target)
+                                                if m.selectedOutline != nil {
+                                                        m.refreshItems(*m.selectedOutline)
+                                                        selectListItemByID(&m.itemsList, nextID)
+                                                }
+                                                if err != nil {
+                                                        m.showMinibuffer("Archive failed: " + err.Error())
+                                                } else if archived > 0 {
+                                                        m.showMinibuffer(fmt.Sprintf("Archived %d item(s)", archived))
+                                                }
+                                                return m, nil
                                         }
-                                        if err != nil {
-                                                m.showMinibuffer("Archive failed: " + err.Error())
-                                        } else if archived > 0 {
-                                                m.showMinibuffer(fmt.Sprintf("Archived %d item(s)", archived))
-                                        }
-                                        return m, nil
                                 }
                         }
                         return m, nil
@@ -1069,7 +1399,10 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         return m, nil
                                 case "enter":
                                         if it, ok := m.statusList.SelectedItem().(statusOptionItem); ok {
-                                                _ = m.setStatusForItem(strings.TrimSpace(m.modalForID), it.id)
+                                                itemID := strings.TrimSpace(m.modalForID)
+                                                if err := m.setStatusForItem(itemID, it.id); err != nil {
+                                                        return m, m.reportError(itemID, err)
+                                                }
                                         }
                                         m.modal = modalNone
                                         m.modalForID = ""
@@ -1092,11 +1425,27 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         case "enter":
                                 val := strings.TrimSpace(m.input.Value())
                                 switch m.modal {
+                                case modalNewProject:
+                                        if val == "" {
+                                                return m, nil
+                                        }
+                                        _ = m.createProjectFromModal(val)
+                                case modalRenameProject:
+                                        if val == "" {
+                                                return m, nil
+                                        }
+                                        _ = m.renameProjectFromModal(val)
+                                case modalNewOutline:
+                                        // Name optional.
+                                        _ = m.createOutlineFromModal(val)
                                 case modalEditTitle:
                                         if val == "" {
                                                 return m, nil
                                         }
-                                        _ = m.setTitleFromModal(val)
+                                        itemID := strings.TrimSpace(m.modalForID)
+                                        if err := m.setTitleFromModal(val); err != nil {
+                                                return m, m.reportError(itemID, err)
+                                        }
                                 case modalEditOutlineName:
                                         _ = m.setOutlineNameFromModal(val)
                                 default:
@@ -1126,17 +1475,33 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         // ESC + navigation keys => treat as Alt+...
                         switch msg.String() {
                         case "up", "k", "p":
-                                _ = m.moveSelected("up")
-                                return m, nil
+                                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                        if err := m.moveSelected("up"); err != nil {
+                                                return m, m.reportError(it.row.item.ID, err)
+                                        }
+                                        return m, nil
+                                }
                         case "down", "j", "n":
-                                _ = m.moveSelected("down")
-                                return m, nil
+                                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                        if err := m.moveSelected("down"); err != nil {
+                                                return m, m.reportError(it.row.item.ID, err)
+                                        }
+                                        return m, nil
+                                }
                         case "right", "l", "f":
-                                _ = m.indentSelected()
-                                return m, nil
+                                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                        if err := m.indentSelected(); err != nil {
+                                                return m, m.reportError(it.row.item.ID, err)
+                                        }
+                                        return m, nil
+                                }
                         case "left", "h", "b":
-                                _ = m.outdentSelected()
-                                return m, nil
+                                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                        if err := m.outdentSelected(); err != nil {
+                                                return m, m.reportError(it.row.item.ID, err)
+                                        }
+                                        return m, nil
+                                }
                         }
                         // Otherwise: fall through and handle the key normally.
                 }
@@ -1202,14 +1567,18 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "shift+right":
                         if m.pane == paneOutline {
                                 if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-                                        _ = m.cycleItemStatus(it.outline, it.row.item.ID, +1)
+                                        if err := m.cycleItemStatus(it.outline, it.row.item.ID, +1); err != nil {
+                                                return m, m.reportError(it.row.item.ID, err)
+                                        }
                                         return m, nil
                                 }
                         }
                 case "shift+left":
                         if m.pane == paneOutline {
                                 if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-                                        _ = m.cycleItemStatus(it.outline, it.row.item.ID, -1)
+                                        if err := m.cycleItemStatus(it.outline, it.row.item.ID, -1); err != nil {
+                                                return m, m.reportError(it.row.item.ID, err)
+                                        }
                                         return m, nil
                                 }
                         }
@@ -1278,6 +1647,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
                                 m.modal = modalConfirmArchive
                                 m.modalForID = it.row.item.ID
+                                m.archiveFor = archiveTargetItem
                                 m.input.Blur()
                                 return m, nil
                         }
@@ -1305,8 +1675,10 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                 }
 
                 // Outline structural operations (left pane only).
-                if m.pane == paneOutline && m.mutateOutlineByKey(msg) {
-                        return m, nil
+                if m.pane == paneOutline {
+                        if handled, cmd := m.mutateOutlineByKey(msg); handled {
+                                return m, cmd
+                        }
                 }
         }
 
@@ -1407,6 +1779,136 @@ func (m *appModel) archiveItemTree(rootID string) (int, error) {
         return archived, nil
 }
 
+func (m *appModel) archiveOutlineTree(outlineID string) (int, error) {
+        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        if actorID == "" {
+                return 0, nil
+        }
+        outlineID = strings.TrimSpace(outlineID)
+        if outlineID == "" {
+                return 0, nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return 0, err
+        }
+        m.db = db
+
+        o, ok := m.db.FindOutline(outlineID)
+        if !ok {
+                return 0, nil
+        }
+        if o.Archived {
+                return 0, nil
+        }
+
+        // Archive all items in this outline (best-effort respecting ownership).
+        now := time.Now().UTC()
+        itemsArchived := 0
+        for i := range m.db.Items {
+                it := &m.db.Items[i]
+                if it.OutlineID != outlineID {
+                        continue
+                }
+                if it.Archived {
+                        continue
+                }
+                if !canEditItem(m.db, actorID, it) {
+                        continue
+                }
+                it.Archived = true
+                it.UpdatedAt = now
+                _ = m.store.AppendEvent(actorID, "item.archive", it.ID, map[string]any{"archived": true})
+                itemsArchived++
+        }
+
+        o.Archived = true
+        _ = m.store.AppendEvent(actorID, "outline.archive", o.ID, map[string]any{"archived": true})
+
+        if err := m.store.Save(m.db); err != nil {
+                return itemsArchived, err
+        }
+        m.captureStoreModTimes()
+        return itemsArchived, nil
+}
+
+func (m *appModel) archiveProjectTree(projectID string) (int, int, error) {
+        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        if actorID == "" {
+                return 0, 0, nil
+        }
+        projectID = strings.TrimSpace(projectID)
+        if projectID == "" {
+                return 0, 0, nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return 0, 0, err
+        }
+        m.db = db
+
+        p, ok := m.db.FindProject(projectID)
+        if !ok {
+                return 0, 0, nil
+        }
+        if p.Archived {
+                return 0, 0, nil
+        }
+
+        // Archive all outlines + items in this project.
+        outlinesArchived := 0
+        for i := range m.db.Outlines {
+                o := &m.db.Outlines[i]
+                if o.ProjectID != projectID {
+                        continue
+                }
+                if o.Archived {
+                        continue
+                }
+                o.Archived = true
+                _ = m.store.AppendEvent(actorID, "outline.archive", o.ID, map[string]any{"archived": true})
+                outlinesArchived++
+        }
+
+        now := time.Now().UTC()
+        itemsArchived := 0
+        for i := range m.db.Items {
+                it := &m.db.Items[i]
+                if it.ProjectID != projectID {
+                        continue
+                }
+                if it.Archived {
+                        continue
+                }
+                if !canEditItem(m.db, actorID, it) {
+                        continue
+                }
+                it.Archived = true
+                it.UpdatedAt = now
+                _ = m.store.AppendEvent(actorID, "item.archive", it.ID, map[string]any{"archived": true})
+                itemsArchived++
+        }
+
+        p.Archived = true
+        _ = m.store.AppendEvent(actorID, "project.archive", p.ID, map[string]any{"archived": true})
+
+        // Clear current project if we just archived it.
+        if m.db.CurrentProjectID == projectID {
+                m.db.CurrentProjectID = ""
+        }
+        if m.selectedProjectID == projectID {
+                m.selectedProjectID = ""
+        }
+
+        if err := m.store.Save(m.db); err != nil {
+                return outlinesArchived, itemsArchived, err
+        }
+        m.captureStoreModTimes()
+        return outlinesArchived, itemsArchived, nil
+}
+
 func countUnarchivedDescendants(db *store.DB, rootID string) int {
         if db == nil || strings.TrimSpace(rootID) == "" {
                 return 0
@@ -1424,6 +1926,57 @@ func countUnarchivedDescendants(db *store.DB, rootID string) int {
                 if !it.Archived {
                         n++
                 }
+        }
+        return n
+}
+
+func countUnarchivedItemsInOutline(db *store.DB, outlineID string) int {
+        if db == nil || strings.TrimSpace(outlineID) == "" {
+                return 0
+        }
+        n := 0
+        for _, it := range db.Items {
+                if it.OutlineID != outlineID {
+                        continue
+                }
+                if it.Archived {
+                        continue
+                }
+                n++
+        }
+        return n
+}
+
+func countUnarchivedOutlinesInProject(db *store.DB, projectID string) int {
+        if db == nil || strings.TrimSpace(projectID) == "" {
+                return 0
+        }
+        n := 0
+        for _, o := range db.Outlines {
+                if o.ProjectID != projectID {
+                        continue
+                }
+                if o.Archived {
+                        continue
+                }
+                n++
+        }
+        return n
+}
+
+func countUnarchivedItemsInProject(db *store.DB, projectID string) int {
+        if db == nil || strings.TrimSpace(projectID) == "" {
+                return 0
+        }
+        n := 0
+        for _, it := range db.Items {
+                if it.ProjectID != projectID {
+                        continue
+                }
+                if it.Archived {
+                        continue
+                }
+                n++
         }
         return n
 }
@@ -1702,26 +2255,50 @@ func (m *appModel) toggleCollapseAll() {
         m.refreshItems(*m.selectedOutline)
 }
 
-func (m *appModel) mutateOutlineByKey(msg tea.KeyMsg) bool {
+func (m *appModel) mutateOutlineByKey(msg tea.KeyMsg) (bool, tea.Cmd) {
         // Move item down/up.
         if isAltDown(msg) {
-                _ = m.moveSelected("down")
-                return true
+                itemID := ""
+                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                        itemID = it.row.item.ID
+                }
+                if err := m.moveSelected("down"); err != nil {
+                        return true, m.reportError(itemID, err)
+                }
+                return true, nil
         }
         if isAltUp(msg) {
-                _ = m.moveSelected("up")
-                return true
+                itemID := ""
+                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                        itemID = it.row.item.ID
+                }
+                if err := m.moveSelected("up"); err != nil {
+                        return true, m.reportError(itemID, err)
+                }
+                return true, nil
         }
         // Indent/outdent.
         if isAltRight(msg) {
-                _ = m.indentSelected()
-                return true
+                itemID := ""
+                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                        itemID = it.row.item.ID
+                }
+                if err := m.indentSelected(); err != nil {
+                        return true, m.reportError(itemID, err)
+                }
+                return true, nil
         }
         if isAltLeft(msg) {
-                _ = m.outdentSelected()
-                return true
+                itemID := ""
+                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                        itemID = it.row.item.ID
+                }
+                if err := m.outdentSelected(); err != nil {
+                        return true, m.reportError(itemID, err)
+                }
+                return true, nil
         }
-        return false
+        return false, nil
 }
 
 func isAltDown(msg tea.KeyMsg) bool {
@@ -1861,23 +2438,23 @@ func (m *appModel) setTitleFromModal(title string) error {
         if itemID == "" {
                 return nil
         }
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
-        if actorID == "" {
-                return nil
-        }
 
         db, err := m.store.Load()
         if err != nil {
                 return err
         }
         m.db = db
+        actorID := m.editActorID()
+        if actorID == "" {
+                return errors.New("no current actor")
+        }
 
         t, ok := m.db.FindItem(itemID)
         if !ok {
                 return nil
         }
         if !canEditItem(m.db, actorID, t) {
-                return nil
+                return errors.New("permission denied")
         }
 
         t.Title = strings.TrimSpace(title)
@@ -1936,6 +2513,131 @@ func (m *appModel) setOutlineNameFromModal(name string) error {
         m.refreshOutlines(m.selectedProjectID)
         selectListItemByID(&m.outlinesList, o.ID)
         m.showMinibuffer("Renamed outline " + o.ID)
+        return nil
+}
+
+func (m *appModel) createProjectFromModal(name string) error {
+        name = strings.TrimSpace(name)
+        if name == "" {
+                return nil
+        }
+        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        if actorID == "" {
+                return nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return err
+        }
+        m.db = db
+
+        p := model.Project{
+                ID:        m.store.NextID(m.db, "proj"),
+                Name:      name,
+                CreatedBy: actorID,
+                CreatedAt: time.Now().UTC(),
+        }
+        m.db.Projects = append(m.db.Projects, p)
+        m.db.CurrentProjectID = p.ID
+        if err := m.store.Save(m.db); err != nil {
+                return err
+        }
+        _ = m.store.AppendEvent(actorID, "project.create", p.ID, p)
+        m.captureStoreModTimes()
+
+        m.selectedProjectID = p.ID
+        m.refreshProjects()
+        selectListItemByID(&m.projectsList, p.ID)
+
+        // Take the user into outlines for the new project (same as selecting it).
+        m.view = viewOutlines
+        m.refreshOutlines(p.ID)
+        m.showMinibuffer("Created project " + p.ID)
+        return nil
+}
+
+func (m *appModel) renameProjectFromModal(name string) error {
+        projectID := strings.TrimSpace(m.modalForID)
+        name = strings.TrimSpace(name)
+        if projectID == "" || name == "" {
+                return nil
+        }
+        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        if actorID == "" {
+                return nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return err
+        }
+        m.db = db
+
+        p, ok := m.db.FindProject(projectID)
+        if !ok {
+                return nil
+        }
+        p.Name = name
+        if err := m.store.Save(m.db); err != nil {
+                return err
+        }
+        _ = m.store.AppendEvent(actorID, "project.rename", p.ID, map[string]any{"name": p.Name})
+        m.captureStoreModTimes()
+
+        m.refreshProjects()
+        selectListItemByID(&m.projectsList, p.ID)
+        m.showMinibuffer("Renamed project " + p.ID)
+        return nil
+}
+
+func (m *appModel) createOutlineFromModal(name string) error {
+        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        if actorID == "" {
+                return nil
+        }
+        projectID := strings.TrimSpace(m.selectedProjectID)
+        if projectID == "" {
+                projectID = strings.TrimSpace(m.db.CurrentProjectID)
+        }
+        if projectID == "" {
+                return nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return err
+        }
+        m.db = db
+
+        if _, ok := m.db.FindProject(projectID); !ok {
+                return nil
+        }
+
+        var namePtr *string
+        trim := strings.TrimSpace(name)
+        if trim != "" {
+                tmp := trim
+                namePtr = &tmp
+        }
+        o := model.Outline{
+                ID:         m.store.NextID(m.db, "out"),
+                ProjectID:  projectID,
+                Name:       namePtr,
+                StatusDefs: store.DefaultOutlineStatusDefs(),
+                CreatedBy:  actorID,
+                CreatedAt:  time.Now().UTC(),
+        }
+        m.db.Outlines = append(m.db.Outlines, o)
+        if err := m.store.Save(m.db); err != nil {
+                return err
+        }
+        _ = m.store.AppendEvent(actorID, "outline.create", o.ID, o)
+        m.captureStoreModTimes()
+
+        m.refreshOutlines(projectID)
+        selectListItemByID(&m.outlinesList, o.ID)
+        m.showMinibuffer("Created outline " + o.ID)
         return nil
 }
 
@@ -2027,23 +2729,23 @@ func (m *appModel) setStatusForItem(itemID, statusID string) error {
         if itemID == "" {
                 return nil
         }
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
-        if actorID == "" {
-                return nil
-        }
 
         db, err := m.store.Load()
         if err != nil {
                 return err
         }
         m.db = db
+        actorID := m.editActorID()
+        if actorID == "" {
+                return errors.New("no current actor")
+        }
 
         t, ok := m.db.FindItem(itemID)
         if !ok {
                 return nil
         }
         if !canEditItem(m.db, actorID, t) {
-                return nil
+                return errors.New("permission denied")
         }
 
         // Validate against outline status defs (empty is always allowed).
@@ -2058,7 +2760,7 @@ func (m *appModel) setStatusForItem(itemID, statusID string) error {
                                 }
                         }
                         if !valid {
-                                return nil
+                                return errors.New("invalid status")
                         }
                 }
         }
@@ -2086,22 +2788,22 @@ func (m *appModel) moveSelected(dir string) error {
         if !ok {
                 return nil
         }
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
-        if actorID == "" {
-                return nil
-        }
 
         db, err := m.store.Load()
         if err != nil {
                 return err
         }
         m.db = db
+        actorID := m.editActorID()
+        if actorID == "" {
+                return errors.New("no current actor")
+        }
         t, ok := m.db.FindItem(it.row.item.ID)
         if !ok {
                 return nil
         }
         if !canEditItem(m.db, actorID, t) {
-                return nil
+                return errors.New("permission denied")
         }
 
         // We need the moved item included for finding current position; build full list.
@@ -2134,31 +2836,19 @@ func (m *appModel) reorderItem(t *model.Item, afterID, beforeID string) error {
         sibs := siblingItems(m.db, t.OutlineID, t.ParentID)
         sibs = filterItems(sibs, func(x *model.Item) bool { return x.ID != t.ID && !x.Archived })
 
-        var lower string
-        var upper string
-        if beforeID != "" {
-                refIdx := indexOfItem(sibs, beforeID)
-                if refIdx < 0 {
-                        return nil
-                }
-                upper = sibs[refIdx].Rank
-                if refIdx > 0 {
-                        lower = sibs[refIdx-1].Rank
-                }
-        } else if afterID != "" {
-                refIdx := indexOfItem(sibs, afterID)
-                if refIdx < 0 {
-                        return nil
-                }
-                lower = sibs[refIdx].Rank
-                if refIdx+1 < len(sibs) {
-                        upper = sibs[refIdx+1].Rank
-                }
-        } else {
+        lower, upper, ok := rankBoundsForInsert(sibs, afterID, beforeID)
+        if !ok {
                 return nil
         }
 
-        r, err := store.RankBetween(lower, upper)
+        existing := map[string]bool{}
+        for _, s := range sibs {
+                rn := strings.ToLower(strings.TrimSpace(s.Rank))
+                if rn != "" {
+                        existing[rn] = true
+                }
+        }
+        r, err := store.RankBetweenUnique(existing, lower, upper)
         if err != nil {
                 return err
         }
@@ -2183,21 +2873,21 @@ func (m *appModel) indentSelected() error {
         if !ok {
                 return nil
         }
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
-        if actorID == "" {
-                return nil
-        }
         db, err := m.store.Load()
         if err != nil {
                 return err
         }
         m.db = db
+        actorID := m.editActorID()
+        if actorID == "" {
+                return errors.New("no current actor")
+        }
         t, ok := m.db.FindItem(it.row.item.ID)
         if !ok {
                 return nil
         }
         if !canEditItem(m.db, actorID, t) {
-                return nil
+                return errors.New("permission denied")
         }
         // Indent => become child of the previous sibling (same parent).
         sibs := siblingItems(m.db, t.OutlineID, t.ParentID)
@@ -2234,22 +2924,21 @@ func (m *appModel) outdentSelected() error {
         if !ok {
                 return nil
         }
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
-        if actorID == "" {
-                return nil
-        }
-
         db, err := m.store.Load()
         if err != nil {
                 return err
         }
         m.db = db
+        actorID := m.editActorID()
+        if actorID == "" {
+                return errors.New("no current actor")
+        }
         t, ok := m.db.FindItem(it.row.item.ID)
         if !ok {
                 return nil
         }
         if !canEditItem(m.db, actorID, t) {
-                return nil
+                return errors.New("permission denied")
         }
         if t.ParentID == nil || strings.TrimSpace(*t.ParentID) == "" {
                 return nil
@@ -2273,11 +2962,15 @@ func (m *appModel) outdentSelected() error {
                 t.Rank = nextSiblingRank(m.db, t.OutlineID, destParentID)
         } else {
                 lower := sibs[refIdx].Rank
-                upper := ""
-                if refIdx+1 < len(sibs) {
-                        upper = sibs[refIdx+1].Rank
+                upper := findNextRankGreaterThan(sibs, refIdx, lower)
+                existing := map[string]bool{}
+                for _, s := range sibs {
+                        rn := strings.ToLower(strings.TrimSpace(s.Rank))
+                        if rn != "" {
+                                existing[rn] = true
+                        }
                 }
-                r, err := store.RankBetween(lower, upper)
+                r, err := store.RankBetweenUnique(existing, lower, upper)
                 if err != nil {
                         return err
                 }
@@ -2306,6 +2999,25 @@ func (m *appModel) outdentSelected() error {
 
 func canEditItem(db *store.DB, actorID string, t *model.Item) bool {
         return perm.CanEditItem(db, actorID, t)
+}
+
+// editActorID returns the human actor id to attribute mutations to.
+//
+// The interactive TUI is primarily for humans. If the current actor is an agent (often due to
+// a previous `clarity agent start ...`), we still want user-driven edits (status, move, etc.)
+// to work against items owned by the human and be attributed to that human actor.
+func (m *appModel) editActorID() string {
+        if m == nil || m.db == nil {
+                return ""
+        }
+        cur := strings.TrimSpace(m.db.CurrentActorID)
+        if cur == "" {
+                return ""
+        }
+        if human, ok := m.db.HumanUserIDForActor(cur); ok && strings.TrimSpace(human) != "" {
+                return strings.TrimSpace(human)
+        }
+        return cur
 }
 
 func sameParent(a, b *string) bool {

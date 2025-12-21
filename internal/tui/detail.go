@@ -15,12 +15,12 @@ import (
 func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width, height int, focused bool) string {
         titleStyle := lipgloss.NewStyle().Bold(true)
         if isEndState(outline, it.StatusID) {
-                titleStyle = lipgloss.NewStyle().
-                        Foreground(lipgloss.Color("243")).
-                        Faint(true).
-                        Strikethrough(true)
+                titleStyle = faintIfDark(lipgloss.NewStyle()).
+                        Foreground(colorMuted).
+                        Strikethrough(true).
+                        Bold(true)
         }
-        labelStyle := lipgloss.NewStyle().Faint(true)
+        labelStyle := styleMuted()
         // NOTE: The returned string must be exactly `width` columns wide (ANSI-aware) so that
         // split-view rendering with lipgloss.JoinHorizontal stays stable.
         padX := 1
@@ -85,11 +85,20 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
         }
         sort.Slice(myWorklog, func(i, j int) bool { return myWorklog[i].CreatedAt.After(myWorklog[j].CreatedAt) })
 
-        desc := strings.TrimSpace(it.Description)
-        if desc == "" {
-                desc = "(no description)"
-        } else {
-                desc = truncateLines(desc, 12)
+        desc := "(no description)"
+        if strings.TrimSpace(it.Description) != "" {
+                rendered := strings.TrimSpace(renderMarkdown(it.Description, innerW))
+                if rendered == "" {
+                        rendered = strings.TrimSpace(it.Description)
+                }
+                maxDescLines := height / 2
+                if maxDescLines < 6 {
+                        maxDescLines = 6
+                }
+                if maxDescLines > 24 {
+                        maxDescLines = 24
+                }
+                desc = truncateLines(rendered, maxDescLines)
         }
 
         lines := []string{
@@ -120,6 +129,7 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
                 "- tab toggles focus between outline/detail",
                 "- n creates a new sibling (outline pane)",
                 "- N creates a new subitem",
+                "- e edits title + description",
                 "- c adds a comment; w adds a worklog entry",
                 "- z toggles collapse; Shift+Z toggles collapse all/expand all",
                 "- More via CLI:",

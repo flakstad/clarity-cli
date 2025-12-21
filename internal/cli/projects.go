@@ -16,6 +16,7 @@ func newProjectsCmd(app *App) *cobra.Command {
         }
         cmd.AddCommand(newProjectsCreateCmd(app))
         cmd.AddCommand(newProjectsListCmd(app))
+        cmd.AddCommand(newProjectsArchiveCmd(app))
         cmd.AddCommand(newProjectsUseCmd(app))
         cmd.AddCommand(newProjectsCurrentCmd(app))
         return cmd
@@ -77,6 +78,45 @@ func newProjectsListCmd(app *App) *cobra.Command {
                         return writeOut(cmd, app, map[string]any{"data": db.Projects})
                 },
         }
+        return cmd
+}
+
+func newProjectsArchiveCmd(app *App) *cobra.Command {
+        var unarchive bool
+        cmd := &cobra.Command{
+                Use:   "archive <project-id>",
+                Short: "Archive (or unarchive) a project",
+                Args:  cobra.ExactArgs(1),
+                RunE: func(cmd *cobra.Command, args []string) error {
+                        db, s, err := loadDB(app)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        actorID, err := currentActorID(app, db)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if _, ok := db.FindActor(actorID); !ok {
+                                return writeErr(cmd, errNotFound("actor", actorID))
+                        }
+
+                        pid := strings.TrimSpace(args[0])
+                        p, ok := db.FindProject(pid)
+                        if !ok {
+                                return writeErr(cmd, errNotFound("project", pid))
+                        }
+                        p.Archived = !unarchive
+                        if db.CurrentProjectID == pid && p.Archived {
+                                db.CurrentProjectID = ""
+                        }
+                        if err := s.Save(db); err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        _ = s.AppendEvent(actorID, "project.archive", p.ID, map[string]any{"archived": p.Archived})
+                        return writeOut(cmd, app, map[string]any{"data": p})
+                },
+        }
+        cmd.Flags().BoolVar(&unarchive, "unarchive", false, "Unarchive instead of archive")
         return cmd
 }
 

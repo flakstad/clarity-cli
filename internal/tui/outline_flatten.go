@@ -131,12 +131,33 @@ func compareOutlineItems(a, b model.Item) int {
                 if ra > rb {
                         return 1
                 }
+                // Deterministic tie-break: equal ranks must still produce a stable ordering,
+                // otherwise sort.Slice may reshuffle equal elements between renders (causing
+                // "jumps" when moving items).
+                if a.CreatedAt.Before(b.CreatedAt) {
+                        return -1
+                }
+                if a.CreatedAt.After(b.CreatedAt) {
+                        return 1
+                }
+                if a.ID < b.ID {
+                        return -1
+                }
+                if a.ID > b.ID {
+                        return 1
+                }
                 return 0
         }
         if a.CreatedAt.Before(b.CreatedAt) {
                 return -1
         }
         if a.CreatedAt.After(b.CreatedAt) {
+                return 1
+        }
+        if a.ID < b.ID {
+                return -1
+        }
+        if a.ID > b.ID {
                 return 1
         }
         return 0
