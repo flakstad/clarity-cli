@@ -82,7 +82,7 @@ func renderOutlineColumns(outline model.Outline, items []model.Item, width, heig
                 colW = 10
         }
 
-        headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255")).Background(lipgloss.Color("236"))
+        headerStyle := lipgloss.NewStyle().Bold(true).Foreground(colorSurfaceFg).Background(colorControlBg)
         cardStyle := lipgloss.NewStyle()
         muted := styleMuted()
 

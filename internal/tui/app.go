@@ -6,6 +6,7 @@ import (
         "os"
         "path/filepath"
         "sort"
+        "strconv"
         "strings"
         "time"
 
@@ -61,6 +62,35 @@ type previewDebug struct {
         lastErr       string
         lastReason    string
         lastTickSkips int
+}
+
+type inputDebug struct {
+        lastAt   time.Time
+        lastType string
+        lastStr  string
+}
+
+func (m appModel) debugKeyMsg(k tea.KeyMsg) {
+        if !m.debugEnabled {
+                return
+        }
+        // Only write if the user provided a log path.
+        if strings.TrimSpace(m.debugLogPath) == "" {
+                return
+        }
+        // Keep compact but high-signal for diagnosing modifier keys.
+        (&m).debugLogf(
+                "key view=%s pane=%s modal=%d filter(setting=%v filtered=%v) str=%q type=%v alt=%v runes=%q",
+                viewToString(m.view),
+                paneToString(m.pane),
+                int(m.modal),
+                m.itemsList.SettingFilter(),
+                m.itemsList.IsFiltered(),
+                k.String(),
+                k.Type,
+                k.Alt,
+                string(k.Runes),
+        )
 }
 
 type pane int
@@ -137,6 +167,8 @@ type appModel struct {
         dir   string
         store store.Store
         db    *store.DB
+        // eventsTail caches the last N events from events.jsonl for cheap "recent history" rendering.
+        eventsTail []model.Event
 
         width  int
         height int
@@ -198,6 +230,7 @@ type appModel struct {
         debugOverlay bool
         debugLogPath string
         previewDbg   previewDebug
+        inputDbg     inputDebug
 
         lastDBModTime     time.Time
         lastEventsModTime time.Time
@@ -244,6 +277,10 @@ func (m *appModel) toggleOutlineViewMode() {
                 return
         }
         // Switching to columns: disable split-preview (kanban uses the whole canvas).
+        // Also clear any active outline filter (columns view doesn't render the list/filter UI).
+        if m.itemsList.SettingFilter() || m.itemsList.IsFiltered() {
+                m.itemsList.ResetFilter()
+        }
         m.outlineViewMode[id] = outlineViewModeColumns
         m.showPreview = false
         m.pane = paneOutline
@@ -554,8 +591,9 @@ func newAppModel(dir string, db *store.DB) appModel {
         m.outlinesList.SetDelegate(newCompactItemDelegate())
         m.itemsList = newList("Outline", "Navigate items (split view)", []list.Item{})
         m.itemsList.SetDelegate(newOutlineItemDelegate())
-        m.itemsList.SetFilteringEnabled(false)
-        m.itemsList.SetShowFilter(false)
+        // Enable "/" filtering to quickly scope down large outlines.
+        m.itemsList.SetFilteringEnabled(true)
+        m.itemsList.SetShowFilter(true)
 
         m.agendaList = newList("Agenda", "All items (excluding DONE)", []list.Item{})
         m.agendaList.SetDelegate(newCompactItemDelegate())
@@ -582,8 +620,313 @@ func newAppModel(dir string, db *store.DB) appModel {
         m.textarea.ShowLineNumbers = false
 
         m.refreshProjects()
+
+        // Best-effort: restore last TUI screen/selection for this workspace.
+        if st, err := s.LoadTUIState(); err == nil {
+                m.applySavedTUIState(st)
+        }
+
         m.captureStoreModTimes()
+        m.refreshEventsTail()
         return m
+}
+
+const eventsTailLimit = 500
+
+func (m *appModel) refreshEventsTail() {
+        if m == nil {
+                return
+        }
+        evs, err := store.ReadEventsTail(m.dir, eventsTailLimit)
+        if err != nil {
+                // Best-effort: history is optional UI sugar.
+                m.eventsTail = nil
+                m.debugLogf("read events tail: %v", err)
+                return
+        }
+        m.eventsTail = evs
+}
+
+func viewToString(v view) string {
+        switch v {
+        case viewProjects:
+                return "projects"
+        case viewOutlines:
+                return "outlines"
+        case viewOutline:
+                return "outline"
+        case viewItem:
+                return "item"
+        case viewAgenda:
+                return "agenda"
+        default:
+                return "projects"
+        }
+}
+
+func viewFromString(s string) (view, bool) {
+        switch strings.TrimSpace(strings.ToLower(s)) {
+        case "projects":
+                return viewProjects, true
+        case "outlines":
+                return viewOutlines, true
+        case "outline":
+                return viewOutline, true
+        case "item":
+                return viewItem, true
+        case "agenda":
+                return viewAgenda, true
+        default:
+                return viewProjects, false
+        }
+}
+
+func paneToString(p pane) string {
+        switch p {
+        case paneOutline:
+                return "outline"
+        case paneDetail:
+                return "detail"
+        default:
+                return "outline"
+        }
+}
+
+func paneFromString(s string) (pane, bool) {
+        switch strings.TrimSpace(strings.ToLower(s)) {
+        case "outline":
+                return paneOutline, true
+        case "detail":
+                return paneDetail, true
+        default:
+                return paneOutline, false
+        }
+}
+
+func outlineViewModeToString(v outlineViewMode) string {
+        switch v {
+        case outlineViewModeColumns:
+                return "columns"
+        default:
+                return "list"
+        }
+}
+
+func outlineViewModeFromString(s string) (outlineViewMode, bool) {
+        switch strings.TrimSpace(strings.ToLower(s)) {
+        case "columns":
+                return outlineViewModeColumns, true
+        case "list":
+                return outlineViewModeList, true
+        default:
+                return outlineViewModeList, false
+        }
+}
+
+func (m appModel) snapshotTUIState() *store.TUIState {
+        st := &store.TUIState{
+                View:              viewToString(m.view),
+                SelectedProjectID: strings.TrimSpace(m.selectedProjectID),
+                SelectedOutlineID: strings.TrimSpace(m.selectedOutlineID),
+                OpenItemID:        strings.TrimSpace(m.openItemID),
+                ReturnView:        "",
+                AgendaReturnView:  "",
+                Pane:              paneToString(m.pane),
+                ShowPreview:       m.showPreview,
+        }
+
+        if m.hasReturnView {
+                st.ReturnView = viewToString(m.returnView)
+        }
+        if m.hasAgendaReturnView {
+                st.AgendaReturnView = viewToString(m.agendaReturnView)
+        }
+
+        if len(m.outlineViewMode) > 0 {
+                st.OutlineViewMode = map[string]string{}
+                for id, v := range m.outlineViewMode {
+                        if strings.TrimSpace(id) == "" {
+                                continue
+                        }
+                        st.OutlineViewMode[id] = outlineViewModeToString(v)
+                }
+        }
+
+        return st
+}
+
+func (m *appModel) applySavedTUIState(st *store.TUIState) {
+        if m == nil || st == nil || m.db == nil {
+                return
+        }
+
+        // Restore per-outline view mode.
+        if len(st.OutlineViewMode) > 0 {
+                m.outlineViewMode = map[string]outlineViewMode{}
+                for id, mode := range st.OutlineViewMode {
+                        id = strings.TrimSpace(id)
+                        if id == "" {
+                                continue
+                        }
+                        if v, ok := outlineViewModeFromString(mode); ok {
+                                m.outlineViewMode[id] = v
+                        }
+                }
+        }
+
+        // Restore split-preview state (it may be forced off later due to width).
+        if p, ok := paneFromString(st.Pane); ok {
+                m.pane = p
+        }
+        m.showPreview = st.ShowPreview
+
+        wantView, _ := viewFromString(st.View)
+
+        // If we were on an item view, prefer the item's project/outline to keep breadcrumbs consistent.
+        openItemID := strings.TrimSpace(st.OpenItemID)
+        if wantView == viewItem && openItemID != "" {
+                if it, ok := m.db.FindItem(openItemID); ok && it != nil && !it.Archived {
+                        m.selectedProjectID = it.ProjectID
+                        m.selectedOutlineID = it.OutlineID
+                } else {
+                        wantView = viewProjects
+                        openItemID = ""
+                }
+        }
+
+        // Resolve/select project.
+        projectID := strings.TrimSpace(m.selectedProjectID)
+        if projectID == "" {
+                projectID = strings.TrimSpace(st.SelectedProjectID)
+        }
+        if projectID == "" {
+                projectID = strings.TrimSpace(m.db.CurrentProjectID)
+        }
+        if projectID != "" {
+                if p, ok := m.db.FindProject(projectID); !ok || p == nil || p.Archived {
+                        projectID = ""
+                }
+        }
+        if projectID == "" {
+                for _, p := range m.db.Projects {
+                        if !p.Archived {
+                                projectID = p.ID
+                                break
+                        }
+                }
+        }
+
+        m.refreshProjects()
+        if projectID != "" {
+                m.selectedProjectID = projectID
+                selectListItemByID(&m.projectsList, projectID)
+        }
+
+        // Resolve/select outline if needed.
+        outlineID := strings.TrimSpace(m.selectedOutlineID)
+        if outlineID == "" {
+                outlineID = strings.TrimSpace(st.SelectedOutlineID)
+        }
+        if outlineID != "" {
+                if o, ok := m.db.FindOutline(outlineID); !ok || o == nil || o.Archived || (projectID != "" && o.ProjectID != projectID) {
+                        outlineID = ""
+                }
+        }
+        if outlineID == "" && projectID != "" {
+                for _, o := range m.db.Outlines {
+                        if o.ProjectID == projectID && !o.Archived {
+                                outlineID = o.ID
+                                break
+                        }
+                }
+        }
+
+        if wantView == viewProjects {
+                m.view = viewProjects
+                return
+        }
+
+        // Outlines view requires a project selection.
+        if projectID == "" {
+                m.view = viewProjects
+                return
+        }
+
+        m.refreshOutlines(projectID)
+        m.view = viewOutlines
+        if outlineID != "" {
+                m.selectedOutlineID = outlineID
+                selectListItemByID(&m.outlinesList, outlineID)
+        }
+
+        if wantView == viewOutlines {
+                return
+        }
+
+        // Outline/item views require a selected outline.
+        if outlineID == "" {
+                m.view = viewOutlines
+                return
+        }
+        ol, ok := m.db.FindOutline(outlineID)
+        if !ok || ol == nil {
+                m.view = viewOutlines
+                return
+        }
+
+        m.selectedOutline = ol
+        m.collapsed = map[string]bool{}
+        m.collapseInitialized = false
+        m.refreshItems(*ol)
+        m.openItemID = ""
+        m.hasReturnView = false
+        m.hasAgendaReturnView = false
+
+        if wantView == viewOutline {
+                m.view = viewOutline
+                // Keep user preference for split preview.
+                return
+        }
+
+        if wantView == viewAgenda {
+                m.view = viewAgenda
+                if rv, ok := viewFromString(st.AgendaReturnView); ok && rv != viewAgenda {
+                        m.hasAgendaReturnView = true
+                        m.agendaReturnView = rv
+                }
+                m.refreshAgenda()
+                return
+        }
+
+        // Item view.
+        if wantView == viewItem && openItemID != "" {
+                if it, ok := m.db.FindItem(openItemID); ok && it != nil && !it.Archived {
+                        m.openItemID = it.ID
+                        m.view = viewItem
+                        m.showPreview = false
+                        m.pane = paneOutline
+
+                        if rv, ok := viewFromString(st.ReturnView); ok && rv != viewItem {
+                                m.hasReturnView = true
+                                m.returnView = rv
+                        } else {
+                                m.hasReturnView = true
+                                m.returnView = viewOutline
+                        }
+                        return
+                }
+        }
+
+        // Fallback if anything doesn't resolve.
+        m.view = viewOutlines
+}
+
+func (m appModel) quitWithStateCmd() tea.Cmd {
+        snap := m
+        return func() tea.Msg {
+                _ = snap.store.SaveTUIState(snap.snapshotTUIState())
+                return tea.Quit()
+        }
 }
 
 func (m *appModel) debugLogf(format string, args ...any) {
@@ -613,8 +956,23 @@ func (m appModel) debugOverlayView() string {
         if p.lastAt.IsZero() {
                 return ""
         }
+        in := m.inputDbg
         body := strings.Join([]string{
                 "DEBUG (toggle with D)",
+                func() string {
+                        if in.lastAt.IsZero() {
+                                return "last input: (none)"
+                        }
+                        s := strings.TrimSpace(in.lastStr)
+                        if s == "" {
+                                s = "(empty)"
+                        }
+                        // Avoid huge dumps.
+                        if len(s) > 140 {
+                                s = s[:140] + "…"
+                        }
+                        return fmt.Sprintf("last input: %s  %s  %q", in.lastAt.Format("15:04:05.000"), in.lastType, s)
+                }(),
                 fmt.Sprintf("last preview: %s  dur=%s  item=%s  size=%dx%d",
                         p.lastAt.Format("15:04:05.000"), p.lastDur, p.lastItemID, p.lastW, p.lastH),
                 fmt.Sprintf("lens: title=%d desc=%d cache=%d", p.lastTitleLen, p.lastDescLen, p.lastCacheLen),
@@ -634,9 +992,9 @@ func (m appModel) debugOverlayView() string {
         }, "\n")
         box := lipgloss.NewStyle().
                 Border(lipgloss.RoundedBorder()).
-                BorderForeground(lipgloss.Color("240")).
-                Background(lipgloss.Color("235")).
-                Foreground(lipgloss.Color("255")).
+                BorderForeground(colorMuted).
+                Background(colorSurfaceBg).
+                Foreground(colorSurfaceFg).
                 Padding(1, 2)
         return box.Render(body)
 }
@@ -698,7 +1056,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.previewCacheForID = strings.TrimSpace(msg.itemID)
                         m.previewCacheW = msg.w
                         m.previewCacheH = msg.h
-                        m.previewCache = renderItemDetail(m.db, it.outline, it.row.item, msg.w, msg.h, m.pane == paneDetail)
+                        m.previewCache = renderItemDetail(m.db, it.outline, it.row.item, msg.w, msg.h, m.pane == paneDetail, m.eventsTail)
                         dur := time.Since(start)
 
                         if m.debugEnabled {
@@ -747,10 +1105,27 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 return m, nil
 
         case tea.KeyMsg:
+                if m.debugEnabled {
+                        m.inputDbg.lastAt = time.Now()
+                        m.inputDbg.lastType = fmt.Sprintf("%T", msg)
+                        m.inputDbg.lastStr = msg.String()
+                }
+                // Write every key event to the debug log (if configured).
+                m.debugKeyMsg(msg)
                 // If a modal is open, route all keys to the modal handler so text inputs behave
                 // normally (e.g. backspace edits).
                 if m.modal != modalNone {
                         return m.updateOutline(msg)
+                }
+                // When filtering the outline list, capture all keystrokes for the filter input.
+                // This prevents global bindings like "a" (agenda) from triggering while typing.
+                if m.view == viewOutline && m.itemsList.SettingFilter() {
+                        switch msg.String() {
+                        case "ctrl+c":
+                                return m, m.quitWithStateCmd()
+                        default:
+                                return m.updateOutline(msg)
+                        }
                 }
                 if m.view == viewAgenda {
                         return m.updateAgenda(msg)
@@ -758,7 +1133,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
                 switch msg.String() {
                 case "ctrl+c", "q":
-                        return m, tea.Quit
+                        return m, m.quitWithStateCmd()
                 case "x", "?":
                         m.openActionPanel(actionPanelContext)
                         return m, nil
@@ -794,6 +1169,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, nil
                         }
                 case "backspace":
+                        // While filtering the outline list, backspace edits the filter input.
+                        if m.view == viewOutline && m.itemsList.SettingFilter() {
+                                break
+                        }
                         if m.view == viewItem {
                                 if m.hasReturnView {
                                         m.view = m.returnView
@@ -835,6 +1214,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, nil
                         }
                 case "esc":
+                        // When the outline list is filtering or filtered, ESC should cancel/clear the filter
+                        // instead of navigating "back".
+                        if m.view == viewOutline && m.modal == modalNone && (m.itemsList.SettingFilter() || m.itemsList.IsFiltered()) {
+                                break
+                        }
                         if m.view == viewItem {
                                 if m.hasReturnView {
                                         m.view = m.returnView
@@ -1016,6 +1400,47 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 default:
                         return m, nil
                 }
+
+        default:
+                if m.debugEnabled {
+                        m.inputDbg.lastAt = time.Now()
+                        m.inputDbg.lastType = fmt.Sprintf("%T", msg)
+                        if s, ok := any(msg).(fmt.Stringer); ok {
+                                m.inputDbg.lastStr = s.String()
+                        } else {
+                                m.inputDbg.lastStr = ""
+                        }
+                }
+                // Terminal.app Option+Arrow often arrives as an unknown CSI sequence in Bubble Tea.
+                // Log it (and decoded bytes) so we can map it reliably.
+                if m.debugEnabled && strings.TrimSpace(m.debugLogPath) != "" {
+                        if s, ok := any(msg).(fmt.Stringer); ok {
+                                raw := s.String()
+                                if strings.HasPrefix(raw, "?CSI[") {
+                                        decoded, _ := decodeUnknownCSIString(raw)
+                                        (&m).debugLogf("csi view=%s pane=%s modal=%d str=%q decoded=%q",
+                                                viewToString(m.view), paneToString(m.pane), int(m.modal), raw, decoded)
+                                }
+                        }
+                }
+                // Bubble list filtering (and related UI like cursor blinking) emits non-key messages
+                // via Cmds. If we're filtering (or have a filter applied) in the outline view, we must
+                // forward these messages back into the list model or filtering will appear "stuck".
+                if m.view == viewOutline && (m.itemsList.SettingFilter() || m.itemsList.IsFiltered()) {
+                        return m.updateOutline(msg)
+                }
+                // Some terminals (notably macOS Terminal.app) emit Option/Alt+Arrow as CSI
+                // sequences Bubble Tea doesn't map (it reports them as "unknown CSI").
+                // Best-effort: interpret those sequences for outline move/indent/outdent.
+                if s, ok := any(msg).(fmt.Stringer); ok {
+                        if m.view == viewOutline && m.modal == modalNone && m.pane == paneOutline && !m.itemsList.SettingFilter() {
+                                if km, ok := keyMsgFromUnknownCSIString(s.String()); ok {
+                                        if handled, cmd := m.mutateOutlineByKey(km); handled {
+                                                return m, cmd
+                                        }
+                                }
+                        }
+                }
         }
 
         return m, nil
@@ -1131,7 +1556,14 @@ func (m *appModel) breadcrumbText() string {
         }
 
         if m.view == viewOutline {
-                return strings.Join(parts, " > ")
+                base := strings.Join(parts, " > ")
+                if m.itemsList.IsFiltered() {
+                        f := strings.TrimSpace(m.itemsList.FilterValue())
+                        if f != "" {
+                                return base + "  /" + f
+                        }
+                }
+                return base
         }
 
         if m.view == viewItem {
@@ -1318,8 +1750,8 @@ func (m appModel) minibufferView() string {
         return lipgloss.NewStyle().
                 Width(w).
                 Padding(0, 1).
-                Background(lipgloss.Color("236")).
-                Foreground(lipgloss.Color("255")).
+                Background(colorControlBg).
+                Foreground(colorSurfaceFg).
                 Render(txt)
 }
 
@@ -1658,7 +2090,14 @@ func (m *appModel) refreshItems(outline model.Outline) {
         }
         // Always-present affordance for adding an item (useful for empty outlines).
         items = append(items, addItemRow{})
-        m.itemsList.SetItems(items)
+        // If a filter is active, SetItems returns a Cmd that recomputes filtered matches.
+        // refreshItems isn't part of the main update-return-cmd path, so we apply that Cmd
+        // immediately to keep filtering responsive during refreshes.
+        if cmd := m.itemsList.SetItems(items); cmd != nil {
+                if msg := cmd(); msg != nil {
+                        m.itemsList, _ = m.itemsList.Update(msg)
+                }
+        }
         if curID != "" {
                 selectListItemByID(&m.itemsList, curID)
         }
@@ -1957,7 +2396,7 @@ func (m *appModel) viewItem() string {
         }
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-        card := renderItemDetail(m.db, *outline, *it, contentW, bodyHeight, true)
+        card := renderItemDetail(m.db, *outline, *it, contentW, bodyHeight, true, m.eventsTail)
         block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + card
         return lipgloss.PlaceHorizontal(w, lipgloss.Center, block)
 }
@@ -2052,11 +2491,11 @@ func (m *appModel) renderTextAreaModal(title string) string {
         // components inside a modal with a background color.
         btnBase := lipgloss.NewStyle().
                 Padding(0, 1).
-                Foreground(lipgloss.Color("252")).
-                Background(lipgloss.Color("235"))
+                Foreground(colorSurfaceFg).
+                Background(colorControlBg)
         btnActive := btnBase.Copy().
-                Foreground(lipgloss.Color("235")).
-                Background(lipgloss.Color("62")).
+                Foreground(colorSelectedFg).
+                Background(colorAccent).
                 Bold(true)
 
         save := btnBase.Render("Save")
@@ -2068,7 +2507,7 @@ func (m *appModel) renderTextAreaModal(title string) string {
                 cancel = btnActive.Render("Cancel")
         }
 
-        sep := lipgloss.NewStyle().Background(lipgloss.Color("235")).Render(" ")
+        sep := lipgloss.NewStyle().Background(colorControlBg).Render(" ")
         controls := lipgloss.JoinHorizontal(lipgloss.Top, save, sep, cancel)
         body := strings.Join([]string{
                 m.textarea.View(),
@@ -2110,6 +2549,7 @@ func (m *appModel) reloadFromDisk() error {
         }
         m.db = db
         m.captureStoreModTimes()
+        m.refreshEventsTail()
 
         // Refresh current view (and keep selection if possible).
         switch m.view {
@@ -2498,6 +2938,40 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
         switch msg := msg.(type) {
         case tea.KeyMsg:
+                // Enter outline filtering mode (Bubble list default is "/"), and do it early so it's not
+                // impacted by any other outline key handling.
+                if msg.String() == "/" && m.modal == modalNone {
+                        before := m.itemsList.SettingFilter()
+                        var cmd tea.Cmd
+                        m.itemsList, cmd = m.itemsList.Update(msg)
+                        // Give a tiny hint so it's obvious the app is now capturing keystrokes for filtering.
+                        if !before && m.itemsList.SettingFilter() {
+                                m.showMinibuffer("Filter: type to search titles (fuzzy). enter: apply  esc: cancel")
+                        }
+                        return m, cmd
+                }
+
+                // When the user is editing the filter input, the list should own keystrokes.
+                // Otherwise keys like Enter/j/k would be interpreted as "open item"/navigation.
+                if m.itemsList.SettingFilter() {
+                        beforeID := ""
+                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                beforeID = strings.TrimSpace(it.row.item.ID)
+                        }
+                        var cmd tea.Cmd
+                        m.itemsList, cmd = m.itemsList.Update(msg)
+                        if m.splitPreviewVisible() {
+                                afterID := ""
+                                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                        afterID = strings.TrimSpace(it.row.item.ID)
+                                }
+                                if beforeID != afterID {
+                                        return m, tea.Batch(cmd, m.schedulePreviewCompute())
+                                }
+                        }
+                        return m, cmd
+                }
+
                 // Handle ESC-prefix Alt sequences (ESC then key).
                 if m.pendingEsc {
                         m.pendingEsc = false
@@ -2749,7 +3223,7 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
         case tea.KeyMsg:
                 switch km.String() {
                 case "ctrl+c", "q":
-                        return m, tea.Quit
+                        return m, m.quitWithStateCmd()
                 case "x", "?":
                         m.openActionPanel(actionPanelContext)
                         return m, nil
@@ -3339,7 +3813,7 @@ func overlayCenter(bg, fg string, w, h int) string {
         }
 
         // Shadow to give the modal depth.
-        shadowStyle := lipgloss.NewStyle().Background(lipgloss.Color("236"))
+        shadowStyle := lipgloss.NewStyle().Background(colorShadow)
         shadowLine := shadowStyle.Render(strings.Repeat(" ", fgW))
         shadow := make([]string, 0, fgH)
         for i := 0; i < fgH; i++ {
@@ -3379,7 +3853,11 @@ func overlayAt(bgLines []string, fgLines []string, w, x, y, fgW int) {
 func dimBackground(s string) string {
         // A simple "scrim" effect: desaturate + faint. This keeps layout identical and
         // makes the modal feel closer without destroying the context behind it.
-        return lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Faint(true).Render(s)
+        if lipgloss.HasDarkBackground() {
+                return lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Faint(true).Render(s)
+        }
+        // On light terminals, faint often becomes illegible; just soften the foreground.
+        return lipgloss.NewStyle().Foreground(lipgloss.Color("248")).Render(s)
 }
 
 func renderModalBox(screenWidth int, title, body string) string {
@@ -3401,8 +3879,9 @@ func renderModalBox(screenWidth int, title, body string) string {
                 Width(w).
                 Padding(1, 2).
                 Border(lipgloss.RoundedBorder()).
-                BorderForeground(lipgloss.Color("62")).
-                Background(lipgloss.Color("235"))
+                BorderForeground(colorAccent).
+                Foreground(colorSurfaceFg).
+                Background(colorSurfaceBg)
         return box.Render(content)
 }
 
@@ -3535,7 +4014,7 @@ func (m *appModel) toggleCollapseAll() {
 
 func (m *appModel) mutateOutlineByKey(msg tea.KeyMsg) (bool, tea.Cmd) {
         // Move item down/up.
-        if isAltDown(msg) {
+        if isMoveDown(msg) {
                 itemID := ""
                 if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
                         itemID = it.row.item.ID
@@ -3545,7 +4024,7 @@ func (m *appModel) mutateOutlineByKey(msg tea.KeyMsg) (bool, tea.Cmd) {
                 }
                 return true, nil
         }
-        if isAltUp(msg) {
+        if isMoveUp(msg) {
                 itemID := ""
                 if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
                         itemID = it.row.item.ID
@@ -3556,7 +4035,7 @@ func (m *appModel) mutateOutlineByKey(msg tea.KeyMsg) (bool, tea.Cmd) {
                 return true, nil
         }
         // Indent/outdent.
-        if isAltRight(msg) {
+        if isIndent(msg) {
                 itemID := ""
                 if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
                         itemID = it.row.item.ID
@@ -3566,7 +4045,7 @@ func (m *appModel) mutateOutlineByKey(msg tea.KeyMsg) (bool, tea.Cmd) {
                 }
                 return true, nil
         }
-        if isAltLeft(msg) {
+        if isOutdent(msg) {
                 itemID := ""
                 if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
                         itemID = it.row.item.ID
@@ -3577,6 +4056,105 @@ func (m *appModel) mutateOutlineByKey(msg tea.KeyMsg) (bool, tea.Cmd) {
                 return true, nil
         }
         return false, nil
+}
+
+// Move/indent key helpers.
+//
+// Alt+Arrows work in terminals that either:
+// - report modifier keys (Bubble Tea sets msg.Alt + arrow type), or
+// - send ESC then <key> (handled via m.pendingEsc earlier in Update()).
+//
+// macOS Terminal.app often sends CSI sequences with a different modifier code
+// (e.g. ";9") that Bubble Tea treats as unknown CSI. As a reliable
+// cross-terminal fallback we also support Ctrl+Shift+Arrows for move/indent.
+func isMoveDown(msg tea.KeyMsg) bool {
+        // Fallbacks that don't shadow navigation keys.
+        if msg.String() == "ctrl+j" {
+                return true
+        }
+        return isAltDown(msg) || msg.Type == tea.KeyShiftDown
+}
+
+func isMoveUp(msg tea.KeyMsg) bool {
+        if msg.String() == "ctrl+k" {
+                return true
+        }
+        return isAltUp(msg) || msg.Type == tea.KeyShiftUp
+}
+
+func isIndent(msg tea.KeyMsg) bool {
+        // Keep indent/outdent on Alt+Left/Right; user reports this already works in Terminal.app.
+        return isAltRight(msg)
+}
+
+func isOutdent(msg tea.KeyMsg) bool {
+        return isAltLeft(msg)
+}
+
+// keyMsgFromUnknownCSIString attempts to interpret Bubble Tea's "unknown CSI"
+// debug strings (e.g. "?CSI[49 59 57 65]?") for terminals that emit modifier
+// sequences Bubble Tea doesn't map (notably macOS Terminal.app Option+Arrow).
+func keyMsgFromUnknownCSIString(s string) (tea.KeyMsg, bool) {
+        seq, ok := decodeUnknownCSIString(s)
+        if !ok {
+                return tea.KeyMsg{}, false
+        }
+
+        // Typical arrow CSI payloads look like: "1;9A" (up), "1;9B" (down), etc.
+        // We interpret ";9" as Alt for the purpose of outline structure operations.
+        if strings.Contains(seq, ";9") {
+                switch {
+                case strings.HasSuffix(seq, "A"):
+                        return tea.KeyMsg{Type: tea.KeyUp, Alt: true}, true
+                case strings.HasSuffix(seq, "B"):
+                        return tea.KeyMsg{Type: tea.KeyDown, Alt: true}, true
+                case strings.HasSuffix(seq, "C"):
+                        return tea.KeyMsg{Type: tea.KeyRight, Alt: true}, true
+                case strings.HasSuffix(seq, "D"):
+                        return tea.KeyMsg{Type: tea.KeyLeft, Alt: true}, true
+                }
+        }
+
+        // Some terminals report Ctrl+Shift arrows with a different modifier code than
+        // Bubble Tea's built-in ";6" mapping. Best-effort support if we see ";10".
+        if strings.Contains(seq, ";10") {
+                switch {
+                case strings.HasSuffix(seq, "A"):
+                        return tea.KeyMsg{Type: tea.KeyCtrlShiftUp}, true
+                case strings.HasSuffix(seq, "B"):
+                        return tea.KeyMsg{Type: tea.KeyCtrlShiftDown}, true
+                case strings.HasSuffix(seq, "C"):
+                        return tea.KeyMsg{Type: tea.KeyCtrlShiftRight}, true
+                case strings.HasSuffix(seq, "D"):
+                        return tea.KeyMsg{Type: tea.KeyCtrlShiftLeft}, true
+                }
+        }
+
+        return tea.KeyMsg{}, false
+}
+
+func decodeUnknownCSIString(s string) (string, bool) {
+        // Bubble Tea formats unknown CSI strings like: "?CSI[49 59 57 65]?"
+        const prefix = "?CSI["
+        const suffix = "]?"
+        if !strings.HasPrefix(s, prefix) || !strings.HasSuffix(s, suffix) {
+                return "", false
+        }
+        body := strings.TrimSuffix(strings.TrimPrefix(s, prefix), suffix)
+        body = strings.TrimSpace(body)
+        if body == "" {
+                return "", false
+        }
+        parts := strings.Fields(body)
+        out := make([]byte, 0, len(parts))
+        for _, p := range parts {
+                n, err := strconv.Atoi(p)
+                if err != nil || n < 0 || n > 255 {
+                        return "", false
+                }
+                out = append(out, byte(n))
+        }
+        return string(out), true
 }
 
 func isAltDown(msg tea.KeyMsg) bool {

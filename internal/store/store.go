@@ -623,3 +623,58 @@ func ReadEvents(dir string, limit int) ([]model.Event, error) {
         }
         return out, nil
 }
+
+// ReadEventsTail reads the last N events from the append-only events log.
+//
+// The returned slice is in chronological order (oldest-first within the returned window).
+// If limit <= 0, this behaves like ReadEvents(dir, 0) and returns all events.
+func ReadEventsTail(dir string, limit int) ([]model.Event, error) {
+        if limit <= 0 {
+                return ReadEvents(dir, 0)
+        }
+
+        path := filepath.Join(dir, eventsFileName)
+        f, err := os.Open(path)
+        if err != nil {
+                if errors.Is(err, os.ErrNotExist) {
+                        return []model.Event{}, nil
+                }
+                return nil, err
+        }
+        defer f.Close()
+
+        // Ring buffer for the last `limit` events.
+        ring := make([]model.Event, limit)
+        start := 0
+        size := 0
+
+        sc := bufio.NewScanner(f)
+        for sc.Scan() {
+                var ev model.Event
+                if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
+                        return nil, err
+                }
+                if size < limit {
+                        ring[size] = ev
+                        size++
+                } else {
+                        ring[start] = ev
+                        start = (start + 1) % limit
+                }
+        }
+        if err := sc.Err(); err != nil {
+                return nil, err
+        }
+
+        if size == 0 {
+                return []model.Event{}, nil
+        }
+        if size < limit {
+                return ring[:size], nil
+        }
+
+        out := make([]model.Event, 0, limit)
+        out = append(out, ring[start:]...)
+        out = append(out, ring[:start]...)
+        return out, nil
+}

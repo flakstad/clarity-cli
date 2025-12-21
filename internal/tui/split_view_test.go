@@ -89,7 +89,7 @@ func TestViewOutline_SplitPreview_RendersDetailPaneAndUsesOneThirdWidth(t *testi
         m.previewCacheForID = "item-a"
         m.previewCacheW = rightW
         m.previewCacheH = bodyH
-        m.previewCache = renderItemDetail(db, db.Outlines[0], db.Items[0], rightW, bodyH, false)
+        m.previewCache = renderItemDetail(db, db.Outlines[0], db.Items[0], rightW, bodyH, false, nil)
 
         out := m.viewOutline()
         if strings.Contains(out, "Preview") {

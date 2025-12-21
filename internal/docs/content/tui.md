@@ -9,9 +9,11 @@ Current scope (early):
 - Optional preview pane for item details (outline on the left, preview on the right)
 - Full-screen item view (single pane)
 - Auto-refresh when the local store changes (polls file mtimes)
+- Item details include a recent history section (from the local `events.jsonl` log)
 - Outline shows progress cookies for items with children (e.g. `1/2`)
 - Create items directly from the TUI (sibling and subitem)
 - Reorder and restructure items (reorder, indent, outdent)
+- On quit, remembers your last screen/selection (per workspace) and restores it on next launch
 
 Key bindings:
 - `x` / `?`: open the action panel (shows available commands for the current context)
@@ -21,6 +23,7 @@ Key bindings:
 - `a`: open *Agenda Commands* (then press `t` to list all TODO entries)
 - `c`: open the Capture menu (action panel) (coming soon)
 - `v`: toggle experimental column view (outline screen only)
+- `/`: filter outline items (type to filter; `enter` applies; `esc` clears)
 - `enter`: open selected item (single-pane item view)
 - `o`: toggle preview pane (split view; auto-collapses on narrow terminals `<80` cols)
 - `backspace` or `esc`: go back (from item view → outline; from outline → previous screen)
@@ -43,6 +46,8 @@ Outline movement (hold Alt):
 - `alt+↑/↓` (or `alt+k/j`, `alt+p/n`): move item up/down among siblings
 - `alt+→` (or `alt+l/f`): indent (become child of previous sibling)
 - `alt+←` (or `alt+h/b`): outdent (become sibling after parent)
+- `shift+↑/↓`: move item up/down among siblings (fallback; works in macOS Terminal.app where ctrl+↑/↓ may not get delivered)
+- `ctrl+k/j`: move item up/down among siblings (fallback; works in macOS Terminal.app where `shift+↑/↓` is indistinguishable from plain arrows)
 
 Editing:
 - `e`: edit title of the selected item (Enter saves, Esc cancels)
@@ -73,6 +78,7 @@ Theme detection:
 - If your terminal reports the wrong background (e.g. dialogs look dark on a light theme), you can override:
   - `CLARITY_TUI_THEME=light` (or `dark` / `auto`)
   - or `CLARITY_TUI_DARKBG=false` (or `true`)
+- Note: some terminals (and setups like tmux) may not reliably report background. If iTerm is showing dark/black surfaces but you’re on a light theme, set `CLARITY_TUI_THEME=light` (or `CLARITY_TUI_DARKBG=false`) in your shell profile for that terminal.
 
 Comment/worklog/description editor:
 - `ctrl+s`: save

@@ -12,7 +12,7 @@ import (
         "github.com/charmbracelet/lipgloss"
 )
 
-func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width, height int, focused bool) string {
+func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width, height int, focused bool, events []model.Event) string {
         titleStyle := lipgloss.NewStyle().Bold(true)
         if isEndState(outline, it.StatusID) {
                 titleStyle = faintIfDark(lipgloss.NewStyle()).
@@ -103,6 +103,9 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
                 "",
                 labelStyle.Render("Recent worklog (yours)"),
                 renderWorklog(myWorklog, 3),
+                "",
+                labelStyle.Render("History"),
+                renderHistory(db, events, it.ID, 8),
                 "",
                 labelStyle.Render("Hints"),
                 "- tab toggles focus between outline/detail",
@@ -216,4 +219,140 @@ func fmtTS(t time.Time) string {
                 return "-"
         }
         return t.Local().Format("2006-01-02 15:04")
+}
+
+func renderHistory(db *store.DB, events []model.Event, itemID string, max int) string {
+        if max <= 0 {
+                max = 1
+        }
+        if len(events) == 0 {
+                return "(no events)"
+        }
+
+        // Filter once, then render newest-first.
+        matches := make([]model.Event, 0)
+        for _, ev := range events {
+                if eventIsForItem(ev, itemID) {
+                        matches = append(matches, ev)
+                }
+        }
+        if len(matches) == 0 {
+                return "(no events)"
+        }
+
+        lines := make([]string, 0, max+1)
+        shown := 0
+        for i := len(matches) - 1; i >= 0 && shown < max; i-- {
+                ev := matches[i]
+                actor := strings.TrimSpace(ev.ActorID)
+                if db != nil {
+                        if a, ok := db.FindActor(actor); ok && strings.TrimSpace(a.Name) != "" {
+                                actor = a.Name
+                        }
+                }
+                lines = append(lines, fmt.Sprintf("- %s  %s  %s", fmtTS(ev.TS), actor, eventSummary(ev)))
+                shown++
+        }
+        if len(matches) > max {
+                lines = append(lines, fmt.Sprintf("… and %d more", len(matches)-max))
+        }
+        return strings.Join(lines, "\n")
+}
+
+func eventIsForItem(ev model.Event, itemID string) bool {
+        id := strings.TrimSpace(itemID)
+        if id == "" {
+                return false
+        }
+        if strings.TrimSpace(ev.EntityID) == id {
+                return true
+        }
+        m, ok := ev.Payload.(map[string]any)
+        if !ok {
+                return false
+        }
+        switch strings.TrimSpace(ev.Type) {
+        case "comment.add", "worklog.add":
+                if v, ok := m["itemId"].(string); ok && strings.TrimSpace(v) == id {
+                        return true
+                }
+        case "dep.add":
+                if v, ok := m["fromItemId"].(string); ok && strings.TrimSpace(v) == id {
+                        return true
+                }
+                if v, ok := m["toItemId"].(string); ok && strings.TrimSpace(v) == id {
+                        return true
+                }
+        }
+        return false
+}
+
+func eventSummary(ev model.Event) string {
+        typ := strings.TrimSpace(ev.Type)
+        if typ == "" {
+                typ = "(unknown)"
+        }
+        m, ok := ev.Payload.(map[string]any)
+        if !ok {
+                return typ
+        }
+
+        switch typ {
+        case "item.set_title":
+                if v, ok := m["title"].(string); ok && strings.TrimSpace(v) != "" {
+                        return "set title: " + truncateInline(v, 60)
+                }
+        case "item.set_status":
+                if v, ok := m["status"].(string); ok {
+                        if strings.TrimSpace(v) == "" {
+                                return "set status: none"
+                        }
+                        return "set status: " + v
+                }
+        case "item.set_description":
+                return "updated description"
+        case "item.set_priority":
+                if v, ok := m["priority"].(bool); ok {
+                        return fmt.Sprintf("set priority: %v", v)
+                }
+        case "item.set_on_hold":
+                if v, ok := m["onHold"].(bool); ok {
+                        return fmt.Sprintf("set on hold: %v", v)
+                }
+        case "item.set_assign":
+                if v, ok := m["assignedActorId"]; ok {
+                        if v == nil {
+                                return "unassigned"
+                        }
+                        if s, ok := v.(string); ok {
+                                return "assigned: " + s
+                        }
+                }
+        case "comment.add":
+                if v, ok := m["body"].(string); ok && strings.TrimSpace(v) != "" {
+                        return "comment: " + truncateInline(v, 60)
+                }
+                return "comment added"
+        case "worklog.add":
+                if v, ok := m["body"].(string); ok && strings.TrimSpace(v) != "" {
+                        return "worklog: " + truncateInline(v, 60)
+                }
+                return "worklog added"
+        case "dep.add":
+                from, _ := m["fromItemId"].(string)
+                to, _ := m["toItemId"].(string)
+                return "dep: " + strings.TrimSpace(from) + " -> " + strings.TrimSpace(to)
+        }
+
+        return typ
+}
+
+func truncateInline(s string, max int) string {
+        s = strings.TrimSpace(s)
+        s = strings.ReplaceAll(s, "\n", " ")
+        s = strings.ReplaceAll(s, "\r", " ")
+        if max <= 0 || len(s) <= max {
+                return s
+        }
+        return s[:max] + "…"
 }
