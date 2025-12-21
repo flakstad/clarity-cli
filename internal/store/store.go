@@ -32,6 +32,12 @@ type DB struct {
         Deps             []model.Dependency   `json:"deps"`
         Comments         []model.Comment      `json:"comments"`
         Worklog          []model.WorklogEntry `json:"worklog"`
+
+        // Derived indexes for fast per-item lookups in the TUI. These are not persisted.
+        idxBuilt            bool                            `json:"-"`
+        idxChildrenByParent map[string][]model.Item         `json:"-"`
+        idxCommentsByItem   map[string][]model.Comment      `json:"-"`
+        idxWorklogByItem    map[string][]model.WorklogEntry `json:"-"`
 }
 
 type Store struct {
@@ -481,6 +487,81 @@ func (db *DB) FindItem(id string) (*model.Item, bool) {
                 }
         }
         return nil, false
+}
+
+func (db *DB) ensureIndexes() {
+        if db == nil || db.idxBuilt {
+                return
+        }
+        db.idxChildrenByParent = map[string][]model.Item{}
+        db.idxCommentsByItem = map[string][]model.Comment{}
+        db.idxWorklogByItem = map[string][]model.WorklogEntry{}
+
+        for _, it := range db.Items {
+                if it.Archived {
+                        continue
+                }
+                if it.ParentID == nil {
+                        continue
+                }
+                pid := strings.TrimSpace(*it.ParentID)
+                if pid == "" {
+                        continue
+                }
+                db.idxChildrenByParent[pid] = append(db.idxChildrenByParent[pid], it)
+        }
+
+        for _, c := range db.Comments {
+                id := strings.TrimSpace(c.ItemID)
+                if id == "" {
+                        continue
+                }
+                db.idxCommentsByItem[id] = append(db.idxCommentsByItem[id], c)
+        }
+        for id := range db.idxCommentsByItem {
+                comments := db.idxCommentsByItem[id]
+                sort.Slice(comments, func(i, j int) bool { return comments[i].CreatedAt.After(comments[j].CreatedAt) })
+                db.idxCommentsByItem[id] = comments
+        }
+
+        for _, w := range db.Worklog {
+                id := strings.TrimSpace(w.ItemID)
+                if id == "" {
+                        continue
+                }
+                db.idxWorklogByItem[id] = append(db.idxWorklogByItem[id], w)
+        }
+        for id := range db.idxWorklogByItem {
+                entries := db.idxWorklogByItem[id]
+                sort.Slice(entries, func(i, j int) bool { return entries[i].CreatedAt.After(entries[j].CreatedAt) })
+                db.idxWorklogByItem[id] = entries
+        }
+
+        db.idxBuilt = true
+}
+
+func (db *DB) ChildrenOf(parentItemID string) []model.Item {
+        if db == nil {
+                return nil
+        }
+        db.ensureIndexes()
+        return db.idxChildrenByParent[strings.TrimSpace(parentItemID)]
+}
+
+func (db *DB) CommentsForItem(itemID string) []model.Comment {
+        if db == nil {
+                return nil
+        }
+        db.ensureIndexes()
+        return db.idxCommentsByItem[strings.TrimSpace(itemID)]
+}
+
+func (db *DB) WorklogForItem(itemID string) []model.WorklogEntry {
+        if db == nil {
+                return nil
+        }
+        db.ensureIndexes()
+        return db.idxWorklogByItem[strings.TrimSpace(itemID)]
 }
 
 func NormalizeActorKind(s string) (model.ActorKind, error) {

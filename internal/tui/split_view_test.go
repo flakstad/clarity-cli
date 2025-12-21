@@ -13,7 +13,7 @@ import (
         xansi "github.com/charmbracelet/x/ansi"
 )
 
-func TestViewOutline_SplitPreview_PanesStayFixedWidthPerLine(t *testing.T) {
+func TestViewOutline_SplitPreview_RendersDetailPaneAndUsesOneThirdWidth(t *testing.T) {
         db := &store.DB{
                 CurrentActorID: "act-test",
                 Actors:         []model.Actor{{ID: "act-test", Kind: model.ActorKindHuman, Name: "tester"}},
@@ -54,9 +54,22 @@ func TestViewOutline_SplitPreview_PanesStayFixedWidthPerLine(t *testing.T) {
         m.modal = modalNone
         m.selectedProjectID = "proj-a"
         m.selectedOutlineID = "out-a"
-        // Use a wide terminal so split preview is actually visible.
         m.width = 100
         m.height = 30
+
+        frameH := m.height - 6
+        if frameH < 8 {
+                frameH = 8
+        }
+        bodyH := frameH - (topPadLines + breadcrumbGap + 2)
+        if bodyH < 6 {
+                bodyH = 6
+        }
+        contentW := m.width - 2*splitOuterMargin
+        if contentW < 10 {
+                contentW = 10
+        }
+        _, rightW := splitPaneWidths(contentW)
 
         m.itemsList.SetItems([]list.Item{
                 outlineRowItem{
@@ -72,36 +85,35 @@ func TestViewOutline_SplitPreview_PanesStayFixedWidthPerLine(t *testing.T) {
                 },
         })
 
+        // Pre-seed the cache so viewOutline renders the full detail pane.
+        m.previewCacheForID = "item-a"
+        m.previewCacheW = rightW
+        m.previewCacheH = bodyH
+        m.previewCache = renderItemDetail(db, db.Outlines[0], db.Items[0], rightW, bodyH, false)
+
         out := m.viewOutline()
+        if strings.Contains(out, "Preview") {
+                t.Fatalf("did not expect preview modal overlay; got: %q", out)
+        }
+        if !strings.Contains(out, "Description") || !strings.Contains(out, "Owner: ") {
+                t.Fatalf("expected detail pane content to render; got: %q", out)
+        }
+
+        leftW, _ := splitPaneWidths(contentW)
+        if got := m.itemsList.Width(); got != leftW {
+                t.Fatalf("expected left pane width=%d, got %d", leftW, got)
+        }
+
+        // Ensure stable full-width lines (important for split rendering).
         lines := strings.Split(out, "\n")
-
-        frameH := m.height - 6
-        if frameH < 8 {
-                frameH = 8
-        }
-        bodyHeight := frameH - (topPadLines + breadcrumbGap + 2)
-        if bodyHeight < 6 {
-                bodyHeight = 6
-        }
-
-        // The join block starts after:
-        // - topPadLines leading blank lines
-        // - 1 breadcrumb line
-        // - breadcrumbGap blank lines
-        start := topPadLines + 1 + breadcrumbGap
-
-        if len(lines) < start+bodyHeight {
-                t.Fatalf("unexpected outline view height: got %d lines, need at least %d", len(lines), start+bodyHeight)
-        }
-
-        for i := start; i < start+bodyHeight; i++ {
+        for i := 0; i < len(lines) && i < 20; i++ {
                 if w := xansi.StringWidth(lines[i]); w != m.width {
-                        t.Fatalf("expected split-view line %d to be exactly %d cols wide; got %d: %q", i, m.width, w, lines[i])
+                        t.Fatalf("expected line %d width=%d, got %d (line=%q)", i, m.width, w, lines[i])
                 }
         }
 }
 
-func TestViewOutline_NarrowTerminal_AutoCollapsesPreview(t *testing.T) {
+func TestUpdate_PreviewComputeMsg_IsDebouncedBySeqAndSelection(t *testing.T) {
         db := &store.DB{
                 CurrentActorID: "act-test",
                 Actors:         []model.Actor{{ID: "act-test", Kind: model.ActorKindHuman, Name: "tester"}},
@@ -118,22 +130,32 @@ func TestViewOutline_NarrowTerminal_AutoCollapsesPreview(t *testing.T) {
                         CreatedBy:  "act-test",
                         CreatedAt:  time.Now().UTC(),
                 }},
-                Items: []model.Item{{
-                        ID:           "item-a",
-                        ProjectID:    "proj-a",
-                        OutlineID:    "out-a",
-                        Rank:         "h",
-                        Title:        "Title",
-                        Description:  strings.Repeat("X", 200),
-                        StatusID:     "todo",
-                        Priority:     false,
-                        OnHold:       false,
-                        Archived:     false,
-                        OwnerActorID: "act-test",
-                        CreatedBy:    "act-test",
-                        CreatedAt:    time.Now().UTC(),
-                        UpdatedAt:    time.Now().UTC(),
-                }},
+                Items: []model.Item{
+                        {
+                                ID:           "item-a",
+                                ProjectID:    "proj-a",
+                                OutlineID:    "out-a",
+                                Rank:         "h",
+                                Title:        "A",
+                                StatusID:     "todo",
+                                OwnerActorID: "act-test",
+                                CreatedBy:    "act-test",
+                                CreatedAt:    time.Now().UTC(),
+                                UpdatedAt:    time.Now().UTC(),
+                        },
+                        {
+                                ID:           "item-b",
+                                ProjectID:    "proj-a",
+                                OutlineID:    "out-a",
+                                Rank:         "i",
+                                Title:        "B",
+                                StatusID:     "todo",
+                                OwnerActorID: "act-test",
+                                CreatedBy:    "act-test",
+                                CreatedAt:    time.Now().UTC(),
+                                UpdatedAt:    time.Now().UTC(),
+                        },
+                },
         }
 
         m := newAppModel(t.TempDir(), db)
@@ -142,31 +164,36 @@ func TestViewOutline_NarrowTerminal_AutoCollapsesPreview(t *testing.T) {
         m.modal = modalNone
         m.selectedProjectID = "proj-a"
         m.selectedOutlineID = "out-a"
-        m.width = 40 // narrower than minSplitPreviewW
-        m.height = 20
+        m.width = 100
+        m.height = 30
 
         m.itemsList.SetItems([]list.Item{
-                outlineRowItem{
-                        row: outlineRow{
-                                item:          db.Items[0],
-                                depth:         0,
-                                hasChildren:   false,
-                                collapsed:     false,
-                                doneChildren:  0,
-                                totalChildren: 0,
-                        },
-                        outline: db.Outlines[0],
-                },
+                outlineRowItem{row: outlineRow{item: db.Items[0]}, outline: db.Outlines[0]},
+                outlineRowItem{row: outlineRow{item: db.Items[1]}, outline: db.Outlines[0]},
         })
+        m.itemsList.Select(1) // select item-b
 
-        _ = m.viewOutline()
+        frameH, bodyH, contentW := m.outlineLayout()
+        _ = frameH
+        _, rightW := splitPaneWidths(contentW)
 
-        // Even if the user toggled preview on, narrow terminals should auto-collapse it.
-        if strings.Contains(m.footerText(), "tab: toggle focus") {
-                t.Fatalf("expected no tab focus hint on narrow terminals when preview is not visible; got footer: %q", m.footerText())
+        // Set the current sequence to 2 (meaning seq=1 is stale).
+        m.previewSeq = 2
+        m.previewCacheForID = ""
+        m.previewCache = ""
+
+        // Stale message for different item should be ignored.
+        mm, _ := m.Update(previewComputeMsg{seq: 1, itemID: "item-a", w: rightW, h: bodyH})
+        m = mm.(appModel)
+        if m.previewCacheForID != "" {
+                t.Fatalf("expected no cache update for stale previewComputeMsg; got cacheForID=%q", m.previewCacheForID)
         }
-        if got := m.itemsList.Width(); got != m.width {
-                t.Fatalf("expected outline list to use full width on narrow terminals; got %d, want %d", got, m.width)
+
+        // Current message for selected item should update cache.
+        mm, _ = m.Update(previewComputeMsg{seq: 2, itemID: "item-b", w: rightW, h: bodyH})
+        m = mm.(appModel)
+        if m.previewCacheForID != "item-b" || strings.TrimSpace(m.previewCache) == "" {
+                t.Fatalf("expected cache update for current previewComputeMsg; got cacheForID=%q cacheLen=%d", m.previewCacheForID, len(m.previewCache))
         }
 }
 
@@ -184,6 +211,10 @@ func TestView_ShowsResizingOverlay(t *testing.T) {
         out := m.View()
         if !strings.Contains(out, "Resizing") {
                 t.Fatalf("expected resizing overlay to contain 'Resizing'; got: %q", out)
+        }
+        // Ensure we render "Resizing" only once (centered), not repeated on every row.
+        if n := strings.Count(out, "Resizing"); n != 1 {
+                t.Fatalf("expected resizing overlay to contain 'Resizing' exactly once; got %d occurrences", n)
         }
         // Ensure we render a full-height block (stable during resize).
         lines := strings.Split(out, "\n")

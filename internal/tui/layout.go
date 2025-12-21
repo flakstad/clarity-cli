@@ -29,6 +29,17 @@ func normalizePane(s string, width, height int) string {
 
         for i := range lines {
                 ln := lines[i]
+                // Fast path: avoid computing StringWidth on extremely long lines (can be slow).
+                // If the raw string is huge, it's almost certainly visually wider than the pane;
+                // cut it early so subsequent width computations are bounded.
+                if width > 0 && len(ln) > 8192 {
+                        if width == 1 {
+                                ln = xansi.Cut(ln, 0, 1)
+                        } else {
+                                ln = xansi.Cut(ln, 0, width-1) + "…"
+                        }
+                }
+
                 w := xansi.StringWidth(ln)
 
                 if w > width {

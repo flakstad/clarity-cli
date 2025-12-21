@@ -40,30 +40,11 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
         }
 
         // Direct children (shown to support outline-style nesting).
-        var children []model.Item
-        for _, ch := range db.Items {
-                if ch.Archived {
-                        continue
-                }
-                if ch.OutlineID != it.OutlineID {
-                        continue
-                }
-                if ch.ParentID == nil || *ch.ParentID != it.ID {
-                        continue
-                }
-                children = append(children, ch)
-        }
+        children := db.ChildrenOf(it.ID)
         sort.Slice(children, func(i, j int) bool { return compareOutlineItems(children[i], children[j]) < 0 })
 
         commentsCount := 0
-        var comments []model.Comment
-        for _, c := range db.Comments {
-                if c.ItemID != it.ID {
-                        continue
-                }
-                comments = append(comments, c)
-        }
-        sort.Slice(comments, func(i, j int) bool { return comments[i].CreatedAt.After(comments[j].CreatedAt) })
+        comments := db.CommentsForItem(it.ID)
         commentsCount = len(comments)
 
         worklogCount := "-"
@@ -71,10 +52,7 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
         if db.CurrentActorID != "" {
                 if humanID, ok := db.HumanUserIDForActor(db.CurrentActorID); ok {
                         n := 0
-                        for _, w := range db.Worklog {
-                                if w.ItemID != it.ID {
-                                        continue
-                                }
+                        for _, w := range db.WorklogForItem(it.ID) {
                                 if authorHuman, ok := db.HumanUserIDForActor(w.AuthorID); ok && authorHuman == humanID {
                                         n++
                                         myWorklog = append(myWorklog, w)
@@ -83,7 +61,8 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
                         worklogCount = fmt.Sprintf("%d", n)
                 }
         }
-        sort.Slice(myWorklog, func(i, j int) bool { return myWorklog[i].CreatedAt.After(myWorklog[j].CreatedAt) })
+        // WorklogForItem is sorted by CreatedAt desc; keep stable ordering in case of ties.
+        sort.SliceStable(myWorklog, func(i, j int) bool { return myWorklog[i].CreatedAt.After(myWorklog[j].CreatedAt) })
 
         desc := "(no description)"
         if strings.TrimSpace(it.Description) != "" {

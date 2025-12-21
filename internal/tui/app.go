@@ -38,6 +38,30 @@ type resizeDoneMsg struct{ seq int }
 
 type flashDoneMsg struct{ seq int }
 
+type previewComputeMsg struct {
+        seq    int
+        itemID string
+        w      int
+        h      int
+}
+
+type previewDebug struct {
+        lastAt        time.Time
+        lastItemID    string
+        lastW         int
+        lastH         int
+        lastDur       time.Duration
+        lastCacheLen  int
+        lastTitleLen  int
+        lastDescLen   int
+        lastChildN    int
+        lastCommentN  int
+        lastWorklogN  int
+        lastErr       string
+        lastReason    string
+        lastTickSkips int
+}
+
 type pane int
 
 const (
@@ -123,6 +147,17 @@ type appModel struct {
         flashKind   string
         flashSeq    int
 
+        previewSeq        int
+        previewCacheForID string
+        previewCacheW     int
+        previewCacheH     int
+        previewCache      string
+
+        debugEnabled bool
+        debugOverlay bool
+        debugLogPath string
+        previewDbg   previewDebug
+
         lastDBModTime     time.Time
         lastEventsModTime time.Time
 
@@ -130,12 +165,12 @@ type appModel struct {
 }
 
 const (
-        topPadLines   = 1
-        breadcrumbGap = 1
-        maxContentW   = 96
-        // Split preview is great on wide terminals, but on narrow screens it becomes unusable.
-        // We don't enforce a minimum terminal width; we just automatically collapse to single-pane.
+        topPadLines      = 1
+        breadcrumbGap    = 1
+        maxContentW      = 96
         minSplitPreviewW = 80
+        splitGapW        = 2
+        splitOuterMargin = 2
 )
 
 func newAppModel(dir string, db *store.DB) appModel {
@@ -147,6 +182,12 @@ func newAppModel(dir string, db *store.DB) appModel {
                 view:  viewProjects,
                 pane:  paneOutline,
         }
+
+        if strings.TrimSpace(os.Getenv("CLARITY_TUI_DEBUG")) != "" {
+                m.debugEnabled = true
+                m.debugOverlay = true
+        }
+        m.debugLogPath = strings.TrimSpace(os.Getenv("CLARITY_TUI_DEBUG_LOG"))
 
         m.projectsList = newList("Projects", "Select a project", []list.Item{})
         m.projectsList.SetDelegate(newCompactItemDelegate())
@@ -182,6 +223,61 @@ func newAppModel(dir string, db *store.DB) appModel {
         return m
 }
 
+func (m *appModel) debugLogf(format string, args ...any) {
+        if m == nil || !m.debugEnabled {
+                return
+        }
+        path := strings.TrimSpace(m.debugLogPath)
+        if path == "" {
+                return
+        }
+        line := fmt.Sprintf(format, args...)
+        ts := time.Now().Format("15:04:05.000")
+        _ = os.MkdirAll(filepath.Dir(path), 0o755)
+        f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+        if err != nil {
+                return
+        }
+        defer f.Close()
+        _, _ = fmt.Fprintln(f, ts+" "+line)
+}
+
+func (m appModel) debugOverlayView() string {
+        if !m.debugEnabled || !m.debugOverlay {
+                return ""
+        }
+        p := m.previewDbg
+        if p.lastAt.IsZero() {
+                return ""
+        }
+        body := strings.Join([]string{
+                "DEBUG (toggle with D)",
+                fmt.Sprintf("last preview: %s  dur=%s  item=%s  size=%dx%d",
+                        p.lastAt.Format("15:04:05.000"), p.lastDur, p.lastItemID, p.lastW, p.lastH),
+                fmt.Sprintf("lens: title=%d desc=%d cache=%d", p.lastTitleLen, p.lastDescLen, p.lastCacheLen),
+                fmt.Sprintf("counts: children=%d comments=%d worklog=%d", p.lastChildN, p.lastCommentN, p.lastWorklogN),
+                func() string {
+                        if strings.TrimSpace(p.lastErr) == "" {
+                                return "err: (none)"
+                        }
+                        return "err: " + p.lastErr
+                }(),
+                func() string {
+                        if strings.TrimSpace(p.lastReason) == "" {
+                                return ""
+                        }
+                        return "note: " + p.lastReason
+                }(),
+        }, "\n")
+        box := lipgloss.NewStyle().
+                Border(lipgloss.RoundedBorder()).
+                BorderForeground(lipgloss.Color("240")).
+                Background(lipgloss.Color("235")).
+                Foreground(lipgloss.Color("255")).
+                Padding(1, 2)
+        return box.Render(body)
+}
+
 func (m appModel) Init() tea.Cmd { return tickReload() }
 
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -199,7 +295,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 m.resizing = true
                 m.resizeSeq++
                 seq := m.resizeSeq
-                return m, tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return resizeDoneMsg{seq: seq} })
+                return m, tea.Batch(
+                        tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return resizeDoneMsg{seq: seq} }),
+                        m.schedulePreviewCompute(),
+                )
 
         case resizeDoneMsg:
                 // Debounce: only clear if this corresponds to the latest resize seq.
@@ -218,11 +317,61 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 }
                 return m, nil
 
+        case previewComputeMsg:
+                // Debounced detail-pane rendering for split preview.
+                if msg.seq != m.previewSeq {
+                        m.previewDbg.lastTickSkips++
+                        return m, nil
+                }
+                if !m.splitPreviewVisible() {
+                        return m, nil
+                }
+                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                        if strings.TrimSpace(it.row.item.ID) != strings.TrimSpace(msg.itemID) {
+                                m.previewDbg.lastReason = "selection changed"
+                                return m, nil
+                        }
+                        start := time.Now()
+                        m.previewCacheForID = strings.TrimSpace(msg.itemID)
+                        m.previewCacheW = msg.w
+                        m.previewCacheH = msg.h
+                        m.previewCache = renderItemDetail(m.db, it.outline, it.row.item, msg.w, msg.h, m.pane == paneDetail)
+                        dur := time.Since(start)
+
+                        if m.debugEnabled {
+                                m.previewDbg.lastAt = time.Now()
+                                m.previewDbg.lastItemID = m.previewCacheForID
+                                m.previewDbg.lastW = msg.w
+                                m.previewDbg.lastH = msg.h
+                                m.previewDbg.lastDur = dur
+                                m.previewDbg.lastCacheLen = len(m.previewCache)
+                                m.previewDbg.lastTitleLen = len(it.row.item.Title)
+                                m.previewDbg.lastDescLen = len(it.row.item.Description)
+                                m.previewDbg.lastChildN = len(m.db.ChildrenOf(it.row.item.ID))
+                                m.previewDbg.lastCommentN = len(m.db.CommentsForItem(it.row.item.ID))
+                                m.previewDbg.lastWorklogN = len(m.db.WorklogForItem(it.row.item.ID))
+                                m.previewDbg.lastErr = ""
+                                m.previewDbg.lastReason = ""
+
+                                // Emit a log line for slow renders.
+                                if dur > 250*time.Millisecond {
+                                        m.debugLogf("slow preview dur=%s item=%s size=%dx%d lens(title=%d desc=%d cache=%d) counts(child=%d cmt=%d wl=%d)",
+                                                dur, m.previewCacheForID, msg.w, msg.h,
+                                                m.previewDbg.lastTitleLen, m.previewDbg.lastDescLen, m.previewDbg.lastCacheLen,
+                                                m.previewDbg.lastChildN, m.previewDbg.lastCommentN, m.previewDbg.lastWorklogN)
+                                        m.showMinibuffer(fmt.Sprintf("Slow preview render: %s (item %s)", dur, m.previewCacheForID))
+                                }
+                        }
+                }
+                return m, nil
+
         case reloadTickMsg:
                 if m.storeChanged() {
                         _ = m.reloadFromDisk()
                 }
-                return m, tickReload()
+                // Also drive debounced preview rendering so it can't get "stuck loading"
+                // after list refreshes that don't originate from a navigation key.
+                return m, tea.Batch(tickReload(), m.schedulePreviewCompute())
 
         case escTimeoutMsg:
                 if m.view == viewOutline && m.pendingEsc && m.modal == modalNone {
@@ -275,14 +424,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 }
                                 return m, nil
                         }
-                        if m.view == viewOutline && m.modal == modalNone && m.pane == paneDetail {
-                                m.pane = paneOutline
-                                return m, nil
-                        }
                         switch m.view {
                         case viewOutline:
                                 m.view = viewOutlines
                                 m.refreshOutlines(m.selectedProjectID)
+                                m.showPreview = false
                                 return m, nil
                         case viewOutlines:
                                 m.view = viewProjects
@@ -298,10 +444,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
                                         m.refreshItems(*o)
                                 }
-                                return m, nil
-                        }
-                        if m.view == viewOutline && m.modal == modalNone && m.pane == paneDetail {
-                                m.pane = paneOutline
                                 return m, nil
                         }
                         if m.view == viewOutline && m.modal == modalNone {
@@ -343,6 +485,16 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 }
                         }
                 case "r":
+                        // Archive selected item/project/outline (with confirm; depends on screen).
+                        //
+                        // Note: item view is otherwise read-only, but archiving is a safe global action.
+                        if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
+                                m.modal = modalConfirmArchive
+                                m.modalForID = strings.TrimSpace(m.openItemID)
+                                m.archiveFor = archiveTargetItem
+                                m.input.Blur()
+                                return m, nil
+                        }
                         // Archive selected project/outline (with confirm), similar to archiving items.
                         if m.view == viewProjects {
                                 if it, ok := m.projectsList.SelectedItem().(projectItem); ok {
@@ -434,6 +586,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m appModel) View() string {
         if m.resizing {
                 // Stable full-height overlay during terminal resize to avoid flicker/layout jumps.
+                // Render a single centered "Resizing…" line (instead of repeating it on every row).
                 h := m.height
                 if h < 0 {
                         h = 0
@@ -442,10 +595,15 @@ func (m appModel) View() string {
                 if w < 0 {
                         w = 0
                 }
-                line := lipgloss.NewStyle().Width(w).Align(lipgloss.Center).Render("Resizing…")
-                lines := make([]string, 0, h)
+
+                lines := make([]string, h)
+                blank := strings.Repeat(" ", w)
                 for i := 0; i < h; i++ {
-                        lines = append(lines, line)
+                        lines[i] = blank
+                }
+                if h > 0 {
+                        mid := h / 2
+                        lines[mid] = lipgloss.NewStyle().Width(w).Align(lipgloss.Center).Render("Resizing…")
                 }
                 return strings.Join(lines, "\n")
         }
@@ -613,37 +771,31 @@ func (m appModel) footerText() string {
         if m.view != viewOutline {
                 return base
         }
-        focus := "focus=outline"
-        if m.pane == paneDetail {
-                focus = "focus=detail"
-        }
         if m.modal != modalNone {
                 if m.modal == modalConfirmArchive {
-                        return "archive: y/enter: confirm  n/esc: cancel  " + focus
+                        return "archive: y/enter: confirm  n/esc: cancel"
                 }
                 if m.modal == modalPickStatus {
-                        return "status: enter: set  esc: cancel  " + focus
+                        return "status: enter: set  esc: cancel"
                 }
                 if m.modal == modalEditTitle {
-                        return "edit title: type, enter: save, esc: cancel  " + focus
+                        return "edit title: type, enter: save, esc: cancel"
                 }
                 if m.modal == modalEditOutlineName {
-                        return "rename outline: type, enter: save, esc: cancel  " + focus
+                        return "rename outline: type, enter: save, esc: cancel"
                 }
                 if m.modal == modalAddComment {
-                        return "comment: tab: focus  ctrl+s: save  esc: cancel  " + focus
+                        return "comment: tab: focus  ctrl+s: save  esc: cancel"
                 }
                 if m.modal == modalAddWorklog {
-                        return "worklog: tab: focus  ctrl+s: save  esc: cancel  " + focus
+                        return "worklog: tab: focus  ctrl+s: save  esc: cancel"
                 }
-                return "new item: type title, enter: save, esc: cancel  " + focus
+                return "new item: type title, enter: save, esc: cancel"
         }
-        tabHelp := ""
-        // Only show focus toggle if split preview is actually visible at this width.
-        if m.showPreview && m.width >= minSplitPreviewW {
-                tabHelp = "  tab: toggle focus"
+        if m.splitPreviewVisible() {
+                return "enter: open  o: preview  tab: toggle focus  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  space: status  Shift+←/→: cycle status  c: comment  w: worklog  r: archive  y/Y: copy"
         }
-        return "enter: open  o: preview" + tabHelp + "  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  space: status  Shift+←/→: cycle status  c: comment  w: worklog  r: archive  y/Y: copy  " + focus
+        return "enter: open  o: preview  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  space: status  Shift+←/→: cycle status  c: comment  w: worklog  r: archive  y/Y: copy"
 }
 
 func (m appModel) footerBlock() string {
@@ -773,11 +925,92 @@ func (m *appModel) resizeLists() {
         }
         m.projectsList.SetSize(centeredW, h)
         m.outlinesList.SetSize(centeredW, h)
-        if m.view == viewOutline && m.showPreview {
-                m.itemsList.SetSize(w/2, h)
+        if m.splitPreviewVisible() {
+                leftW, _ := splitPaneWidths(centeredW)
+                m.itemsList.SetSize(leftW, h)
         } else {
                 m.itemsList.SetSize(centeredW, h)
         }
+}
+
+func (m *appModel) splitPreviewVisible() bool {
+        if m == nil {
+                return false
+        }
+        if !m.showPreview {
+                return false
+        }
+        return m.width >= minSplitPreviewW
+}
+
+func splitPaneWidths(contentW int) (leftW, rightW int) {
+        if contentW < 10 {
+                contentW = 10
+        }
+        avail := contentW - splitGapW
+        if avail < 8 {
+                avail = 8
+        }
+        leftW = avail / 3
+        if leftW < 20 {
+                leftW = 20
+        }
+        if leftW > avail-20 {
+                leftW = avail - 20
+        }
+        rightW = avail - leftW
+        return leftW, rightW
+}
+
+func (m *appModel) outlineLayout() (frameH, bodyH, contentW int) {
+        frameH = m.height - 6
+        if frameH < 8 {
+                frameH = 8
+        }
+        bodyH = frameH - (topPadLines + breadcrumbGap + 2)
+        if bodyH < 6 {
+                bodyH = 6
+        }
+        w := m.width
+        if w < 10 {
+                w = 10
+        }
+        contentW = w
+        // In split view we use full width (with outer margins) instead of centering to maxContentW.
+        if m.splitPreviewVisible() {
+                contentW = w - 2*splitOuterMargin
+        } else if contentW > maxContentW {
+                contentW = maxContentW
+        }
+        if contentW < 10 {
+                contentW = 10
+        }
+        return frameH, bodyH, contentW
+}
+
+func (m *appModel) schedulePreviewCompute() tea.Cmd {
+        if !m.splitPreviewVisible() {
+                return nil
+        }
+        it, ok := m.itemsList.SelectedItem().(outlineRowItem)
+        if !ok {
+                return nil
+        }
+        _, bodyH, contentW := m.outlineLayout()
+        _, rightW := splitPaneWidths(contentW)
+        itemID := strings.TrimSpace(it.row.item.ID)
+        if itemID == "" {
+                return nil
+        }
+        // If the cache already matches, nothing to do.
+        if m.previewCacheForID == itemID && m.previewCacheW == rightW && m.previewCacheH == bodyH && strings.TrimSpace(m.previewCache) != "" {
+                return nil
+        }
+        m.previewSeq++
+        seq := m.previewSeq
+        return tea.Tick(90*time.Millisecond, func(time.Time) tea.Msg {
+                return previewComputeMsg{seq: seq, itemID: itemID, w: rightW, h: bodyH}
+        })
 }
 
 func emptyAsDash(s string) string {
@@ -884,79 +1117,61 @@ func (m *appModel) refreshItems(outline model.Outline) {
 }
 
 func (m *appModel) viewOutline() string {
-        frameH := m.height - 6
-        if frameH < 8 {
-                frameH = 8
-        }
-        bodyHeight := frameH - (topPadLines + breadcrumbGap + 2)
-        if bodyHeight < 6 {
-                bodyHeight = 6
-        }
-
+        frameH, bodyHeight, contentW := m.outlineLayout()
         w := m.width
         if w < 10 {
                 w = 10
         }
 
-        // Even if the user toggled preview on, narrow terminals should auto-collapse it.
-        if !m.showPreview || w < minSplitPreviewW {
-                contentW := w
-                if contentW > maxContentW {
-                        contentW = maxContentW
-                }
+        crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+
+        var body string
+        if !m.splitPreviewVisible() {
                 m.itemsList.SetSize(contentW, bodyHeight)
+                body = m.itemsList.View()
+        } else {
+                leftW, rightW := splitPaneWidths(contentW)
+                m.itemsList.SetSize(leftW, bodyHeight)
+                left := m.itemsList.View()
 
-                crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-                main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.itemsList.View()
+                placeholder := lipgloss.NewStyle().Width(rightW).Height(bodyHeight).Padding(0, 1).Render("(loading…)")
+                right := placeholder
+                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                        id := strings.TrimSpace(it.row.item.ID)
+                        if id == "" {
+                                right = lipgloss.NewStyle().Width(rightW).Height(bodyHeight).Padding(0, 1).Render("(select an item)")
+                        } else if m.previewCacheForID == id && m.previewCacheW == rightW && m.previewCacheH == bodyHeight && strings.TrimSpace(m.previewCache) != "" {
+                                right = m.previewCache
+                        } else if m.previewCacheW == rightW && m.previewCacheH == bodyHeight && strings.TrimSpace(m.previewCache) != "" {
+                                // Avoid "blinking" a loading placeholder when navigating quickly:
+                                // keep showing the last rendered detail pane until the new one is ready.
+                                right = m.previewCache
+                        }
+                }
+
+                body = lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", splitGapW), right)
+                // Ensure exact width for stable centering.
+                body = lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render(body)
+        }
+
+        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
+        if !m.splitPreviewVisible() {
+                // Single-pane view stays centered at maxContentW.
                 main = lipgloss.PlaceHorizontal(w, lipgloss.Center, main)
-                if m.modal == modalNone {
-                        return main
-                }
-                bg := dimBackground(main)
-                fg := m.renderModal()
-                return overlayCenter(bg, fg, w, frameH)
+        } else {
+                // Split view uses full terminal width with a small outer margin.
+                main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
         }
 
-        crumb := lipgloss.NewStyle().Width(w).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-        gapW := 2
-        leftWidth := (w - gapW) / 2
-        rightWidth := w - gapW - leftWidth
-
-        m.itemsList.SetSize(leftWidth, bodyHeight)
-
-        left := lipgloss.NewStyle().Width(leftWidth).Height(bodyHeight).Padding(0, 0).Render(m.itemsList.View())
-        left = normalizePane(left, leftWidth, bodyHeight)
-
-        var detail string
-        switch it := m.itemsList.SelectedItem().(type) {
-        case outlineRowItem:
-                detail = renderItemDetail(m.db, it.outline, it.row.item, rightWidth, bodyHeight, m.pane == paneDetail)
-        case addItemRow:
-                // Keep the right pane exactly `rightWidth` columns wide; padding must be accounted for.
-                padX := 1
-                innerW := rightWidth - (2 * padX)
-                if innerW < 0 {
-                        innerW = 0
-                }
-                detailBox := lipgloss.NewStyle().Width(innerW).Height(bodyHeight).Padding(0, padX)
-                detail = detailBox.Render(strings.Join([]string{
-                        "(no item selected)",
-                        "",
-                        "Press enter to add a new item, or press n (sibling) / N (child).",
-                }, "\n"))
-        default:
-                detail = lipgloss.NewStyle().Width(rightWidth).Height(bodyHeight).Render("No item selected.")
-        }
-        detail = normalizePane(detail, rightWidth, bodyHeight)
-
-        // Normalize the gap too; otherwise it only exists on the first line and the
-        // right pane "slides left" on subsequent lines.
-        gap := normalizePane(lipgloss.NewStyle().Width(gapW).Render(""), gapW, bodyHeight)
-        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + lipgloss.JoinHorizontal(lipgloss.Top, left, gap, detail)
         if m.modal == modalNone {
+                if m.debugEnabled && m.debugOverlay {
+                        ov := m.debugOverlayView()
+                        if strings.TrimSpace(ov) != "" {
+                                main = overlayCenter(main, ov, w, frameH)
+                        }
+                }
                 return main
         }
-
         bg := dimBackground(main)
         fg := m.renderModal()
         return overlayCenter(bg, fg, w, frameH)
@@ -1287,6 +1502,13 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                 } else if archived > 0 {
                                                         m.showMinibuffer(fmt.Sprintf("Archived %d item(s)", archived))
                                                 }
+                                                // If we archived from the full-screen item view, return to the outline.
+                                                if m.view == viewItem {
+                                                        m.view = viewOutline
+                                                        m.openItemID = ""
+                                                        m.showPreview = false
+                                                        m.pane = paneOutline
+                                                }
                                                 return m, nil
                                         }
                                 }
@@ -1506,15 +1728,24 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         // Otherwise: fall through and handle the key normally.
                 }
 
-                // Focus handling.
-                if msg.String() == "tab" {
-                        if m.showPreview {
-                                if m.pane == paneOutline {
-                                        m.pane = paneDetail
-                                } else {
-                                        m.pane = paneOutline
-                                }
-                                return m, nil
+                // Focus handling (split view only).
+                if msg.String() == "tab" && m.splitPreviewVisible() {
+                        if m.pane == paneOutline {
+                                m.pane = paneDetail
+                        } else {
+                                m.pane = paneOutline
+                        }
+                        // Focus can affect styling; refresh the cached detail (debounced).
+                        m.previewCacheForID = ""
+                        return m, m.schedulePreviewCompute()
+                }
+
+                if msg.String() == "D" && m.debugEnabled {
+                        m.debugOverlay = !m.debugOverlay
+                        if m.debugOverlay {
+                                m.showMinibuffer("Debug overlay: ON")
+                        } else {
+                                m.showMinibuffer("Debug overlay: OFF")
                         }
                         return m, nil
                 }
@@ -1583,32 +1814,33 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 }
                         }
                 case "enter":
-                        if m.pane == paneOutline {
-                                switch m.itemsList.SelectedItem().(type) {
-                                case outlineRowItem:
-                                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-                                                m.view = viewItem
-                                                m.openItemID = it.row.item.ID
-                                                return m, nil
-                                        }
-                                        return m, nil
-                                case addItemRow:
-                                        m.modal = modalNewSibling
-                                        m.modalForID = ""
-                                        m.input.SetValue("")
-                                        m.input.Focus()
+                        switch m.itemsList.SelectedItem().(type) {
+                        case outlineRowItem:
+                                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                        m.view = viewItem
+                                        m.openItemID = it.row.item.ID
+                                        // Leaving preview mode when entering the full item page.
+                                        m.showPreview = false
+                                        m.previewCacheForID = ""
                                         return m, nil
                                 }
-                        }
-                case "o":
-                        if _, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-                                m.showPreview = !m.showPreview
-                                if !m.showPreview {
-                                        m.pane = paneOutline
-                                }
-                                m.resizeLists()
+                                return m, nil
+                        case addItemRow:
+                                m.modal = modalNewSibling
+                                m.modalForID = ""
+                                m.input.SetValue("")
+                                m.input.Focus()
                                 return m, nil
                         }
+                case "o":
+                        // Toggle split preview pane.
+                        m.showPreview = !m.showPreview
+                        m.pane = paneOutline
+                        m.previewCacheForID = ""
+                        if m.showPreview {
+                                return m, m.schedulePreviewCompute()
+                        }
+                        return m, nil
                 case "e":
                         // Edit title for selected item.
                         if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
@@ -1653,12 +1885,6 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                 }
 
-                // When focused on detail, don't let navigation keys change the outline cursor.
-                // (The detail pane is read-only for now.)
-                if m.pane == paneDetail {
-                        return m, nil
-                }
-
                 // Collapse toggles.
                 if msg.String() == "z" {
                         m.toggleCollapseSelected()
@@ -1671,7 +1897,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
                 // Outline navigation.
                 if m.navOutline(msg) {
-                        return m, nil
+                        return m, m.schedulePreviewCompute()
                 }
 
                 // Outline structural operations (left pane only).
@@ -1683,8 +1909,21 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
         }
 
         // Allow list to handle incidental keys (help paging, etc).
+        beforeID := ""
+        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                beforeID = strings.TrimSpace(it.row.item.ID)
+        }
         var cmd tea.Cmd
         m.itemsList, cmd = m.itemsList.Update(msg)
+        if m.splitPreviewVisible() {
+                afterID := ""
+                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                        afterID = strings.TrimSpace(it.row.item.ID)
+                }
+                if beforeID != afterID {
+                        return m, tea.Batch(cmd, m.schedulePreviewCompute())
+                }
+        }
         return m, cmd
 }
 
@@ -1707,9 +1946,9 @@ func (m *appModel) nearestSelectableItemID(fromIdx int) string {
 }
 
 func (m *appModel) archiveItem(itemID string) error {
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        actorID := m.editActorID()
         if actorID == "" {
-                return nil
+                return errors.New("no current actor")
         }
 
         db, err := m.store.Load()
@@ -1737,9 +1976,9 @@ func (m *appModel) archiveItem(itemID string) error {
 }
 
 func (m *appModel) archiveItemTree(rootID string) (int, error) {
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        actorID := m.editActorID()
         if actorID == "" {
-                return 0, nil
+                return 0, errors.New("no current actor")
         }
 
         db, err := m.store.Load()
@@ -1780,9 +2019,9 @@ func (m *appModel) archiveItemTree(rootID string) (int, error) {
 }
 
 func (m *appModel) archiveOutlineTree(outlineID string) (int, error) {
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        actorID := m.editActorID()
         if actorID == "" {
-                return 0, nil
+                return 0, errors.New("no current actor")
         }
         outlineID = strings.TrimSpace(outlineID)
         if outlineID == "" {
@@ -1834,9 +2073,9 @@ func (m *appModel) archiveOutlineTree(outlineID string) (int, error) {
 }
 
 func (m *appModel) archiveProjectTree(projectID string) (int, int, error) {
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        actorID := m.editActorID()
         if actorID == "" {
-                return 0, 0, nil
+                return 0, 0, errors.New("no current actor")
         }
         projectID = strings.TrimSpace(projectID)
         if projectID == "" {
