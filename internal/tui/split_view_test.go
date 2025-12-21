@@ -98,6 +98,19 @@ func TestViewOutline_SplitPreview_RendersDetailPaneAndUsesOneThirdWidth(t *testi
         if !strings.Contains(out, "Description") || !strings.Contains(out, "Owner: ") {
                 t.Fatalf("expected detail pane content to render; got: %q", out)
         }
+        // Breadcrumb should only occupy the LEFT pane; the detail pane should be able to start at
+        // the top row (same row as the breadcrumb, but in the right column).
+        lines := strings.Split(out, "\n")
+        if len(lines) <= topPadLines {
+                t.Fatalf("expected output to include top padding + content; got %d lines", len(lines))
+        }
+        headerLine := lines[topPadLines]
+        if !strings.Contains(headerLine, m.breadcrumbText()) {
+                t.Fatalf("expected breadcrumb row to contain breadcrumb; got: %q", headerLine)
+        }
+        if !strings.Contains(headerLine, "Title") {
+                t.Fatalf("expected detail pane to start on the breadcrumb row in split view; got: %q", headerLine)
+        }
 
         leftW, _ := splitPaneWidths(contentW)
         if got := m.itemsList.Width(); got != leftW {
@@ -105,7 +118,6 @@ func TestViewOutline_SplitPreview_RendersDetailPaneAndUsesOneThirdWidth(t *testi
         }
 
         // Ensure stable full-width lines (important for split rendering).
-        lines := strings.Split(out, "\n")
         for i := 0; i < len(lines) && i < 20; i++ {
                 if w := xansi.StringWidth(lines[i]); w != m.width {
                         t.Fatalf("expected line %d width=%d, got %d (line=%q)", i, m.width, w, lines[i])

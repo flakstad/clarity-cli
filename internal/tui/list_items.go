@@ -211,3 +211,73 @@ func newList(title, help string, items []list.Item) list.Model {
         l.KeyMap.Quit.SetKeys("q")
         return l
 }
+
+type agendaRowItem struct {
+        row     outlineRow
+        outline model.Outline
+}
+
+func (i agendaRowItem) FilterValue() string {
+        return strings.TrimSpace(i.row.item.Title)
+}
+
+func (i agendaRowItem) Title() string {
+        indent := strings.Repeat("  ", i.row.depth)
+        twisty := " "
+        if i.row.hasChildren {
+                if i.row.collapsed {
+                        twisty = "▸"
+                } else {
+                        twisty = "▾"
+                }
+        }
+
+        status := renderStatus(i.outline, i.row.item.StatusID)
+        title := strings.TrimSpace(i.row.item.Title)
+        if title == "" {
+                title = "(untitled)"
+        }
+
+        metaParts := make([]string, 0, 3)
+        if i.row.item.Priority {
+                metaParts = append(metaParts, "priority")
+        }
+        if i.row.item.OnHold {
+                metaParts = append(metaParts, "on hold")
+        }
+        if i.row.totalChildren > 0 {
+                metaParts = append(metaParts, renderProgressCookie(i.row.doneChildren, i.row.totalChildren))
+        }
+        meta := ""
+        if len(metaParts) > 0 {
+                meta = "  " + strings.Join(metaParts, " ")
+        }
+
+        if strings.TrimSpace(status) == "" {
+                return fmt.Sprintf("%s%s %s%s", indent, twisty, title, meta)
+        }
+        return fmt.Sprintf("%s%s %s %s%s", indent, twisty, status, title, meta)
+}
+
+func (i agendaRowItem) Description() string { return "" }
+
+type agendaHeadingItem struct {
+        projectName string
+        outlineName string
+}
+
+func (i agendaHeadingItem) FilterValue() string {
+        return strings.TrimSpace(i.projectName + " " + i.outlineName)
+}
+func (i agendaHeadingItem) Title() string {
+        p := strings.TrimSpace(i.projectName)
+        if p == "" {
+                p = "(project)"
+        }
+        o := strings.TrimSpace(i.outlineName)
+        if o == "" {
+                o = "(unnamed outline)"
+        }
+        return lipgloss.NewStyle().Foreground(ac("240", "245")).Bold(true).Render(p + " / " + o)
+}
+func (i agendaHeadingItem) Description() string { return "" }

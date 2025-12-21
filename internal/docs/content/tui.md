@@ -18,7 +18,7 @@ Key bindings:
 - `esc` / `backspace`: go back within the action panel; from the root, closes the panel
 - `ctrl+g`: close the action panel immediately
 - `g`: open the Navigate menu (action panel)
-- `a`: open the Agenda menu (action panel) (coming soon)
+- `a`: open *Agenda Commands* (then press `t` to list all TODO entries)
 - `c`: open the Capture menu (action panel) (coming soon)
 - `enter`: open selected item (single-pane item view)
 - `o`: toggle preview pane (split view; auto-collapses on narrow terminals `<80` cols)
@@ -44,7 +44,8 @@ Outline movement (hold Alt):
 - `alt+←` (or `alt+h/b`): outdent (become sibling after parent)
 
 Editing:
-- `e`: edit title + description of the selected item (tab to move between fields; `ctrl+s` saves)
+- `e`: edit title of the selected item (Enter saves, Esc cancels)
+- `Shift+D` (`D`): edit description of the selected item (multiline Markdown; `ctrl+s` saves)
 - `e` (on outlines screen): rename selected outline (Enter saves, Esc cancels)
 - `e` (on projects screen): rename selected project (Enter saves, Esc cancels)
 
@@ -72,6 +73,6 @@ Theme detection:
   - `CLARITY_TUI_THEME=light` (or `dark` / `auto`)
   - or `CLARITY_TUI_DARKBG=false` (or `true`)
 
-Comment/worklog editor:
+Comment/worklog/description editor:
 - `ctrl+s`: save
 - `tab` / `shift+tab`: focus body/save/cancel, `enter` activates buttons

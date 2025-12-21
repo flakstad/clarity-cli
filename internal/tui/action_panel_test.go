@@ -167,7 +167,7 @@ func TestActionPanel_GlobalKeys_OpenPanels(t *testing.T) {
                 t.Fatalf("expected nav panel, got %v", got)
         }
 
-        // Global a opens Agenda.
+        // Global a opens Agenda commands panel.
         mAny, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
         m3 := mAny.(appModel)
         if m3.modal != modalActionPanel {

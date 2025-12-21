@@ -28,6 +28,7 @@ const (
         viewOutlines
         viewOutline
         viewItem
+        viewAgenda
 )
 
 type reloadTickMsg struct{}
@@ -80,6 +81,7 @@ const (
         modalRenameProject
         modalNewOutline
         modalEditTitle
+        modalEditDescription
         modalEditOutlineName
         modalPickStatus
         modalAddComment
@@ -149,6 +151,7 @@ type appModel struct {
         outlinesList list.Model
         itemsList    list.Model
         statusList   list.Model
+        agendaList   list.Model
 
         selectedProjectID string
         selectedOutlineID string
@@ -157,6 +160,11 @@ type appModel struct {
         pane                pane
         showPreview         bool
         openItemID          string
+        returnView          view
+        hasReturnView       bool
+        agendaReturnView    view
+        hasAgendaReturnView bool
+        agendaCollapsed     map[string]bool
         collapsed           map[string]bool
         collapseInitialized bool
 
@@ -265,7 +273,7 @@ func (m appModel) actionPanelTitle() string {
         case actionPanelNav:
                 return "Navigate"
         case actionPanelAgenda:
-                return "Agenda"
+                return "Agenda Commands"
         case actionPanelCapture:
                 return "Capture"
         default:
@@ -277,9 +285,11 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
         cur := m.curActionPanelKind()
         actions := map[string]actionPanelAction{}
 
-        // Always-available global actions.
-        actions["a"] = actionPanelAction{label: "Agenda…", kind: actionPanelActionNav, next: actionPanelAgenda}
-        actions["c"] = actionPanelAction{label: "Capture…", kind: actionPanelActionNav, next: actionPanelCapture}
+        // Only the root action panel (opened with x) shows global entrypoints.
+        if cur == actionPanelContext {
+                actions["a"] = actionPanelAction{label: "Agenda Commands…", kind: actionPanelActionNav, next: actionPanelAgenda}
+                actions["c"] = actionPanelAction{label: "Capture…", kind: actionPanelActionNav, next: actionPanelCapture}
+        }
 
         switch cur {
         case actionPanelNav:
@@ -373,31 +383,15 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                 }
 
         case actionPanelAgenda:
-                actions["g"] = actionPanelAction{label: "Navigate…", kind: actionPanelActionNav, next: actionPanelNav}
-                actions["t"] = actionPanelAction{
-                        label: "Today's agenda (coming soon)",
-                        kind:  actionPanelActionExec,
-                        handler: func(mm appModel) (appModel, tea.Cmd) {
-                                mm.showMinibuffer("Agenda: coming soon")
-                                return mm, nil
-                        },
-                }
-                actions["w"] = actionPanelAction{
-                        label: "This week (coming soon)",
-                        kind:  actionPanelActionExec,
-                        handler: func(mm appModel) (appModel, tea.Cmd) {
-                                mm.showMinibuffer("Agenda: coming soon")
-                                return mm, nil
-                        },
-                }
-                actions["s"] = actionPanelAction{
-                        label: "Search (coming soon)",
-                        kind:  actionPanelActionExec,
-                        handler: func(mm appModel) (appModel, tea.Cmd) {
-                                mm.showMinibuffer("Agenda: coming soon")
-                                return mm, nil
-                        },
-                }
+                actions["t"] = actionPanelAction{label: "List all TODO entries", kind: actionPanelActionExec, handler: func(mm appModel) (appModel, tea.Cmd) {
+                        if mm.view != viewAgenda {
+                                mm.hasAgendaReturnView = true
+                                mm.agendaReturnView = mm.view
+                        }
+                        mm.view = viewAgenda
+                        mm.refreshAgenda()
+                        return mm, nil
+                }}
 
         case actionPanelCapture:
                 actions["g"] = actionPanelAction{label: "Navigate…", kind: actionPanelActionNav, next: actionPanelNav}
@@ -513,6 +507,10 @@ func newAppModel(dir string, db *store.DB) appModel {
         m.itemsList.SetDelegate(newOutlineItemDelegate())
         m.itemsList.SetFilteringEnabled(false)
         m.itemsList.SetShowFilter(false)
+
+        m.agendaList = newList("Agenda", "All items (excluding DONE)", []list.Item{})
+        m.agendaList.SetDelegate(newCompactItemDelegate())
+        m.agendaCollapsed = map[string]bool{}
 
         m.statusList = newList("Status", "Select a status", []list.Item{})
         m.statusList.SetDelegate(newCompactItemDelegate())
@@ -705,6 +703,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 if m.modal != modalNone {
                         return m.updateOutline(msg)
                 }
+                if m.view == viewAgenda {
+                        return m.updateAgenda(msg)
+                }
+
                 switch msg.String() {
                 case "ctrl+c", "q":
                         return m, tea.Quit
@@ -715,6 +717,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.openActionPanel(actionPanelNav)
                         return m, nil
                 case "a":
+                        // Org-style agenda flow: open the agenda commands panel, then choose a command (e.g. 't').
                         m.openActionPanel(actionPanelAgenda)
                         return m, nil
                 case "c":
@@ -743,16 +746,35 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                 case "backspace":
                         if m.view == viewItem {
-                                m.view = viewOutline
-                                m.openItemID = ""
-                                m.showPreview = false
-                                m.pane = paneOutline
-                                if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
-                                        m.refreshItems(*o)
+                                if m.hasReturnView {
+                                        m.view = m.returnView
+                                        m.hasReturnView = false
+                                        m.openItemID = ""
+                                        m.showPreview = false
+                                        m.pane = paneOutline
+                                        if m.view == viewAgenda {
+                                                m.refreshAgenda()
+                                        }
+                                } else {
+                                        m.view = viewOutline
+                                        m.openItemID = ""
+                                        m.showPreview = false
+                                        m.pane = paneOutline
+                                        if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
+                                                m.refreshItems(*o)
+                                        }
                                 }
                                 return m, nil
                         }
                         switch m.view {
+                        case viewAgenda:
+                                if m.hasAgendaReturnView {
+                                        m.view = m.agendaReturnView
+                                        m.hasAgendaReturnView = false
+                                } else {
+                                        m.view = viewProjects
+                                }
+                                return m, nil
                         case viewOutline:
                                 m.view = viewOutlines
                                 m.refreshOutlines(m.selectedProjectID)
@@ -765,12 +787,32 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                 case "esc":
                         if m.view == viewItem {
-                                m.view = viewOutline
-                                m.openItemID = ""
-                                m.showPreview = false
-                                m.pane = paneOutline
-                                if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
-                                        m.refreshItems(*o)
+                                if m.hasReturnView {
+                                        m.view = m.returnView
+                                        m.hasReturnView = false
+                                        m.openItemID = ""
+                                        m.showPreview = false
+                                        m.pane = paneOutline
+                                        if m.view == viewAgenda {
+                                                m.refreshAgenda()
+                                        }
+                                } else {
+                                        m.view = viewOutline
+                                        m.openItemID = ""
+                                        m.showPreview = false
+                                        m.pane = paneOutline
+                                        if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
+                                                m.refreshItems(*o)
+                                        }
+                                }
+                                return m, nil
+                        }
+                        if m.view == viewAgenda {
+                                if m.hasAgendaReturnView {
+                                        m.view = m.agendaReturnView
+                                        m.hasAgendaReturnView = false
+                                } else {
+                                        m.view = viewProjects
                                 }
                                 return m, nil
                         }
@@ -809,6 +851,19 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.collapsed = map[string]bool{}
                                         m.collapseInitialized = false
                                         m.refreshItems(it.outline)
+                                        return m, nil
+                                }
+                        case viewAgenda:
+                                if it, ok := m.agendaList.SelectedItem().(agendaRowItem); ok {
+                                        m.selectedProjectID = it.row.item.ProjectID
+                                        m.selectedOutlineID = it.row.item.OutlineID
+                                        m.selectedOutline = &it.outline
+                                        m.openItemID = it.row.item.ID
+                                        m.view = viewItem
+                                        m.hasReturnView = true
+                                        m.returnView = viewAgenda
+                                        m.showPreview = false
+                                        m.pane = paneOutline
                                         return m, nil
                                 }
                         }
@@ -889,26 +944,32 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, nil
                         }
                 }
+
+                // Let the active list handle navigation keys.
+                switch m.view {
+                case viewProjects:
+                        var cmd tea.Cmd
+                        m.projectsList, cmd = m.projectsList.Update(msg)
+                        return m, cmd
+                case viewOutlines:
+                        var cmd tea.Cmd
+                        m.outlinesList, cmd = m.outlinesList.Update(msg)
+                        return m, cmd
+                case viewAgenda:
+                        var cmd tea.Cmd
+                        m.agendaList, cmd = m.agendaList.Update(msg)
+                        return m, cmd
+                case viewOutline:
+                        return m.updateOutline(msg)
+                case viewItem:
+                        // Read-only for now. Back/quit handled in the root key handler.
+                        return m, nil
+                default:
+                        return m, nil
+                }
         }
 
-        // Let the active list handle navigation keys.
-        switch m.view {
-        case viewProjects:
-                var cmd tea.Cmd
-                m.projectsList, cmd = m.projectsList.Update(msg)
-                return m, cmd
-        case viewOutlines:
-                var cmd tea.Cmd
-                m.outlinesList, cmd = m.outlinesList.Update(msg)
-                return m, cmd
-        case viewOutline:
-                return m.updateOutline(msg)
-        case viewItem:
-                // Read-only for now. Back/quit handled in the root key handler.
-                return m, nil
-        default:
-                return m, nil
-        }
+        return m, nil
 }
 
 func (m appModel) View() string {
@@ -942,6 +1003,8 @@ func (m appModel) View() string {
                 body = m.viewProjects()
         case viewOutlines:
                 body = m.viewOutlines()
+        case viewAgenda:
+                body = m.viewAgenda()
         case viewOutline:
                 body = m.viewOutline()
         case viewItem:
@@ -955,6 +1018,9 @@ func (m appModel) View() string {
 }
 
 func (m *appModel) breadcrumbText() string {
+        if m.view == viewAgenda {
+                return "agenda"
+        }
         parts := []string{"projects"}
         if m.view == viewProjects {
                 return strings.Join(parts, " > ")
@@ -1073,10 +1139,45 @@ func (m *appModel) viewOutlines() string {
         return overlayCenter(bg, fg, w, frameH)
 }
 
+func (m *appModel) viewAgenda() string {
+        frameH := m.height - 6
+        if frameH < 8 {
+                frameH = 8
+        }
+        bodyHeight := frameH - (topPadLines + breadcrumbGap + 2)
+        if bodyHeight < 6 {
+                bodyHeight = 6
+        }
+
+        w := m.width
+        if w < 10 {
+                w = 10
+        }
+
+        contentW := w
+        if contentW > maxContentW {
+                contentW = maxContentW
+        }
+        m.agendaList.SetSize(contentW, bodyHeight)
+
+        crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.agendaList.View()
+        main = lipgloss.PlaceHorizontal(w, lipgloss.Center, main)
+        if m.modal == modalNone {
+                return main
+        }
+        bg := dimBackground(main)
+        fg := m.renderModal()
+        return overlayCenter(bg, fg, w, frameH)
+}
+
 func (m appModel) footerText() string {
         base := "enter: select  backspace/esc: back  q: quit"
         if m.modal == modalActionPanel {
                 return "action: type a key  backspace/esc: back  ctrl+g: close"
+        }
+        if m.view == viewAgenda {
+                return "enter: open  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  e/D: edit  space: status  backspace/esc: back  q: quit"
         }
         if m.view == viewItem {
                 return "backspace/esc: back  q: quit  y/Y: copy"
@@ -1121,12 +1222,15 @@ func (m appModel) footerText() string {
                 if m.modal == modalAddWorklog {
                         return "worklog: tab: focus  ctrl+s: save  esc: cancel"
                 }
+                if m.modal == modalEditDescription {
+                        return "description: tab: focus  ctrl+s: save  esc: cancel"
+                }
                 return "new item: type title, enter: save, esc: cancel"
         }
         if m.splitPreviewVisible() {
-                return "enter: open  o: preview  tab: toggle focus  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  space: status  Shift+←/→: cycle status  C: comment  w: worklog  r: archive  y/Y: copy"
+                return "enter: open  o: preview  tab: toggle focus  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  D: edit desc  space: status  Shift+←/→: cycle status  C: comment  w: worklog  r: archive  y/Y: copy"
         }
-        return "enter: open  o: preview  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  space: status  Shift+←/→: cycle status  C: comment  w: worklog  r: archive  y/Y: copy"
+        return "enter: open  o: preview  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  D: edit desc  space: status  Shift+←/→: cycle status  C: comment  w: worklog  r: archive  y/Y: copy"
 }
 
 func (m appModel) footerBlock() string {
@@ -1171,7 +1275,10 @@ func (m appModel) renderActionPanel() string {
         }
 
         // Group global actions first, then nav, then everything else.
-        globalOrder := []string{"a", "c"}
+        globalOrder := []string{}
+        if m.curActionPanelKind() == actionPanelContext {
+                globalOrder = []string{"a", "c"}
+        }
         navOrder := []string{"g", "p", "o", "l", "i"}
         seen := map[string]bool{}
         lines := []string{}
@@ -1312,6 +1419,7 @@ func (m *appModel) resizeLists() {
         }
         m.projectsList.SetSize(centeredW, h)
         m.outlinesList.SetSize(centeredW, h)
+        m.agendaList.SetSize(centeredW, h)
         if m.splitPreviewVisible() {
                 leftW, _ := splitPaneWidths(centeredW)
                 m.itemsList.SetSize(leftW, h)
@@ -1503,6 +1611,131 @@ func (m *appModel) refreshItems(outline model.Outline) {
         }
 }
 
+func (m *appModel) refreshAgenda() {
+        if m == nil || m.db == nil {
+                return
+        }
+
+        curID := ""
+        if it, ok := m.agendaList.SelectedItem().(agendaRowItem); ok {
+                curID = it.row.item.ID
+        }
+
+        // Sort projects by name for a stable agenda ordering.
+        projects := make([]model.Project, 0, len(m.db.Projects))
+        for _, p := range m.db.Projects {
+                if p.Archived {
+                        continue
+                }
+                projects = append(projects, p)
+        }
+        sort.Slice(projects, func(i, j int) bool {
+                pi := strings.ToLower(strings.TrimSpace(projects[i].Name))
+                pj := strings.ToLower(strings.TrimSpace(projects[j].Name))
+                if pi == pj {
+                        return projects[i].ID < projects[j].ID
+                }
+                if pi == "" {
+                        return false
+                }
+                if pj == "" {
+                        return true
+                }
+                return pi < pj
+        })
+
+        // Pre-group outlines by project.
+        outlinesByProject := map[string][]model.Outline{}
+        for _, o := range m.db.Outlines {
+                if o.Archived {
+                        continue
+                }
+                outlinesByProject[o.ProjectID] = append(outlinesByProject[o.ProjectID], o)
+        }
+        for pid := range outlinesByProject {
+                outs := outlinesByProject[pid]
+                sort.Slice(outs, func(i, j int) bool {
+                        ni := ""
+                        nj := ""
+                        if outs[i].Name != nil {
+                                ni = strings.ToLower(strings.TrimSpace(*outs[i].Name))
+                        }
+                        if outs[j].Name != nil {
+                                nj = strings.ToLower(strings.TrimSpace(*outs[j].Name))
+                        }
+                        if ni == nj {
+                                return outs[i].ID < outs[j].ID
+                        }
+                        if ni == "" {
+                                return false
+                        }
+                        if nj == "" {
+                                return true
+                        }
+                        return ni < nj
+                })
+                outlinesByProject[pid] = outs
+        }
+
+        var items []list.Item
+
+        // Build agenda rows per outline using the existing outline flattener.
+        for _, p := range projects {
+                outs := outlinesByProject[p.ID]
+                for _, o := range outs {
+                        projectName := strings.TrimSpace(p.Name)
+                        if projectName == "" {
+                                projectName = p.ID
+                        }
+                        outName := ""
+                        if o.Name != nil {
+                                outName = strings.TrimSpace(*o.Name)
+                        }
+
+                        var its []model.Item
+                        for _, it := range m.db.Items {
+                                if it.Archived {
+                                        continue
+                                }
+                                if it.ProjectID != p.ID {
+                                        continue
+                                }
+                                if it.OutlineID != o.ID {
+                                        continue
+                                }
+                                if isEndState(o, it.StatusID) {
+                                        continue
+                                }
+                                its = append(its, it)
+                        }
+                        if len(its) == 0 {
+                                continue
+                        }
+                        items = append(items, agendaHeadingItem{projectName: projectName, outlineName: outName})
+                        flat := flattenOutline(o, its, m.agendaCollapsed)
+                        for _, row := range flat {
+                                items = append(items, agendaRowItem{
+                                        row:     row,
+                                        outline: o,
+                                })
+                        }
+                }
+        }
+
+        m.agendaList.SetItems(items)
+        if curID != "" {
+                selectListItemByID(&m.agendaList, curID)
+        } else {
+                // Prefer selecting the first actual item (skip headings).
+                for i := 0; i < len(items); i++ {
+                        if _, ok := items[i].(agendaRowItem); ok {
+                                m.agendaList.Select(i)
+                                break
+                        }
+                }
+        }
+}
+
 func (m *appModel) viewOutline() string {
         frameH, bodyHeight, contentW := m.outlineLayout()
         w := m.width
@@ -1510,16 +1743,21 @@ func (m *appModel) viewOutline() string {
                 w = 10
         }
 
-        crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-
-        var body string
+        var main string
         if !m.splitPreviewVisible() {
+                crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
                 m.itemsList.SetSize(contentW, bodyHeight)
-                body = m.itemsList.View()
+                body := m.itemsList.View()
+                main = strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
         } else {
+                // Split view: render the breadcrumb only over the LEFT pane, so the detail pane
+                // can start at the top without wasted header padding.
                 leftW, rightW := splitPaneWidths(contentW)
                 m.itemsList.SetSize(leftW, bodyHeight)
-                left := m.itemsList.View()
+
+                leftCrumb := lipgloss.NewStyle().Width(leftW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+                leftBody := m.itemsList.View()
+                leftCol := leftCrumb + strings.Repeat("\n", breadcrumbGap+1) + leftBody
 
                 placeholder := lipgloss.NewStyle().Width(rightW).Height(bodyHeight).Padding(0, 1).Render("(loading…)")
                 right := placeholder
@@ -1536,12 +1774,20 @@ func (m *appModel) viewOutline() string {
                         }
                 }
 
-                body = lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", splitGapW), right)
-                // Ensure exact width for stable centering.
-                body = lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render(body)
-        }
+                // Below top padding, we render a full-height block (stable split rendering).
+                contentH := frameH - topPadLines
+                if contentH < 0 {
+                        contentH = 0
+                }
 
-        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
+                leftCol = normalizePane(leftCol, leftW, contentH)
+                rightCol := normalizePane(right, rightW, contentH)
+
+                body := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, strings.Repeat(" ", splitGapW), rightCol)
+                // Ensure exact size for stable centering/margins.
+                body = lipgloss.NewStyle().Width(contentW).Height(contentH).Render(body)
+                main = strings.Repeat("\n", topPadLines) + body
+        }
         if !m.splitPreviewVisible() {
                 // Single-pane view stays centered at maxContentW.
                 main = lipgloss.PlaceHorizontal(w, lipgloss.Center, main)
@@ -1632,6 +1878,8 @@ func (m *appModel) renderModal() string {
                 return renderModalBox(m.width, "New outline", m.input.View()+"\n\nenter: save   esc: cancel")
         case modalEditTitle:
                 return renderModalBox(m.width, "Edit title", m.input.View()+"\n\nenter: save   esc: cancel")
+        case modalEditDescription:
+                return m.renderTextAreaModal("Edit description")
         case modalEditOutlineName:
                 return renderModalBox(m.width, "Rename outline", m.input.View()+"\n\nenter: save   esc: cancel")
         case modalPickStatus:
@@ -1797,6 +2045,11 @@ func selectListItemByID(l *list.Model, id string) {
                                 l.Select(i)
                                 return
                         }
+                case agendaRowItem:
+                        if it.row.item.ID == id {
+                                l.Select(i)
+                                return
+                        }
                 case addItemRow:
                         if id == "__add__" {
                                 l.Select(i)
@@ -1946,7 +2199,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, nil
                 }
 
-                if m.modal == modalAddComment || m.modal == modalAddWorklog {
+                if m.modal == modalAddComment || m.modal == modalAddWorklog || m.modal == modalEditDescription {
                         switch km := msg.(type) {
                         case tea.KeyMsg:
                                 switch km.String() {
@@ -1989,14 +2242,20 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 case "enter":
                                         if m.textFocus == textFocusSave {
                                                 body := strings.TrimSpace(m.textarea.Value())
-                                                if body == "" {
-                                                        return m, nil
-                                                }
                                                 itemID := strings.TrimSpace(m.modalForID)
-                                                if m.modal == modalAddComment {
-                                                        _ = m.addComment(itemID, body)
+                                                if m.modal == modalEditDescription {
+                                                        if err := m.setDescriptionFromModal(body); err != nil {
+                                                                return m, m.reportError(itemID, err)
+                                                        }
                                                 } else {
-                                                        _ = m.addWorklog(itemID, body)
+                                                        if body == "" {
+                                                                return m, nil
+                                                        }
+                                                        if m.modal == modalAddComment {
+                                                                _ = m.addComment(itemID, body)
+                                                        } else {
+                                                                _ = m.addWorklog(itemID, body)
+                                                        }
                                                 }
                                                 m.modal = modalNone
                                                 m.modalForID = ""
@@ -2015,14 +2274,20 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         // else: newline in textarea
                                 case "ctrl+s":
                                         body := strings.TrimSpace(m.textarea.Value())
-                                        if body == "" {
-                                                return m, nil
-                                        }
                                         itemID := strings.TrimSpace(m.modalForID)
-                                        if m.modal == modalAddComment {
-                                                _ = m.addComment(itemID, body)
+                                        if m.modal == modalEditDescription {
+                                                if err := m.setDescriptionFromModal(body); err != nil {
+                                                        return m, m.reportError(itemID, err)
+                                                }
                                         } else {
-                                                _ = m.addWorklog(itemID, body)
+                                                if body == "" {
+                                                        return m, nil
+                                                }
+                                                if m.modal == modalAddComment {
+                                                        _ = m.addComment(itemID, body)
+                                                } else {
+                                                        _ = m.addWorklog(itemID, body)
+                                                }
                                         }
                                         m.modal = modalNone
                                         m.modalForID = ""
@@ -2170,7 +2435,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, m.schedulePreviewCompute()
                 }
 
-                if msg.String() == "D" && m.debugEnabled {
+                if msg.String() == "f12" && m.debugEnabled {
                         m.debugOverlay = !m.debugOverlay
                         if m.debugOverlay {
                                 m.showMinibuffer("Debug overlay: ON")
@@ -2206,13 +2471,19 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "C":
                         // Add comment to selected item.
                         if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-                                m.openTextModal(modalAddComment, it.row.item.ID, "Write a comment…")
+                                m.openTextModal(modalAddComment, it.row.item.ID, "Write a comment…", "")
                                 return m, nil
                         }
                 case "w":
                         // Add worklog entry to selected item.
                         if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-                                m.openTextModal(modalAddWorklog, it.row.item.ID, "Log work…")
+                                m.openTextModal(modalAddWorklog, it.row.item.ID, "Log work…", "")
+                                return m, nil
+                        }
+                case "D":
+                        // Edit description for selected item (multiline/markdown).
+                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                m.openTextModal(modalEditDescription, it.row.item.ID, "Markdown description…", it.row.item.Description)
                                 return m, nil
                         }
                 case " ":
@@ -2355,6 +2626,251 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                 }
         }
         return m, cmd
+}
+
+func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
+        switch km := msg.(type) {
+        case tea.KeyMsg:
+                switch km.String() {
+                case "ctrl+c", "q":
+                        return m, tea.Quit
+                case "x":
+                        m.openActionPanel(actionPanelContext)
+                        return m, nil
+                case "g":
+                        m.openActionPanel(actionPanelNav)
+                        return m, nil
+                case "a":
+                        m.openActionPanel(actionPanelAgenda)
+                        return m, nil
+                case "c":
+                        m.openActionPanel(actionPanelCapture)
+                        return m, nil
+                case "backspace", "esc":
+                        if m.hasAgendaReturnView {
+                                m.view = m.agendaReturnView
+                                m.hasAgendaReturnView = false
+                        } else {
+                                m.view = viewProjects
+                        }
+                        return m, nil
+                }
+
+                // Disallow structural/move keys in agenda.
+                if strings.HasPrefix(km.String(), "alt+") {
+                        m.showMinibuffer("Move/indent is not available in agenda")
+                        return m, nil
+                }
+
+                // Outline-style navigation (parent/child) for agenda.
+                if m.navAgenda(km) {
+                        return m, nil
+                }
+
+                // Item actions (only when an agenda row is selected).
+                it, ok := m.agendaList.SelectedItem().(agendaRowItem)
+                if !ok {
+                        // Let list handle moving between headings/items.
+                        var cmd tea.Cmd
+                        m.agendaList, cmd = m.agendaList.Update(msg)
+                        return m, cmd
+                }
+
+                switch km.String() {
+                case "enter":
+                        m.selectedProjectID = it.row.item.ProjectID
+                        m.selectedOutlineID = it.row.item.OutlineID
+                        if o, ok := m.db.FindOutline(it.row.item.OutlineID); ok {
+                                m.selectedOutline = o
+                        }
+                        m.openItemID = it.row.item.ID
+                        m.view = viewItem
+                        m.hasReturnView = true
+                        m.returnView = viewAgenda
+                        m.showPreview = false
+                        m.pane = paneOutline
+                        return m, nil
+                case "y":
+                        if err := copyToClipboard(it.row.item.ID); err != nil {
+                                m.showMinibuffer("Clipboard error: " + err.Error())
+                        } else {
+                                m.showMinibuffer("Copied item ID " + it.row.item.ID)
+                        }
+                        return m, nil
+                case "Y":
+                        cmd := "clarity items show " + it.row.item.ID
+                        if err := copyToClipboard(cmd); err != nil {
+                                m.showMinibuffer("Clipboard error: " + err.Error())
+                        } else {
+                                m.showMinibuffer("Copied: " + cmd)
+                        }
+                        return m, nil
+                case "C":
+                        m.openTextModal(modalAddComment, it.row.item.ID, "Write a comment…", "")
+                        return m, nil
+                case "w":
+                        m.openTextModal(modalAddWorklog, it.row.item.ID, "Log work…", "")
+                        return m, nil
+                case "e":
+                        m.modal = modalEditTitle
+                        m.modalForID = it.row.item.ID
+                        m.input.SetValue(it.row.item.Title)
+                        m.input.Focus()
+                        return m, nil
+                case "D":
+                        m.openTextModal(modalEditDescription, it.row.item.ID, "Markdown description…", it.row.item.Description)
+                        return m, nil
+                case " ":
+                        m.openStatusPicker(it.outline, it.row.item.ID, it.row.item.StatusID)
+                        m.modal = modalPickStatus
+                        m.modalForID = it.row.item.ID
+                        return m, nil
+                case "shift+right":
+                        if err := m.cycleItemStatus(it.outline, it.row.item.ID, +1); err != nil {
+                                return m, m.reportError(it.row.item.ID, err)
+                        }
+                        return m, nil
+                case "shift+left":
+                        if err := m.cycleItemStatus(it.outline, it.row.item.ID, -1); err != nil {
+                                return m, m.reportError(it.row.item.ID, err)
+                        }
+                        return m, nil
+                case "r":
+                        m.modal = modalConfirmArchive
+                        m.modalForID = it.row.item.ID
+                        m.archiveFor = archiveTargetItem
+                        m.input.Blur()
+                        return m, nil
+                case "z":
+                        m.toggleAgendaCollapseSelected()
+                        return m, nil
+                case "Z":
+                        m.toggleAgendaCollapseAll()
+                        return m, nil
+                }
+        }
+
+        var cmd tea.Cmd
+        m.agendaList, cmd = m.agendaList.Update(msg)
+        return m, cmd
+}
+
+func agendaDepth(it list.Item) int {
+        switch t := it.(type) {
+        case agendaHeadingItem:
+                _ = t
+                return 0
+        case agendaRowItem:
+                return 1 + t.row.depth
+        default:
+                return 0
+        }
+}
+
+func (m *appModel) navAgenda(msg tea.KeyMsg) bool {
+        if m == nil {
+                return false
+        }
+        items := m.agendaList.Items()
+        if len(items) == 0 {
+                return false
+        }
+        idx := m.agendaList.Index()
+        if idx < 0 {
+                idx = 0
+        }
+        if idx >= len(items) {
+                idx = len(items) - 1
+        }
+        curDepth := agendaDepth(items[idx])
+
+        switch msg.String() {
+        case "right", "l", "ctrl+f":
+                // Expand if collapsed.
+                if it, ok := items[idx].(agendaRowItem); ok {
+                        if it.row.hasChildren && it.row.collapsed {
+                                m.agendaCollapsed[it.row.item.ID] = false
+                                m.refreshAgenda()
+                                selectListItemByID(&m.agendaList, it.row.item.ID)
+                                return true
+                        }
+                }
+                // Move to first child if the next row is deeper.
+                if idx+1 < len(items) && agendaDepth(items[idx+1]) > curDepth {
+                        m.agendaList.Select(idx + 1)
+                        return true
+                }
+        case "left", "h", "ctrl+b":
+                // Go to parent (previous item with depth == curDepth-1).
+                want := curDepth - 1
+                if want < 0 {
+                        want = 0
+                }
+                for i := idx - 1; i >= 0; i-- {
+                        if agendaDepth(items[i]) == want {
+                                m.agendaList.Select(i)
+                                return true
+                        }
+                }
+        }
+
+        return false
+}
+
+func (m *appModel) toggleAgendaCollapseSelected() {
+        if m == nil {
+                return
+        }
+        it, ok := m.agendaList.SelectedItem().(agendaRowItem)
+        if !ok {
+                return
+        }
+        if !it.row.hasChildren {
+                return
+        }
+        id := strings.TrimSpace(it.row.item.ID)
+        if id == "" {
+                return
+        }
+        m.agendaCollapsed[id] = !m.agendaCollapsed[id]
+        m.refreshAgenda()
+        selectListItemByID(&m.agendaList, id)
+}
+
+func (m *appModel) toggleAgendaCollapseAll() {
+        if m == nil {
+                return
+        }
+        items := m.agendaList.Items()
+        anyCollapsed := false
+        for _, it := range items {
+                if r, ok := it.(agendaRowItem); ok {
+                        if r.row.hasChildren && r.row.collapsed {
+                                anyCollapsed = true
+                                break
+                        }
+                }
+        }
+        if anyCollapsed {
+                // Expand all.
+                for _, it := range items {
+                        if r, ok := it.(agendaRowItem); ok {
+                                if r.row.hasChildren {
+                                        m.agendaCollapsed[r.row.item.ID] = false
+                                }
+                        }
+                }
+        } else {
+                // Collapse all nodes with children.
+                for _, it := range items {
+                        if r, ok := it.(agendaRowItem); ok {
+                                if r.row.hasChildren {
+                                        m.agendaCollapsed[r.row.item.ID] = true
+                                }
+                        }
+                }
+        }
+        m.refreshAgenda()
 }
 
 func (m *appModel) nearestSelectableItemID(fromIdx int) string {
@@ -3144,6 +3660,51 @@ func (m *appModel) setTitleFromModal(title string) error {
         return nil
 }
 
+func (m *appModel) setDescriptionFromModal(description string) error {
+        itemID := strings.TrimSpace(m.modalForID)
+        if itemID == "" {
+                return nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return err
+        }
+        m.db = db
+        actorID := m.editActorID()
+        if actorID == "" {
+                return errors.New("no current actor")
+        }
+
+        t, ok := m.db.FindItem(itemID)
+        if !ok {
+                return nil
+        }
+        if !canEditItem(m.db, actorID, t) {
+                return errors.New("permission denied")
+        }
+
+        t.Description = strings.TrimSpace(description)
+        t.UpdatedAt = time.Now().UTC()
+        if err := m.store.Save(m.db); err != nil {
+                return err
+        }
+        _ = m.store.AppendEvent(actorID, "item.set_description", t.ID, map[string]any{"description": t.Description})
+        m.captureStoreModTimes()
+
+        // Description affects the preview pane; ensure it is recomputed.
+        m.previewCacheForID = ""
+
+        if m.selectedOutline != nil {
+                if o, ok := m.db.FindOutline(m.selectedOutline.ID); ok {
+                        m.selectedOutline = o
+                }
+                m.refreshItems(*m.selectedOutline)
+                selectListItemByID(&m.itemsList, t.ID)
+        }
+        return nil
+}
+
 func (m *appModel) setOutlineNameFromModal(name string) error {
         outlineID := strings.TrimSpace(m.modalForID)
         if outlineID == "" {
@@ -3778,7 +4339,7 @@ func nextSiblingRank(db *store.DB, outlineID string, parentID *string) string {
         return r
 }
 
-func (m *appModel) openTextModal(kind modalKind, itemID, placeholder string) {
+func (m *appModel) openTextModal(kind modalKind, itemID, placeholder, initial string) {
         if strings.TrimSpace(itemID) == "" {
                 return
         }
@@ -3812,7 +4373,7 @@ func (m *appModel) openTextModal(kind modalKind, itemID, placeholder string) {
         m.textarea.Placeholder = placeholder
         m.textarea.SetWidth(bodyW)
         m.textarea.SetHeight(h)
-        m.textarea.SetValue("")
+        m.textarea.SetValue(initial)
         m.textarea.Focus()
 }
 
