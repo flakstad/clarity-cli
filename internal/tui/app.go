@@ -84,6 +84,33 @@ const (
         modalPickStatus
         modalAddComment
         modalAddWorklog
+        modalActionPanel
+)
+
+type actionPanelKind int
+
+const (
+        actionPanelContext actionPanelKind = iota
+        actionPanelNav
+)
+
+type actionPanelAction struct {
+        // label is displayed in the panel.
+        label string
+        // kind indicates whether the action executes something or navigates to a subpanel.
+        kind actionPanelActionKind
+        // next is used when kind == actionPanelActionNav.
+        next actionPanelKind
+        // handler runs when kind == actionPanelActionExec and the action is not a simple
+        // "forward to existing key handler" action.
+        handler func(appModel) (appModel, tea.Cmd)
+}
+
+type actionPanelActionKind int
+
+const (
+        actionPanelActionExec actionPanelActionKind = iota
+        actionPanelActionNav
 )
 
 type archiveTarget int
@@ -138,6 +165,8 @@ type appModel struct {
         textarea   textarea.Model
         textFocus  textModalFocus
 
+        actionPanelStack []actionPanelKind
+
         pendingEsc bool
 
         resizing  bool
@@ -162,6 +191,241 @@ type appModel struct {
         lastEventsModTime time.Time
 
         minibufferText string
+}
+
+func (m *appModel) openActionPanel(kind actionPanelKind) {
+        if m == nil {
+                return
+        }
+        m.modal = modalActionPanel
+        m.actionPanelStack = []actionPanelKind{kind}
+        m.pendingEsc = false
+}
+
+func (m *appModel) closeActionPanel() {
+        if m == nil {
+                return
+        }
+        if m.modal == modalActionPanel {
+                m.modal = modalNone
+                m.actionPanelStack = nil
+                m.pendingEsc = false
+        }
+}
+
+func (m *appModel) pushActionPanel(kind actionPanelKind) {
+        if m == nil {
+                return
+        }
+        if m.modal != modalActionPanel {
+                return
+        }
+        m.actionPanelStack = append(m.actionPanelStack, kind)
+}
+
+func (m *appModel) popActionPanel() {
+        if m == nil {
+                return
+        }
+        if m.modal != modalActionPanel {
+                return
+        }
+        if len(m.actionPanelStack) <= 1 {
+                m.closeActionPanel()
+                return
+        }
+        m.actionPanelStack = m.actionPanelStack[:len(m.actionPanelStack)-1]
+}
+
+func (m appModel) curActionPanelKind() actionPanelKind {
+        if len(m.actionPanelStack) == 0 {
+                return actionPanelContext
+        }
+        return m.actionPanelStack[len(m.actionPanelStack)-1]
+}
+
+type actionPanelEntry struct {
+        key   string
+        label string
+}
+
+func actionPanelDisplayKey(k string) string {
+        switch k {
+        case " ":
+                return "SPACE"
+        default:
+                return k
+        }
+}
+
+func (m appModel) actionPanelTitle() string {
+        switch m.curActionPanelKind() {
+        case actionPanelNav:
+                return "Navigate"
+        default:
+                return "Actions"
+        }
+}
+
+func (m appModel) actionPanelActions() map[string]actionPanelAction {
+        cur := m.curActionPanelKind()
+        actions := map[string]actionPanelAction{}
+
+        // Always-available global actions.
+        actions["A"] = actionPanelAction{label: "Agenda (coming soon)", kind: actionPanelActionExec}
+        actions["C"] = actionPanelAction{label: "Capture (coming soon)", kind: actionPanelActionExec}
+
+        switch cur {
+        case actionPanelNav:
+                // Nav destinations are only shown when they can work "right now".
+                actions["p"] = actionPanelAction{
+                        label: "Projects",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                mm.view = viewProjects
+                                mm.showPreview = false
+                                mm.openItemID = ""
+                                mm.pane = paneOutline
+                                mm.refreshProjects()
+                                return mm, nil
+                        },
+                }
+
+                // Outlines (requires a project context).
+                projID := strings.TrimSpace(m.selectedProjectID)
+                if projID == "" && m.db != nil {
+                        projID = strings.TrimSpace(m.db.CurrentProjectID)
+                }
+                if projID != "" {
+                        actions["o"] = actionPanelAction{
+                                label: "Outlines (current project)",
+                                kind:  actionPanelActionExec,
+                                handler: func(mm appModel) (appModel, tea.Cmd) {
+                                        target := strings.TrimSpace(mm.selectedProjectID)
+                                        if target == "" && mm.db != nil {
+                                                target = strings.TrimSpace(mm.db.CurrentProjectID)
+                                        }
+                                        if target == "" {
+                                                mm.showMinibuffer("No project selected")
+                                                return mm, nil
+                                        }
+                                        mm.view = viewOutlines
+                                        mm.showPreview = false
+                                        mm.openItemID = ""
+                                        mm.pane = paneOutline
+                                        mm.selectedProjectID = target
+                                        mm.refreshOutlines(target)
+                                        return mm, nil
+                                },
+                        }
+                }
+
+                // Outline (requires an outline context).
+                outID := strings.TrimSpace(m.selectedOutlineID)
+                if outID != "" {
+                        actions["l"] = actionPanelAction{
+                                label: "Outline (current)",
+                                kind:  actionPanelActionExec,
+                                handler: func(mm appModel) (appModel, tea.Cmd) {
+                                        target := strings.TrimSpace(mm.selectedOutlineID)
+                                        if target == "" {
+                                                mm.showMinibuffer("No outline selected")
+                                                return mm, nil
+                                        }
+                                        mm.view = viewOutline
+                                        mm.showPreview = false
+                                        mm.openItemID = ""
+                                        mm.pane = paneOutline
+                                        if mm.db != nil {
+                                                if o, ok := mm.db.FindOutline(target); ok {
+                                                        mm.selectedOutline = o
+                                                        mm.refreshItems(*o)
+                                                }
+                                        }
+                                        return mm, nil
+                                },
+                        }
+                }
+
+                // Full-screen item (requires an open item).
+                itemID := strings.TrimSpace(m.openItemID)
+                if itemID != "" {
+                        actions["i"] = actionPanelAction{
+                                label: "Item (open)",
+                                kind:  actionPanelActionExec,
+                                handler: func(mm appModel) (appModel, tea.Cmd) {
+                                        if strings.TrimSpace(mm.openItemID) == "" {
+                                                mm.showMinibuffer("No item open")
+                                                return mm, nil
+                                        }
+                                        mm.view = viewItem
+                                        mm.showPreview = false
+                                        mm.pane = paneOutline
+                                        return mm, nil
+                                },
+                        }
+                }
+
+        default:
+                // Contextual (depends on current view/pane).
+                actions["g"] = actionPanelAction{label: "Navigate…", kind: actionPanelActionNav, next: actionPanelNav}
+
+                switch m.view {
+                case viewProjects:
+                        actions["enter"] = actionPanelAction{label: "Select project", kind: actionPanelActionExec}
+                        actions["n"] = actionPanelAction{label: "New project", kind: actionPanelActionExec}
+                        actions["e"] = actionPanelAction{label: "Rename project", kind: actionPanelActionExec}
+                        actions["r"] = actionPanelAction{label: "Archive project", kind: actionPanelActionExec}
+                        actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
+                case viewOutlines:
+                        actions["enter"] = actionPanelAction{label: "Select outline", kind: actionPanelActionExec}
+                        actions["n"] = actionPanelAction{label: "New outline", kind: actionPanelActionExec}
+                        actions["e"] = actionPanelAction{label: "Rename outline", kind: actionPanelActionExec}
+                        actions["r"] = actionPanelAction{label: "Archive outline", kind: actionPanelActionExec}
+                        actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
+                case viewItem:
+                        actions["y"] = actionPanelAction{label: "Copy item ID", kind: actionPanelActionExec}
+                        actions["Y"] = actionPanelAction{label: "Copy CLI show command", kind: actionPanelActionExec}
+                        actions["r"] = actionPanelAction{label: "Archive item", kind: actionPanelActionExec}
+                        actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
+                case viewOutline:
+                        actions["enter"] = actionPanelAction{label: "Open item", kind: actionPanelActionExec}
+                        actions["o"] = actionPanelAction{label: "Toggle preview", kind: actionPanelActionExec}
+                        if m.splitPreviewVisible() {
+                                actions["tab"] = actionPanelAction{label: "Toggle focus (outline/detail)", kind: actionPanelActionExec}
+                        }
+                        actions["z"] = actionPanelAction{label: "Toggle collapse", kind: actionPanelActionExec}
+                        actions["Z"] = actionPanelAction{label: "Collapse/expand all", kind: actionPanelActionExec}
+                        actions["y"] = actionPanelAction{label: "Copy item ID", kind: actionPanelActionExec}
+                        actions["Y"] = actionPanelAction{label: "Copy CLI show command", kind: actionPanelActionExec}
+                        actions["c"] = actionPanelAction{label: "Add comment", kind: actionPanelActionExec}
+                        actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
+                        actions["r"] = actionPanelAction{label: "Archive item", kind: actionPanelActionExec}
+                        actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
+
+                        // Mutations are outline-pane only today.
+                        if m.pane == paneOutline {
+                                actions["e"] = actionPanelAction{label: "Edit title", kind: actionPanelActionExec}
+                                actions["n"] = actionPanelAction{label: "New sibling", kind: actionPanelActionExec}
+                                actions["N"] = actionPanelAction{label: "New child", kind: actionPanelActionExec}
+                                actions[" "] = actionPanelAction{label: "Change status", kind: actionPanelActionExec}
+                                actions["shift+left"] = actionPanelAction{label: "Cycle status (prev)", kind: actionPanelActionExec}
+                                actions["shift+right"] = actionPanelAction{label: "Cycle status (next)", kind: actionPanelActionExec}
+                        }
+                }
+        }
+
+        return actions
+}
+
+func (m appModel) actionPanelEntries() []actionPanelEntry {
+        actions := m.actionPanelActions()
+        entries := make([]actionPanelEntry, 0, len(actions))
+        for k, a := range actions {
+                entries = append(entries, actionPanelEntry{key: k, label: a.label})
+        }
+        sort.Slice(entries, func(i, j int) bool { return entries[i].key < entries[j].key })
+        return entries
 }
 
 const (
@@ -392,6 +656,15 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 switch msg.String() {
                 case "ctrl+c", "q":
                         return m, tea.Quit
+                case "x":
+                        m.openActionPanel(actionPanelContext)
+                        return m, nil
+                case "A":
+                        m.showMinibuffer("Agenda (coming soon)")
+                        return m, nil
+                case "C":
+                        m.showMinibuffer("Capture (coming soon)")
+                        return m, nil
                 case "y":
                         if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
                                 id := strings.TrimSpace(m.openItemID)
@@ -747,6 +1020,9 @@ func (m *appModel) viewOutlines() string {
 
 func (m appModel) footerText() string {
         base := "enter: select  backspace/esc: back  q: quit"
+        if m.modal == modalActionPanel {
+                return "action: type a key  backspace/esc: back  ctrl+g: close"
+        }
         if m.view == viewItem {
                 return "backspace/esc: back  q: quit  y/Y: copy"
         }
@@ -830,6 +1106,62 @@ func (m appModel) minibufferView() string {
 
 func (m *appModel) showMinibuffer(text string) {
         m.minibufferText = text
+}
+
+func (m appModel) renderActionPanel() string {
+        title := m.actionPanelTitle()
+        entries := m.actionPanelEntries()
+        if len(entries) == 0 {
+                return renderModalBox(m.width, title, "(no actions)")
+        }
+
+        // Group global actions first, then nav, then everything else.
+        globalOrder := []string{"A", "C"}
+        navOrder := []string{"g", "p", "o", "l", "i"}
+        seen := map[string]bool{}
+        lines := []string{}
+
+        actions := m.actionPanelActions()
+        addKey := func(k string) {
+                if seen[k] {
+                        return
+                }
+                a, ok := actions[k]
+                if !ok {
+                        return
+                }
+                seen[k] = true
+                lines = append(lines, fmt.Sprintf("%-12s %s", actionPanelDisplayKey(k), a.label))
+        }
+
+        for _, k := range globalOrder {
+                addKey(k)
+        }
+        if len(lines) > 0 {
+                lines = append(lines, "")
+        }
+        for _, k := range navOrder {
+                addKey(k)
+        }
+        if len(lines) > 0 && lines[len(lines)-1] != "" {
+                lines = append(lines, "")
+        }
+
+        rest := make([]string, 0, len(entries))
+        for _, e := range entries {
+                if seen[e.key] {
+                        continue
+                }
+                rest = append(rest, e.key)
+        }
+        sort.Strings(rest)
+        for _, k := range rest {
+                addKey(k)
+        }
+
+        body := strings.Join(lines, "\n")
+        body += "\n\nbackspace/esc: back    ctrl+g: close"
+        return renderModalBox(m.width, title, body)
 }
 
 func (m *appModel) reportError(itemID string, err error) tea.Cmd {
@@ -1229,6 +1561,8 @@ func (m *appModel) viewItem() string {
 
 func (m *appModel) renderModal() string {
         switch m.modal {
+        case modalActionPanel:
+                return m.renderActionPanel()
         case modalNewSibling, modalNewChild:
                 title := "New item"
                 if m.modal == modalNewChild {
@@ -1420,6 +1754,41 @@ func selectListItemByID(l *list.Model, id string) {
 func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
         // Modal input takes over all keys.
         if m.modal != modalNone {
+                if m.modal == modalActionPanel {
+                        if km, ok := msg.(tea.KeyMsg); ok {
+                                switch km.String() {
+                                case "ctrl+g":
+                                        (&m).closeActionPanel()
+                                        return m, nil
+                                case "esc", "backspace":
+                                        (&m).popActionPanel()
+                                        return m, nil
+                                }
+
+                                actions := m.actionPanelActions()
+                                if a, ok := actions[km.String()]; ok {
+                                        switch a.kind {
+                                        case actionPanelActionNav:
+                                                (&m).pushActionPanel(a.next)
+                                                return m, nil
+                                        default:
+                                                // Execute and close (panel takes over keys; only listed keys run).
+                                                (&m).closeActionPanel()
+                                                if a.handler != nil {
+                                                        m2, cmd := a.handler(m)
+                                                        return m2, cmd
+                                                }
+                                                m2Any, cmd := m.Update(km)
+                                                if m2, ok := m2Any.(appModel); ok {
+                                                        return m2, cmd
+                                                }
+                                                return m, cmd
+                                        }
+                                }
+                        }
+                        return m, nil
+                }
+
                 if m.modal == modalConfirmArchive {
                         if km, ok := msg.(tea.KeyMsg); ok {
                                 switch km.String() {

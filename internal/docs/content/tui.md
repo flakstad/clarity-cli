@@ -14,6 +14,11 @@ Current scope (early):
 - Reorder and restructure items (reorder, indent, outdent)
 
 Key bindings:
+- `x`: open the action panel (shows available commands for the current context)
+- `esc` / `backspace`: go back within the action panel; from the root, closes the panel
+- `ctrl+g`: close the action panel immediately
+- `A`: agenda (coming soon)
+- `C`: capture (coming soon)
 - `enter`: open selected item (single-pane item view)
 - `o`: toggle preview pane (split view; auto-collapses on narrow terminals `<80` cols)
 - `backspace` or `esc`: go back (from item view → outline; from outline → previous screen)
