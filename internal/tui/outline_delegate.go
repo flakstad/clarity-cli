@@ -175,20 +175,18 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
                 title = "(untitled)"
         }
 
-        // Reserve room for metadata on the right; the title has a hard cap.
-        maxTitleW := 50
-        availTitle := width - xansi.StringWidth(leadRaw) - xansi.StringWidth(statusRaw)
+        // Reserve room for metadata on the right; truncate the title ONLY when we're out of space.
+        leadW := xansi.StringWidth(leadRaw)
+        statusW := xansi.StringWidth(statusRaw)
+        availTitle := width - leadW - statusW
         if rightSeg != "" {
                 availTitle -= (1 + rightW) // space + right side
         }
         if availTitle < 0 {
                 availTitle = 0
         }
-        if availTitle < maxTitleW {
-                maxTitleW = availTitle
-        }
 
-        titleTrunc := truncateText(title, maxTitleW)
+        titleTrunc := truncateText(title, availTitle)
         titleStyle := base
         if isEndState(it.outline, statusID) {
                 titleStyle = faintIfDark(base.Copy()).
@@ -199,17 +197,20 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
 
         spacerSeg := ""
         if rightSeg != "" {
-                leftRaw := leadRaw + statusRaw + titleTrunc
-                spacerW := width - xansi.StringWidth(leftRaw) - 1 - rightW
-                if spacerW < 0 {
-                        maxTitleW = max(0, maxTitleW+spacerW)
-                        titleTrunc = truncateText(title, maxTitleW)
-                        titleSeg = base.Render(titleTrunc)
-                        leftRaw = leadRaw + statusRaw + titleTrunc
-                        spacerW = width - xansi.StringWidth(leftRaw) - 1 - rightW
-                        if spacerW < 0 {
-                                spacerW = 0
+                // Ensure right-side metadata stays visible; it takes precedence over title.
+                needW := leadW + statusW + xansi.StringWidth(titleTrunc) + 1 + rightW
+                if needW > width {
+                        availTitle = width - leadW - statusW - 1 - rightW
+                        if availTitle < 0 {
+                                availTitle = 0
                         }
+                        titleTrunc = truncateText(title, availTitle)
+                        titleSeg = titleStyle.Render(titleTrunc)
+                        needW = leadW + statusW + xansi.StringWidth(titleTrunc) + 1 + rightW
+                }
+                spacerW := width - needW
+                if spacerW < 0 {
+                        spacerW = 0
                 }
                 spacerSeg = base.Render(" " + strings.Repeat(" ", spacerW))
         }

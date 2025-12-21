@@ -11,6 +11,102 @@ import (
         "github.com/muesli/termenv"
 )
 
+func TestOutlineDelegate_DoesNotHardCapTitleWidth(t *testing.T) {
+        d := newOutlineItemDelegate()
+
+        outline := model.Outline{
+                ID:        "out-a",
+                ProjectID: "proj-a",
+                StatusDefs: []model.OutlineStatusDef{
+                        {ID: "todo", Label: "TODO", IsEndState: false},
+                },
+                CreatedBy: "act-human",
+                CreatedAt: time.Now().UTC(),
+        }
+
+        title := strings.Repeat("X", 80) // longer than old 50-char cap
+        it := outlineRowItem{
+                outline: outline,
+                row: outlineRow{
+                        item: model.Item{
+                                ID:           "item-a",
+                                ProjectID:    "proj-a",
+                                OutlineID:    "out-a",
+                                Rank:         "h",
+                                Title:        title,
+                                StatusID:     "todo",
+                                OwnerActorID: "act-human",
+                                CreatedBy:    "act-human",
+                                CreatedAt:    time.Now().UTC(),
+                                UpdatedAt:    time.Now().UTC(),
+                        },
+                        depth:       0,
+                        hasChildren: false,
+                        collapsed:   false,
+                },
+        }
+
+        // Wide enough that we should not truncate at all.
+        out := d.renderOutlineRow(140, "", it, false)
+        if strings.Contains(out, "…") {
+                t.Fatalf("expected no ellipsis in wide render; got %q", out)
+        }
+        if !strings.Contains(out, title) {
+                t.Fatalf("expected full title to be present (len=%d)", len(title))
+        }
+}
+
+func TestOutlineDelegate_MetaTakesPrecedenceOverTitle(t *testing.T) {
+        d := newOutlineItemDelegate()
+
+        outline := model.Outline{
+                ID:        "out-a",
+                ProjectID: "proj-a",
+                StatusDefs: []model.OutlineStatusDef{
+                        {ID: "todo", Label: "TODO", IsEndState: false},
+                },
+                CreatedBy: "act-human",
+                CreatedAt: time.Now().UTC(),
+        }
+
+        title := strings.Repeat("A", 200)
+        it := outlineRowItem{
+                outline: outline,
+                row: outlineRow{
+                        item: model.Item{
+                                ID:           "item-a",
+                                ProjectID:    "proj-a",
+                                OutlineID:    "out-a",
+                                Rank:         "h",
+                                Title:        title,
+                                StatusID:     "todo",
+                                Priority:     true,
+                                OwnerActorID: "act-human",
+                                CreatedBy:    "act-human",
+                                CreatedAt:    time.Now().UTC(),
+                                UpdatedAt:    time.Now().UTC(),
+                        },
+                        depth:         0,
+                        hasChildren:   true,
+                        collapsed:     false,
+                        doneChildren:  1,
+                        totalChildren: 2,
+                },
+        }
+
+        // Narrow enough that title must truncate; meta should still be present.
+        out := d.renderOutlineRow(60, "", it, false)
+        if !strings.Contains(out, "…") {
+                t.Fatalf("expected title truncation (ellipsis) in narrow render; got %q", out)
+        }
+        if !strings.Contains(out, "priority") {
+                t.Fatalf("expected meta 'priority' to be present; got %q", out)
+        }
+        if !strings.Contains(out, "1/2") {
+                t.Fatalf("expected progress cookie to include 1/2; got %q", out)
+        }
+}
+
 func TestOutlineDelegate_EndStateItem_IsGrayAndStruck(t *testing.T) {
         old := lipgloss.ColorProfile()
         lipgloss.SetColorProfile(termenv.ANSI256)

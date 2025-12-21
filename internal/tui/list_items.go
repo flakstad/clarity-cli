@@ -223,7 +223,7 @@ func (i agendaRowItem) FilterValue() string {
 
 func (i agendaRowItem) Title() string {
         indent := strings.Repeat("  ", i.row.depth)
-        twisty := " "
+        twisty := ""
         if i.row.hasChildren {
                 if i.row.collapsed {
                         twisty = "▸"
@@ -253,10 +253,29 @@ func (i agendaRowItem) Title() string {
                 meta = "  " + strings.Join(metaParts, " ")
         }
 
-        if strings.TrimSpace(status) == "" {
-                return fmt.Sprintf("%s%s %s%s", indent, twisty, title, meta)
+        // Avoid extra indentation under the outline header: top-level leaf items should start
+        // flush left. Keep indentation for nested children, and keep a twisty for parents.
+        lead := ""
+        if i.row.depth > 0 {
+                if twisty == "" {
+                        lead = indent
+                } else {
+                        lead = indent + twisty + " "
+                }
+        } else if twisty != "" {
+                lead = twisty + " "
         }
-        return fmt.Sprintf("%s%s %s %s%s", indent, twisty, status, title, meta)
+
+        if strings.TrimSpace(status) == "" {
+                if lead == "" {
+                        return fmt.Sprintf("%s%s", title, meta)
+                }
+                return fmt.Sprintf("%s%s%s", lead, title, meta)
+        }
+        if lead == "" {
+                return fmt.Sprintf("%s %s%s", status, title, meta)
+        }
+        return fmt.Sprintf("%s%s %s%s", lead, status, title, meta)
 }
 
 func (i agendaRowItem) Description() string { return "" }

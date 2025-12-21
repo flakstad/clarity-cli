@@ -1,6 +1,7 @@
 package tui
 
 import (
+        "strings"
         "testing"
         "time"
 
@@ -85,5 +86,8 @@ func TestStatusPicker_Enter_SetsStatus_WhenCurrentActorIsAgent(t *testing.T) {
         }
         if item2.StatusID != "doing" {
                 t.Fatalf("expected status to be set to doing; got %q (minibuffer=%q)", item2.StatusID, m2.minibufferText)
+        }
+        if got := strings.TrimSpace(m2.minibufferText); got == "" || !strings.Contains(got, "Status:") {
+                t.Fatalf("expected minibuffer status confirmation; got %q", m2.minibufferText)
         }
 }

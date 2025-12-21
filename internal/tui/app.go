@@ -167,6 +167,8 @@ type appModel struct {
         agendaCollapsed     map[string]bool
         collapsed           map[string]bool
         collapseInitialized bool
+        // Per-outline display mode for the outline view (experimental).
+        outlineViewMode map[string]outlineViewMode
 
         modal      modalKind
         modalForID string
@@ -201,6 +203,52 @@ type appModel struct {
         lastEventsModTime time.Time
 
         minibufferText string
+}
+
+type outlineViewMode int
+
+const (
+        outlineViewModeList outlineViewMode = iota
+        outlineViewModeColumns
+)
+
+func (m *appModel) curOutlineViewMode() outlineViewMode {
+        if m == nil {
+                return outlineViewModeList
+        }
+        id := strings.TrimSpace(m.selectedOutlineID)
+        if id == "" || m.outlineViewMode == nil {
+                return outlineViewModeList
+        }
+        if v, ok := m.outlineViewMode[id]; ok {
+                return v
+        }
+        return outlineViewModeList
+}
+
+func (m *appModel) toggleOutlineViewMode() {
+        if m == nil {
+                return
+        }
+        id := strings.TrimSpace(m.selectedOutlineID)
+        if id == "" {
+                return
+        }
+        if m.outlineViewMode == nil {
+                m.outlineViewMode = map[string]outlineViewMode{}
+        }
+        cur := m.curOutlineViewMode()
+        if cur == outlineViewModeColumns {
+                m.outlineViewMode[id] = outlineViewModeList
+                m.showMinibuffer("View: list")
+                return
+        }
+        // Switching to columns: disable split-preview (kanban uses the whole canvas).
+        m.outlineViewMode[id] = outlineViewModeColumns
+        m.showPreview = false
+        m.pane = paneOutline
+        m.previewCacheForID = ""
+        m.showMinibuffer("View: columns (experimental)")
 }
 
 func (m *appModel) openActionPanel(kind actionPanelKind) {
@@ -437,6 +485,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                 case viewOutline:
                         actions["enter"] = actionPanelAction{label: "Open item", kind: actionPanelActionExec}
                         actions["o"] = actionPanelAction{label: "Toggle preview", kind: actionPanelActionExec}
+                        actions["v"] = actionPanelAction{label: "Toggle column view (experimental)", kind: actionPanelActionExec}
                         if m.splitPreviewVisible() {
                                 actions["tab"] = actionPanelAction{label: "Toggle focus (outline/detail)", kind: actionPanelActionExec}
                         }
@@ -710,7 +759,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 switch msg.String() {
                 case "ctrl+c", "q":
                         return m, tea.Quit
-                case "x":
+                case "x", "?":
                         m.openActionPanel(actionPanelContext)
                         return m, nil
                 case "g":
@@ -1014,7 +1063,34 @@ func (m appModel) View() string {
         }
 
         footer := m.footerBlock()
-        return strings.Join([]string{body, footer}, "\n\n")
+        // Keep the footer (minibuffer + shortcuts) anchored to the bottom by inserting
+        // the "extra" vertical space between body and footer.
+        w := m.width
+        if w < 0 {
+                w = 0
+        }
+        h := m.height
+        if h <= 0 {
+                // Fallback: no reliable terminal height; render compactly.
+                return strings.Join([]string{body, footer}, "\n")
+        }
+        blankLine := strings.Repeat(" ", w)
+
+        bodyLines := strings.Split(body, "\n")
+        footerLines := strings.Split(footer, "\n")
+
+        gap := 1
+        if len(bodyLines)+len(footerLines) < h {
+                gap = h - (len(bodyLines) + len(footerLines))
+        }
+
+        lines := make([]string, 0, len(bodyLines)+gap+len(footerLines))
+        lines = append(lines, bodyLines...)
+        for i := 0; i < gap; i++ {
+                lines = append(lines, blankLine)
+        }
+        lines = append(lines, footerLines...)
+        return strings.Join(lines, "\n")
 }
 
 func (m *appModel) breadcrumbText() string {
@@ -1172,22 +1248,12 @@ func (m *appModel) viewAgenda() string {
 }
 
 func (m appModel) footerText() string {
-        base := "enter: select  backspace/esc: back  q: quit"
+        // The footer should list only global shortcuts. Contextual shortcuts belong in the action panel.
+        base := "x/?: actions  g: nav  a: agenda  c: capture  q: quit"
         if m.modal == modalActionPanel {
                 return "action: type a key  backspace/esc: back  ctrl+g: close"
         }
-        if m.view == viewAgenda {
-                return "enter: open  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  e/D: edit  space: status  backspace/esc: back  q: quit"
-        }
-        if m.view == viewItem {
-                return "backspace/esc: back  q: quit  y/Y: copy"
-        }
-        if m.view == viewProjects && m.modal == modalNone {
-                return "enter: select  n: new  e: rename  r: archive  q: quit"
-        }
-        if m.view == viewOutlines && m.modal == modalNone {
-                return "enter: select  n: new  e: rename  r: archive  backspace/esc: back  q: quit"
-        }
+        // Modal-specific hints should still be shown because the action panel isn't reachable while a modal is open.
         if m.modal == modalNewProject {
                 return "new project: type, enter: save, esc: cancel"
         }
@@ -1199,9 +1265,6 @@ func (m appModel) footerText() string {
         }
         if m.modal == modalEditOutlineName {
                 return "rename outline: type, enter: save, esc: cancel"
-        }
-        if m.view != viewOutline {
-                return base
         }
         if m.modal != modalNone {
                 if m.modal == modalConfirmArchive {
@@ -1227,10 +1290,7 @@ func (m appModel) footerText() string {
                 }
                 return "new item: type title, enter: save, esc: cancel"
         }
-        if m.splitPreviewVisible() {
-                return "enter: open  o: preview  tab: toggle focus  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  D: edit desc  space: status  Shift+←/→: cycle status  C: comment  w: worklog  r: archive  y/Y: copy"
-        }
-        return "enter: open  o: preview  arrows/jk/ctrl+n/p/h/l/ctrl+b/f: navigate  alt+arrows: move/indent/outdent  z/Z: collapse  n/N: add  e: edit title  D: edit desc  space: status  Shift+←/→: cycle status  C: comment  w: worklog  r: archive  y/Y: copy"
+        return base
 }
 
 func (m appModel) footerBlock() string {
@@ -1471,8 +1531,8 @@ func (m *appModel) outlineLayout() (frameH, bodyH, contentW int) {
                 w = 10
         }
         contentW = w
-        // In split view we use full width (with outer margins) instead of centering to maxContentW.
-        if m.splitPreviewVisible() {
+        // In split/column view we use full width (with outer margins) instead of centering to maxContentW.
+        if m.curOutlineViewMode() == outlineViewModeColumns || m.splitPreviewVisible() {
                 contentW = w - 2*splitOuterMargin
         } else if contentW > maxContentW {
                 contentW = maxContentW
@@ -1506,13 +1566,6 @@ func (m *appModel) schedulePreviewCompute() tea.Cmd {
         return tea.Tick(90*time.Millisecond, func(time.Time) tea.Msg {
                 return previewComputeMsg{seq: seq, itemID: itemID, w: rightW, h: bodyH}
         })
-}
-
-func emptyAsDash(s string) string {
-        if strings.TrimSpace(s) == "" {
-                return "-"
-        }
-        return s
 }
 
 func (m *appModel) refreshProjects() {
@@ -1712,6 +1765,23 @@ func (m *appModel) refreshAgenda() {
                                 continue
                         }
                         items = append(items, agendaHeadingItem{projectName: projectName, outlineName: outName})
+                        // Default agenda behavior: start parents collapsed so the agenda is lean/scannable.
+                        // Only initialize collapse state for items we haven't seen before (so user toggles
+                        // persist while the app is running).
+                        childCount := map[string]int{}
+                        for i := range its {
+                                if its[i].ParentID != nil && strings.TrimSpace(*its[i].ParentID) != "" {
+                                        childCount[strings.TrimSpace(*its[i].ParentID)]++
+                                }
+                        }
+                        for parentID, n := range childCount {
+                                if n <= 0 {
+                                        continue
+                                }
+                                if _, ok := m.agendaCollapsed[parentID]; !ok {
+                                        m.agendaCollapsed[parentID] = true
+                                }
+                        }
                         flat := flattenOutline(o, its, m.agendaCollapsed)
                         for _, row := range flat {
                                 items = append(items, agendaRowItem{
@@ -1741,6 +1811,38 @@ func (m *appModel) viewOutline() string {
         w := m.width
         if w < 10 {
                 w = 10
+        }
+
+        // Experimental: column/kanban view (status as columns).
+        if m.curOutlineViewMode() == outlineViewModeColumns {
+                crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+                outline, ok := m.db.FindOutline(m.selectedOutlineID)
+                if !ok {
+                        msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("Outline not found.")
+                        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
+                        main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
+                        return main
+                }
+
+                its := make([]model.Item, 0, 64)
+                for _, it := range m.db.Items {
+                        if it.Archived {
+                                continue
+                        }
+                        if it.OutlineID != outline.ID {
+                                continue
+                        }
+                        its = append(its, it)
+                }
+                board := renderOutlineColumns(*outline, its, contentW, bodyHeight)
+                main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + board
+                main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
+                if m.modal == modalNone {
+                        return main
+                }
+                bg := dimBackground(main)
+                fg := m.renderModal()
+                return overlayCenter(bg, fg, w, frameH)
         }
 
         var main string
@@ -2015,6 +2117,8 @@ func (m *appModel) reloadFromDisk() error {
                 m.refreshProjects()
         case viewOutlines:
                 m.refreshOutlines(m.selectedProjectID)
+        case viewAgenda:
+                m.refreshAgenda()
         case viewOutline:
                 if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
                         m.refreshItems(*o)
@@ -2320,6 +2424,14 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                 if err := m.setStatusForItem(itemID, it.id); err != nil {
                                                         return m, m.reportError(itemID, err)
                                                 }
+                                                lbl := strings.TrimSpace(it.label)
+                                                if lbl == "" {
+                                                        lbl = strings.TrimSpace(it.id)
+                                                }
+                                                if lbl == "" {
+                                                        lbl = "(no status)"
+                                                }
+                                                m.showMinibuffer("Status: " + lbl)
                                         }
                                         m.modal = modalNone
                                         m.modalForID = ""
@@ -2542,6 +2654,10 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, m.schedulePreviewCompute()
                         }
                         return m, nil
+                case "v":
+                        // Toggle experimental column view (status as columns).
+                        m.toggleOutlineViewMode()
+                        return m, nil
                 case "e":
                         // Edit title for selected item.
                         if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
@@ -2634,7 +2750,7 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
                 switch km.String() {
                 case "ctrl+c", "q":
                         return m, tea.Quit
-                case "x":
+                case "x", "?":
                         m.openActionPanel(actionPanelContext)
                         return m, nil
                 case "g":
@@ -2646,6 +2762,22 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "c":
                         m.openActionPanel(actionPanelCapture)
                         return m, nil
+                case "o":
+                        // Toggle preview pane (same key as outline view).
+                        m.showPreview = !m.showPreview
+                        m.pane = paneOutline
+                        // Preview affects sizing; clear any cached detail.
+                        m.previewCacheForID = ""
+                        return m, nil
+                case "tab":
+                        if m.splitPreviewVisible() {
+                                if m.pane == paneOutline {
+                                        m.pane = paneDetail
+                                } else {
+                                        m.pane = paneOutline
+                                }
+                                return m, nil
+                        }
                 case "backspace", "esc":
                         if m.hasAgendaReturnView {
                                 m.view = m.agendaReturnView
@@ -2675,6 +2807,10 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.agendaList, cmd = m.agendaList.Update(msg)
                         return m, cmd
                 }
+                // Keep outline context in sync so shared helpers behave correctly.
+                m.selectedProjectID = it.row.item.ProjectID
+                m.selectedOutlineID = it.row.item.OutlineID
+                m.selectedOutline = &it.outline
 
                 switch km.String() {
                 case "enter":
@@ -2889,36 +3025,6 @@ func (m *appModel) nearestSelectableItemID(fromIdx int) string {
                 }
         }
         return "__add__"
-}
-
-func (m *appModel) archiveItem(itemID string) error {
-        actorID := m.editActorID()
-        if actorID == "" {
-                return errors.New("no current actor")
-        }
-
-        db, err := m.store.Load()
-        if err != nil {
-                return err
-        }
-        m.db = db
-
-        t, ok := m.db.FindItem(itemID)
-        if !ok {
-                return nil
-        }
-        if !canEditItem(m.db, actorID, t) {
-                return nil
-        }
-
-        t.Archived = true
-        t.UpdatedAt = time.Now().UTC()
-        if err := m.store.Save(m.db); err != nil {
-                return err
-        }
-        _ = m.store.AppendEvent(actorID, "item.archive", t.ID, map[string]any{"archived": t.Archived})
-        m.captureStoreModTimes()
-        return nil
 }
 
 func (m *appModel) archiveItemTree(rootID string) (int, error) {
@@ -3313,19 +3419,6 @@ func splitLinesN(s string, n int) []string {
         return out
 }
 
-func isAltEnter(msg tea.KeyMsg) bool {
-        if msg.Alt && msg.Type == tea.KeyEnter {
-                return true
-        }
-        // Different terminals report this differently.
-        switch msg.String() {
-        case "alt+enter", "alt+return", "alt+\r":
-                return true
-        default:
-                return false
-        }
-}
-
 func (m *appModel) navOutline(msg tea.KeyMsg) bool {
         switch msg.String() {
         case "down", "j", "ctrl+n":
@@ -3618,8 +3711,33 @@ func (m *appModel) createItemFromModal(title string) error {
         return nil
 }
 
-func (m *appModel) setTitleFromModal(title string) error {
-        itemID := strings.TrimSpace(m.modalForID)
+type itemMutationResult struct {
+        eventType    string
+        eventPayload map[string]any
+        minibuffer   string
+        // refreshPreview clears the preview cache (useful when description/fields affecting
+        // the preview pane are updated).
+        refreshPreview bool
+}
+
+type projectMutationResult struct {
+        eventType    string
+        eventPayload map[string]any
+        minibuffer   string
+}
+
+type outlineMutationResult struct {
+        eventType    string
+        eventPayload map[string]any
+        minibuffer   string
+}
+
+// mutateItem centralizes the common mutation flow:
+// load db → resolve edit actor → permission check → mutate → save → append event → minibuffer → refresh UI.
+//
+// If mutate returns changed=false, no save/event/minibuffer happens.
+func (m *appModel) mutateItem(itemID string, mutate func(db *store.DB, it *model.Item) (changed bool, res itemMutationResult, err error)) error {
+        itemID = strings.TrimSpace(itemID)
         if itemID == "" {
                 return nil
         }
@@ -3634,30 +3752,194 @@ func (m *appModel) setTitleFromModal(title string) error {
                 return errors.New("no current actor")
         }
 
-        t, ok := m.db.FindItem(itemID)
+        it, ok := m.db.FindItem(itemID)
         if !ok {
                 return nil
         }
-        if !canEditItem(m.db, actorID, t) {
+        if !canEditItem(m.db, actorID, it) {
                 return errors.New("permission denied")
         }
 
-        t.Title = strings.TrimSpace(title)
-        t.UpdatedAt = time.Now().UTC()
+        changed, res, err := mutate(m.db, it)
+        if err != nil {
+                return err
+        }
+        if !changed {
+                return nil
+        }
+
+        it.UpdatedAt = time.Now().UTC()
         if err := m.store.Save(m.db); err != nil {
                 return err
         }
-        _ = m.store.AppendEvent(actorID, "item.set_title", t.ID, map[string]any{"title": t.Title})
+        if strings.TrimSpace(res.eventType) != "" {
+                _ = m.store.AppendEvent(actorID, res.eventType, it.ID, res.eventPayload)
+        }
         m.captureStoreModTimes()
+        if strings.TrimSpace(res.minibuffer) != "" {
+                m.showMinibuffer(res.minibuffer)
+        }
+        if res.refreshPreview {
+                m.previewCacheForID = ""
+        }
 
         if m.selectedOutline != nil {
                 if o, ok := m.db.FindOutline(m.selectedOutline.ID); ok {
                         m.selectedOutline = o
                 }
                 m.refreshItems(*m.selectedOutline)
-                selectListItemByID(&m.itemsList, t.ID)
+                selectListItemByID(&m.itemsList, it.ID)
         }
+        // If we're in agenda, immediately refresh so edits are visible (and filtering/grouping
+        // updates, e.g. when an item becomes DONE and disappears).
+        if m.view == viewAgenda {
+                m.refreshAgenda()
+                selectListItemByID(&m.agendaList, it.ID)
+        }
+
         return nil
+}
+
+// mutateProject applies a mutation to a project and centralizes:
+// load db → resolve edit actor → mutate → save → append event → minibuffer → refresh UI.
+//
+// If mutate returns changed=false, no save/event/minibuffer happens.
+func (m *appModel) mutateProject(projectID string, mutate func(db *store.DB, p *model.Project) (changed bool, res projectMutationResult, err error)) error {
+        projectID = strings.TrimSpace(projectID)
+        if projectID == "" {
+                return nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return err
+        }
+        m.db = db
+        actorID := m.editActorID()
+        if actorID == "" {
+                return errors.New("no current actor")
+        }
+
+        p, ok := m.db.FindProject(projectID)
+        if !ok {
+                return nil
+        }
+
+        changed, res, err := mutate(m.db, p)
+        if err != nil {
+                return err
+        }
+        if !changed {
+                return nil
+        }
+
+        if err := m.store.Save(m.db); err != nil {
+                return err
+        }
+        if strings.TrimSpace(res.eventType) != "" {
+                _ = m.store.AppendEvent(actorID, res.eventType, p.ID, res.eventPayload)
+        }
+        m.captureStoreModTimes()
+        if strings.TrimSpace(res.minibuffer) != "" {
+                m.showMinibuffer(res.minibuffer)
+        }
+
+        // Refresh visible lists.
+        m.refreshProjects()
+        selectListItemByID(&m.projectsList, p.ID)
+        if m.view == viewOutlines || m.view == viewOutline || m.view == viewItem {
+                // Breadcrumb depends on project name; also keep outlines list stable if visible.
+                if strings.TrimSpace(m.selectedProjectID) == strings.TrimSpace(p.ID) || strings.TrimSpace(m.selectedProjectID) == "" {
+                        m.refreshOutlines(p.ID)
+                }
+        }
+        if m.view == viewAgenda {
+                m.refreshAgenda()
+        }
+
+        return nil
+}
+
+// mutateOutline applies a mutation to an outline and centralizes:
+// load db → resolve edit actor → mutate → save → append event → minibuffer → refresh UI.
+//
+// If mutate returns changed=false, no save/event/minibuffer happens.
+func (m *appModel) mutateOutline(outlineID string, mutate func(db *store.DB, o *model.Outline) (changed bool, res outlineMutationResult, err error)) error {
+        outlineID = strings.TrimSpace(outlineID)
+        if outlineID == "" {
+                return nil
+        }
+
+        db, err := m.store.Load()
+        if err != nil {
+                return err
+        }
+        m.db = db
+        actorID := m.editActorID()
+        if actorID == "" {
+                return errors.New("no current actor")
+        }
+
+        o, ok := m.db.FindOutline(outlineID)
+        if !ok {
+                return nil
+        }
+
+        changed, res, err := mutate(m.db, o)
+        if err != nil {
+                return err
+        }
+        if !changed {
+                return nil
+        }
+
+        if err := m.store.Save(m.db); err != nil {
+                return err
+        }
+        if strings.TrimSpace(res.eventType) != "" {
+                _ = m.store.AppendEvent(actorID, res.eventType, o.ID, res.eventPayload)
+        }
+        m.captureStoreModTimes()
+        if strings.TrimSpace(res.minibuffer) != "" {
+                m.showMinibuffer(res.minibuffer)
+        }
+
+        // Refresh visible lists.
+        if strings.TrimSpace(o.ProjectID) != "" {
+                m.refreshOutlines(o.ProjectID)
+                selectListItemByID(&m.outlinesList, o.ID)
+        }
+        if m.view == viewOutline || m.view == viewItem {
+                if strings.TrimSpace(m.selectedOutlineID) == strings.TrimSpace(o.ID) {
+                        m.refreshItems(*o)
+                }
+        }
+        if m.view == viewAgenda {
+                m.refreshAgenda()
+        }
+
+        return nil
+}
+
+func (m *appModel) setTitleFromModal(title string) error {
+        itemID := strings.TrimSpace(m.modalForID)
+        if itemID == "" {
+                return nil
+        }
+
+        newTitle := strings.TrimSpace(title)
+        return m.mutateItem(itemID, func(_ *store.DB, it *model.Item) (bool, itemMutationResult, error) {
+                prev := strings.TrimSpace(it.Title)
+                if prev == newTitle {
+                        return false, itemMutationResult{}, nil
+                }
+                it.Title = newTitle
+                return true, itemMutationResult{
+                        eventType:    "item.set_title",
+                        eventPayload: map[string]any{"title": it.Title},
+                        minibuffer:   "Title updated",
+                }, nil
+        })
 }
 
 func (m *appModel) setDescriptionFromModal(description string) error {
@@ -3666,43 +3948,20 @@ func (m *appModel) setDescriptionFromModal(description string) error {
                 return nil
         }
 
-        db, err := m.store.Load()
-        if err != nil {
-                return err
-        }
-        m.db = db
-        actorID := m.editActorID()
-        if actorID == "" {
-                return errors.New("no current actor")
-        }
-
-        t, ok := m.db.FindItem(itemID)
-        if !ok {
-                return nil
-        }
-        if !canEditItem(m.db, actorID, t) {
-                return errors.New("permission denied")
-        }
-
-        t.Description = strings.TrimSpace(description)
-        t.UpdatedAt = time.Now().UTC()
-        if err := m.store.Save(m.db); err != nil {
-                return err
-        }
-        _ = m.store.AppendEvent(actorID, "item.set_description", t.ID, map[string]any{"description": t.Description})
-        m.captureStoreModTimes()
-
-        // Description affects the preview pane; ensure it is recomputed.
-        m.previewCacheForID = ""
-
-        if m.selectedOutline != nil {
-                if o, ok := m.db.FindOutline(m.selectedOutline.ID); ok {
-                        m.selectedOutline = o
+        newDesc := strings.TrimSpace(description)
+        return m.mutateItem(itemID, func(_ *store.DB, it *model.Item) (bool, itemMutationResult, error) {
+                prev := strings.TrimSpace(it.Description)
+                if prev == newDesc {
+                        return false, itemMutationResult{}, nil
                 }
-                m.refreshItems(*m.selectedOutline)
-                selectListItemByID(&m.itemsList, t.ID)
-        }
-        return nil
+                it.Description = newDesc
+                return true, itemMutationResult{
+                        eventType:      "item.set_description",
+                        eventPayload:   map[string]any{"description": it.Description},
+                        minibuffer:     "Description updated",
+                        refreshPreview: true,
+                }, nil
+        })
 }
 
 func (m *appModel) setOutlineNameFromModal(name string) error {
@@ -3710,40 +3969,28 @@ func (m *appModel) setOutlineNameFromModal(name string) error {
         if outlineID == "" {
                 return nil
         }
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
-        if actorID == "" {
-                return nil
-        }
-
-        db, err := m.store.Load()
-        if err != nil {
-                return err
-        }
-        m.db = db
-
-        o, ok := m.db.FindOutline(outlineID)
-        if !ok {
-                return nil
-        }
-
         trim := strings.TrimSpace(name)
-        if trim == "" {
-                o.Name = nil
-        } else {
-                tmp := trim
-                o.Name = &tmp
-        }
-
-        if err := m.store.Save(m.db); err != nil {
-                return err
-        }
-        _ = m.store.AppendEvent(actorID, "outline.rename", o.ID, map[string]any{"name": o.Name})
-        m.captureStoreModTimes()
-
-        m.refreshOutlines(m.selectedProjectID)
-        selectListItemByID(&m.outlinesList, o.ID)
-        m.showMinibuffer("Renamed outline " + o.ID)
-        return nil
+        return m.mutateOutline(outlineID, func(_ *store.DB, o *model.Outline) (bool, outlineMutationResult, error) {
+                prev := ""
+                if o.Name != nil {
+                        prev = strings.TrimSpace(*o.Name)
+                }
+                next := trim
+                if prev == next {
+                        return false, outlineMutationResult{}, nil
+                }
+                if next == "" {
+                        o.Name = nil
+                } else {
+                        tmp := next
+                        o.Name = &tmp
+                }
+                return true, outlineMutationResult{
+                        eventType:    "outline.rename",
+                        eventPayload: map[string]any{"name": o.Name},
+                        minibuffer:   "Renamed outline " + o.ID,
+                }, nil
+        })
 }
 
 func (m *appModel) createProjectFromModal(name string) error {
@@ -3751,9 +3998,9 @@ func (m *appModel) createProjectFromModal(name string) error {
         if name == "" {
                 return nil
         }
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        actorID := m.editActorID()
         if actorID == "" {
-                return nil
+                return errors.New("no current actor")
         }
 
         db, err := m.store.Load()
@@ -3793,38 +4040,24 @@ func (m *appModel) renameProjectFromModal(name string) error {
         if projectID == "" || name == "" {
                 return nil
         }
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
-        if actorID == "" {
-                return nil
-        }
-
-        db, err := m.store.Load()
-        if err != nil {
-                return err
-        }
-        m.db = db
-
-        p, ok := m.db.FindProject(projectID)
-        if !ok {
-                return nil
-        }
-        p.Name = name
-        if err := m.store.Save(m.db); err != nil {
-                return err
-        }
-        _ = m.store.AppendEvent(actorID, "project.rename", p.ID, map[string]any{"name": p.Name})
-        m.captureStoreModTimes()
-
-        m.refreshProjects()
-        selectListItemByID(&m.projectsList, p.ID)
-        m.showMinibuffer("Renamed project " + p.ID)
-        return nil
+        return m.mutateProject(projectID, func(_ *store.DB, p *model.Project) (bool, projectMutationResult, error) {
+                prev := strings.TrimSpace(p.Name)
+                if prev == name {
+                        return false, projectMutationResult{}, nil
+                }
+                p.Name = name
+                return true, projectMutationResult{
+                        eventType:    "project.rename",
+                        eventPayload: map[string]any{"name": p.Name},
+                        minibuffer:   "Renamed project " + p.ID,
+                }, nil
+        })
 }
 
 func (m *appModel) createOutlineFromModal(name string) error {
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        actorID := m.editActorID()
         if actorID == "" {
-                return nil
+                return errors.New("no current actor")
         }
         projectID := strings.TrimSpace(m.selectedProjectID)
         if projectID == "" {
@@ -3956,61 +4189,51 @@ func (m *appModel) cycleItemStatus(outline model.Outline, itemID string, delta i
 
 func (m *appModel) setStatusForItem(itemID, statusID string) error {
         itemID = strings.TrimSpace(itemID)
-        if itemID == "" {
-                return nil
-        }
+        statusID = strings.TrimSpace(statusID)
+        return m.mutateItem(itemID, func(db *store.DB, it *model.Item) (bool, itemMutationResult, error) {
+                prev := strings.TrimSpace(it.StatusID)
+                if prev == statusID {
+                        return false, itemMutationResult{}, nil
+                }
 
-        db, err := m.store.Load()
-        if err != nil {
-                return err
-        }
-        m.db = db
-        actorID := m.editActorID()
-        if actorID == "" {
-                return errors.New("no current actor")
-        }
-
-        t, ok := m.db.FindItem(itemID)
-        if !ok {
-                return nil
-        }
-        if !canEditItem(m.db, actorID, t) {
-                return errors.New("permission denied")
-        }
-
-        // Validate against outline status defs (empty is always allowed).
-        if strings.TrimSpace(statusID) != "" {
-                o, ok := m.db.FindOutline(t.OutlineID)
-                if ok {
-                        valid := false
-                        for _, def := range o.StatusDefs {
-                                if def.ID == statusID {
-                                        valid = true
-                                        break
+                // Validate against outline status defs (empty is always allowed).
+                if statusID != "" {
+                        if o, ok := db.FindOutline(it.OutlineID); ok {
+                                valid := false
+                                for _, def := range o.StatusDefs {
+                                        if def.ID == statusID {
+                                                valid = true
+                                                break
+                                        }
+                                }
+                                if !valid {
+                                        return false, itemMutationResult{}, errors.New("invalid status")
                                 }
                         }
-                        if !valid {
-                                return errors.New("invalid status")
+                }
+
+                it.StatusID = statusID
+
+                msg := "Status: "
+                if statusID == "" {
+                        msg += "(none)"
+                } else if o, ok := db.FindOutline(it.OutlineID); ok {
+                        lbl := strings.TrimSpace(statusLabel(*o, statusID))
+                        if lbl != "" {
+                                msg += strings.ToUpper(lbl)
+                        } else {
+                                msg += statusID
                         }
+                } else {
+                        msg += statusID
                 }
-        }
 
-        t.StatusID = strings.TrimSpace(statusID)
-        t.UpdatedAt = time.Now().UTC()
-        if err := m.store.Save(m.db); err != nil {
-                return err
-        }
-        _ = m.store.AppendEvent(actorID, "item.set_status", t.ID, map[string]any{"status": t.StatusID})
-        m.captureStoreModTimes()
-
-        if m.selectedOutline != nil {
-                if o, ok := m.db.FindOutline(m.selectedOutline.ID); ok {
-                        m.selectedOutline = o
-                }
-                m.refreshItems(*m.selectedOutline)
-                selectListItemByID(&m.itemsList, t.ID)
-        }
-        return nil
+                return true, itemMutationResult{
+                        eventType:    "item.set_status",
+                        eventPayload: map[string]any{"status": it.StatusID},
+                        minibuffer:   msg,
+                }, nil
+        })
 }
 
 func (m *appModel) moveSelected(dir string) error {

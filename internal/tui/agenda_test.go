@@ -10,6 +10,8 @@ import (
         tea "github.com/charmbracelet/bubbletea"
 )
 
+func ptr(s string) *string { return &s }
+
 func TestAgendaView_ShowsAllNonDoneItemsAcrossWorkspace(t *testing.T) {
         dir := t.TempDir()
         s := store.Store{Dir: dir}
@@ -29,7 +31,8 @@ func TestAgendaView_ShowsAllNonDoneItemsAcrossWorkspace(t *testing.T) {
                         {ID: "out-b", ProjectID: "proj-b", StatusDefs: store.DefaultOutlineStatusDefs(), CreatedBy: actorID, CreatedAt: now},
                 },
                 Items: []model.Item{
-                        {ID: "item-todo", ProjectID: "proj-a", OutlineID: "out-a", Rank: "h", Title: "Keep me", StatusID: "todo", OwnerActorID: actorID, CreatedBy: actorID, CreatedAt: now, UpdatedAt: now},
+                        {ID: "item-parent", ProjectID: "proj-a", OutlineID: "out-a", Rank: "h", Title: "Parent", StatusID: "todo", OwnerActorID: actorID, CreatedBy: actorID, CreatedAt: now, UpdatedAt: now},
+                        {ID: "item-child", ProjectID: "proj-a", OutlineID: "out-a", Rank: "i", Title: "Child", StatusID: "todo", OwnerActorID: actorID, CreatedBy: actorID, CreatedAt: now, UpdatedAt: now, ParentID: ptr("item-parent")},
                         {ID: "item-done", ProjectID: "proj-a", OutlineID: "out-a", Rank: "i", Title: "Hide me", StatusID: "done", OwnerActorID: actorID, CreatedBy: actorID, CreatedAt: now, UpdatedAt: now},
                         {ID: "item-empty", ProjectID: "proj-b", OutlineID: "out-b", Rank: "h", Title: "Also keep", StatusID: "", OwnerActorID: actorID, CreatedBy: actorID, CreatedAt: now, UpdatedAt: now},
                 },
@@ -57,6 +60,8 @@ func TestAgendaView_ShowsAllNonDoneItemsAcrossWorkspace(t *testing.T) {
 
         all := m2.agendaList.Items()
         rows := 0
+        parentCollapsed := false
+        sawChild := false
         for _, it := range all {
                 r, ok := it.(agendaRowItem)
                 if !ok {
@@ -66,9 +71,28 @@ func TestAgendaView_ShowsAllNonDoneItemsAcrossWorkspace(t *testing.T) {
                 if r.row.item.ID == "item-done" {
                         t.Fatalf("did not expect done item in agenda")
                 }
+                if r.row.item.ID == "item-parent" {
+                        if !r.row.hasChildren {
+                                t.Fatalf("expected parent hasChildren=true")
+                        }
+                        if !r.row.collapsed {
+                                t.Fatalf("expected parent to start collapsed")
+                        }
+                        parentCollapsed = true
+                }
+                if r.row.item.ID == "item-child" {
+                        sawChild = true
+                }
         }
+        // Because the parent starts collapsed, the child should not be visible initially.
         if rows != 2 {
-                t.Fatalf("expected 2 agenda rows (non-done), got %d (total list items=%d)", rows, len(all))
+                t.Fatalf("expected 2 visible agenda rows initially (parent collapsed), got %d (total list items=%d)", rows, len(all))
+        }
+        if !parentCollapsed {
+                t.Fatalf("expected to find parent row and confirm it is collapsed")
+        }
+        if sawChild {
+                t.Fatalf("did not expect to see child row while parent is collapsed")
         }
 }
 
