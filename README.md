@@ -19,6 +19,7 @@ See also the docs surface:
 ```bash
 clarity docs
 clarity docs getting-started
+clarity docs backup
 clarity items --help
 ```
 
@@ -43,6 +44,20 @@ Run the TUI:
 ```bash
 clarity
 ```
+
+## Backup / restore (portable export/import)
+
+Clarity stores data locally in SQLite, but you can export a portable backup as text files for safekeeping.
+
+```bash
+# Export a backup (writes state.json + events.jsonl)
+clarity workspace export --to /path/to/backup-dir
+
+# Restore into a new workspace
+clarity workspace import --name restored --from /path/to/backup-dir --use
+```
+
+For details: `clarity docs backup`.
 
 ## Ordering model
 Items are ordered by:

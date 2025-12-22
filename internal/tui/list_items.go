@@ -43,6 +43,20 @@ func (i outlineItem) Title() string {
 }
 func (i outlineItem) Description() string { return i.outline.ID }
 
+type workspaceItem struct {
+        name    string
+        current bool
+}
+
+func (i workspaceItem) FilterValue() string { return i.name }
+func (i workspaceItem) Title() string {
+        if i.current {
+                return "• " + i.name
+        }
+        return i.name
+}
+func (i workspaceItem) Description() string { return "" }
+
 type outlineRow struct {
         item          model.Item
         depth         int
@@ -85,6 +99,18 @@ type addItemRow struct{}
 func (i addItemRow) FilterValue() string { return "" }
 func (i addItemRow) Title() string       { return "+ Add item" }
 func (i addItemRow) Description() string { return "" }
+
+type addProjectRow struct{}
+
+func (i addProjectRow) FilterValue() string { return "" }
+func (i addProjectRow) Title() string       { return "+ Add" }
+func (i addProjectRow) Description() string { return "" }
+
+type addOutlineRow struct{}
+
+func (i addOutlineRow) FilterValue() string { return "" }
+func (i addOutlineRow) Title() string       { return "+ Add" }
+func (i addOutlineRow) Description() string { return "" }
 
 type statusOptionItem struct {
         id    string

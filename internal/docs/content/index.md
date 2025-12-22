@@ -16,5 +16,6 @@ Recommended starting topics:
 - `identity-ownership`
 - `items-outlines`
 - `deps`
+- `backup`
 - `tui`
 - `quick-capture`

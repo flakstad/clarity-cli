@@ -344,7 +344,8 @@ func showItem(app *App, cmd *cobra.Command, id string) error {
                 return writeErr(cmd, errNotFound("item", id))
         }
 
-        // Progressive disclosure: don't inline large collections by default.
+        // Progressive disclosure: keep large collections out by default, but DO include
+        // subitems and dependency edges so callers can reason about completion blockers.
         commentsCount := 0
         for _, c := range db.Comments {
                 if c.ItemID == id {
@@ -379,6 +380,103 @@ func showItem(app *App, cmd *cobra.Command, id string) error {
                 }
         }
 
+        // Children (direct subitems).
+        type childSummary struct {
+                ID       string `json:"id"`
+                Title    string `json:"title"`
+                StatusID string `json:"status"`
+                Archived bool   `json:"archived"`
+                OutlineID string `json:"outlineId"`
+                ProjectID string `json:"projectId"`
+        }
+        children := make([]childSummary, 0)
+        childrenDone := 0
+        childrenOpen := 0
+        childrenArchived := 0
+        for _, it := range db.Items {
+                if it.ParentID == nil || strings.TrimSpace(*it.ParentID) != id {
+                        continue
+                }
+                ch := childSummary{
+                        ID:        it.ID,
+                        Title:     it.Title,
+                        StatusID:  strings.TrimSpace(it.StatusID),
+                        Archived:  it.Archived,
+                        OutlineID: it.OutlineID,
+                        ProjectID: it.ProjectID,
+                }
+                children = append(children, ch)
+                if it.Archived {
+                        childrenArchived++
+                        continue
+                }
+                if isEndState(db, it.OutlineID, it.StatusID) {
+                        childrenDone++
+                } else {
+                        childrenOpen++
+                }
+        }
+
+        // Dependencies (include edges so clients can show blockers without extra calls).
+        type depEdge struct {
+                Type        string `json:"type"` // blocks|related
+                Direction   string `json:"direction"` // in|out
+                OtherItemID string `json:"otherItemId"`
+                OtherTitle  string `json:"otherTitle,omitempty"`
+                OtherStatus string `json:"otherStatus,omitempty"`
+                OtherDone   bool   `json:"otherDone"`
+                OtherArchived bool `json:"otherArchived"`
+        }
+        depsBlocksOut := make([]depEdge, 0)
+        depsBlocksIn := make([]depEdge, 0)
+        depsRelated := make([]depEdge, 0)
+        for _, d := range db.Deps {
+                switch d.Type {
+                case model.DependencyBlocks:
+                        if d.FromItemID == id {
+                                other, _ := db.FindItem(d.ToItemID)
+                                edge := depEdge{Type: string(d.Type), Direction: "out", OtherItemID: d.ToItemID}
+                                if other != nil {
+                                        edge.OtherTitle = other.Title
+                                        edge.OtherStatus = strings.TrimSpace(other.StatusID)
+                                        edge.OtherDone = isEndState(db, other.OutlineID, other.StatusID)
+                                        edge.OtherArchived = other.Archived
+                                }
+                                depsBlocksOut = append(depsBlocksOut, edge)
+                        }
+                        if d.ToItemID == id {
+                                other, _ := db.FindItem(d.FromItemID)
+                                edge := depEdge{Type: string(d.Type), Direction: "in", OtherItemID: d.FromItemID}
+                                if other != nil {
+                                        edge.OtherTitle = other.Title
+                                        edge.OtherStatus = strings.TrimSpace(other.StatusID)
+                                        edge.OtherDone = isEndState(db, other.OutlineID, other.StatusID)
+                                        edge.OtherArchived = other.Archived
+                                }
+                                depsBlocksIn = append(depsBlocksIn, edge)
+                        }
+                case model.DependencyRelated:
+                        // Include related edges in both directions (so callers can show adjacency).
+                        if d.FromItemID == id || d.ToItemID == id {
+                                otherID := d.ToItemID
+                                dir := "out"
+                                if d.ToItemID == id {
+                                        otherID = d.FromItemID
+                                        dir = "in"
+                                }
+                                other, _ := db.FindItem(otherID)
+                                edge := depEdge{Type: string(d.Type), Direction: dir, OtherItemID: otherID}
+                                if other != nil {
+                                        edge.OtherTitle = other.Title
+                                        edge.OtherStatus = strings.TrimSpace(other.StatusID)
+                                        edge.OtherDone = isEndState(db, other.OutlineID, other.StatusID)
+                                        edge.OtherArchived = other.Archived
+                                }
+                                depsRelated = append(depsRelated, edge)
+                        }
+                }
+        }
+
         hints := []string{
                 "clarity comments list " + id,
                 "clarity worklog list " + id,
@@ -388,7 +486,25 @@ func showItem(app *App, cmd *cobra.Command, id string) error {
         }
 
         return writeOut(cmd, app, map[string]any{
-                "data": t,
+                "data": map[string]any{
+                        "item": t,
+                        "children": map[string]any{
+                                "items": children,
+                                "counts": map[string]any{
+                                        "total":    len(children),
+                                        "open":     childrenOpen,
+                                        "done":     childrenDone,
+                                        "archived": childrenArchived,
+                                },
+                        },
+                        "deps": map[string]any{
+                                "blocks": map[string]any{
+                                        "out": depsBlocksOut,
+                                        "in":  depsBlocksIn,
+                                },
+                                "related": depsRelated,
+                        },
+                },
                 "meta": map[string]any{
                         "comments": map[string]any{
                                 "count": commentsCount,

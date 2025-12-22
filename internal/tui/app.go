@@ -115,6 +115,9 @@ const (
         modalEditOutlineName
         modalPickStatus
         modalPickOutline
+        modalPickWorkspace
+        modalNewWorkspace
+        modalRenameWorkspace
         modalAddComment
         modalReplyComment
         modalAddWorklog
@@ -169,9 +172,10 @@ const (
 )
 
 type appModel struct {
-        dir   string
-        store store.Store
-        db    *store.DB
+        dir       string
+        workspace string
+        store     store.Store
+        db        *store.DB
         // eventsTail caches the last N events from events.jsonl for cheap "recent history" rendering.
         eventsTail []model.Event
 
@@ -189,6 +193,7 @@ type appModel struct {
         itemsList       list.Model
         statusList      list.Model
         outlinePickList list.Model
+        workspaceList   list.Model
         agendaList      list.Model
         // outlineStatusDefsList is used in the outline statuses editor modal.
         outlineStatusDefsList list.Model
@@ -430,6 +435,14 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                                 return mm, nil
                         },
                 }
+                actions["W"] = actionPanelAction{
+                        label: "Workspaces…",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                (&mm).openWorkspacePicker()
+                                return mm, nil
+                        },
+                }
 
                 // Outlines (requires a project context).
                 projID := strings.TrimSpace(m.selectedProjectID)
@@ -544,6 +557,14 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
         default:
                 // Contextual (depends on current view/pane).
                 actions["g"] = actionPanelAction{label: "Navigate…", kind: actionPanelActionNav, next: actionPanelNav}
+                actions["W"] = actionPanelAction{
+                        label: "Workspaces…",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                (&mm).openWorkspacePicker()
+                                return mm, nil
+                        },
+                }
 
                 switch m.view {
                 case viewProjects:
@@ -560,8 +581,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         actions["r"] = actionPanelAction{label: "Archive outline", kind: actionPanelActionExec}
                         actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
                 case viewItem:
-                        actions["y"] = actionPanelAction{label: "Copy item ID", kind: actionPanelActionExec}
-                        actions["Y"] = actionPanelAction{label: "Copy CLI show command", kind: actionPanelActionExec}
+                        actions["y"] = actionPanelAction{label: "Copy item ref (includes --workspace)", kind: actionPanelActionExec}
+                        actions["Y"] = actionPanelAction{label: "Copy CLI show command (includes --workspace)", kind: actionPanelActionExec}
                         actions["m"] = actionPanelAction{label: "Move to outline…", kind: actionPanelActionExec}
                         actions["r"] = actionPanelAction{label: "Archive item", kind: actionPanelActionExec}
                         actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
@@ -575,8 +596,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         }
                         actions["z"] = actionPanelAction{label: "Toggle collapse", kind: actionPanelActionExec}
                         actions["Z"] = actionPanelAction{label: "Collapse/expand all", kind: actionPanelActionExec}
-                        actions["y"] = actionPanelAction{label: "Copy item ID", kind: actionPanelActionExec}
-                        actions["Y"] = actionPanelAction{label: "Copy CLI show command", kind: actionPanelActionExec}
+                        actions["y"] = actionPanelAction{label: "Copy item ref (includes --workspace)", kind: actionPanelActionExec}
+                        actions["Y"] = actionPanelAction{label: "Copy CLI show command (includes --workspace)", kind: actionPanelActionExec}
                         actions["C"] = actionPanelAction{label: "Add comment", kind: actionPanelActionExec}
                         actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
                         actions["r"] = actionPanelAction{label: "Archive item", kind: actionPanelActionExec}
@@ -618,13 +639,51 @@ const (
 )
 
 func newAppModel(dir string, db *store.DB) appModel {
+        return newAppModelWithWorkspace(dir, db, "")
+}
+
+func quoteArgIfNeeded(s string) string {
+        s = strings.TrimSpace(s)
+        if s == "" {
+                return ""
+        }
+        // For copied commands, prefer a shell-safe representation when whitespace is present.
+        // strconv.Quote uses double-quotes + escapes, which is widely portable.
+        if strings.ContainsAny(s, " \t\r\n") {
+                return strconv.Quote(s)
+        }
+        return s
+}
+
+func (m appModel) clipboardItemRef(itemID string) string {
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" {
+                return ""
+        }
+        ws := strings.TrimSpace(m.workspace)
+        if ws == "" {
+                return itemID
+        }
+        return itemID + " --workspace " + quoteArgIfNeeded(ws)
+}
+
+func (m appModel) clipboardShowCmd(itemID string) string {
+        ref := m.clipboardItemRef(itemID)
+        if ref == "" {
+                return ""
+        }
+        return "clarity items show " + ref
+}
+
+func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appModel {
         s := store.Store{Dir: dir}
         m := appModel{
-                dir:   dir,
-                store: s,
-                db:    db,
-                view:  viewProjects,
-                pane:  paneOutline,
+                dir:       dir,
+                workspace: strings.TrimSpace(workspace),
+                store:     s,
+                db:        db,
+                view:      viewProjects,
+                pane:      paneOutline,
         }
 
         if strings.TrimSpace(os.Getenv("CLARITY_TUI_DEBUG")) != "" {
@@ -662,6 +721,15 @@ func newAppModel(dir string, db *store.DB) appModel {
         m.outlinePickList.SetShowStatusBar(false)
         m.outlinePickList.SetShowPagination(false)
 
+        m.workspaceList = newList("Workspaces", "Select a workspace", []list.Item{})
+        m.workspaceList.SetDelegate(newCompactItemDelegate())
+        m.workspaceList.SetFilteringEnabled(true)
+        m.workspaceList.SetShowFilter(true)
+        // Keep list chrome minimal inside the modal.
+        m.workspaceList.SetShowHelp(false)
+        m.workspaceList.SetShowStatusBar(false)
+        m.workspaceList.SetShowPagination(false)
+
         m.outlineStatusDefsList = newList("Statuses", "Edit outline statuses", []list.Item{})
         m.outlineStatusDefsList.SetDelegate(newCompactItemDelegate())
         m.outlineStatusDefsList.SetFilteringEnabled(false)
@@ -692,6 +760,16 @@ func newAppModel(dir string, db *store.DB) appModel {
         m.captureStoreModTimes()
         m.refreshEventsTail()
         return m
+}
+
+func (m *appModel) workspaceLabel() string {
+        if m == nil {
+                return "workspace"
+        }
+        if w := strings.TrimSpace(m.workspace); w != "" {
+                return w
+        }
+        return "workspace"
 }
 
 const eventsTailLimit = 500
@@ -1218,17 +1296,18 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "y":
                         if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
                                 id := strings.TrimSpace(m.openItemID)
-                                if err := copyToClipboard(id); err != nil {
+                                txt := m.clipboardItemRef(id)
+                                if err := copyToClipboard(txt); err != nil {
                                         m.showMinibuffer("Clipboard error: " + err.Error())
                                 } else {
-                                        m.showMinibuffer("Copied item ID " + id)
+                                        m.showMinibuffer("Copied: " + txt)
                                 }
                                 return m, nil
                         }
                 case "Y":
                         if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
                                 id := strings.TrimSpace(m.openItemID)
-                                cmd := "clarity items show " + id
+                                cmd := m.clipboardShowCmd(id)
                                 if err := copyToClipboard(cmd); err != nil {
                                         m.showMinibuffer("Clipboard error: " + err.Error())
                                 } else {
@@ -1342,6 +1421,15 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.refreshOutlines(it.project.ID)
                                         return m, nil
                                 }
+                                if _, ok := m.projectsList.SelectedItem().(addProjectRow); ok {
+                                        // "+ Add" (same as pressing "n")
+                                        m.modal = modalNewProject
+                                        m.modalForID = ""
+                                        m.input.Placeholder = "Project name"
+                                        m.input.SetValue("")
+                                        m.input.Focus()
+                                        return m, nil
+                                }
                         case viewOutlines:
                                 if it, ok := m.outlinesList.SelectedItem().(outlineItem); ok {
                                         m.selectedOutlineID = it.outline.ID
@@ -1352,6 +1440,15 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.collapsed = map[string]bool{}
                                         m.collapseInitialized = false
                                         m.refreshItems(it.outline)
+                                        return m, nil
+                                }
+                                if _, ok := m.outlinesList.SelectedItem().(addOutlineRow); ok {
+                                        // "+ Add" (same as pressing "n")
+                                        m.modal = modalNewOutline
+                                        m.modalForID = ""
+                                        m.input.Placeholder = "Outline name (optional)"
+                                        m.input.SetValue("")
+                                        m.input.Focus()
                                         return m, nil
                                 }
                         case viewAgenda:
@@ -1669,6 +1766,12 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.modalForID = it.ID
                                 }
                                 return m, nil
+                        case itemFocusPriority:
+                                // Toggle priority.
+                                if err := m.togglePriority(it.ID); err != nil {
+                                        return m, m.reportError(it.ID, err)
+                                }
+                                return m, nil
                         case itemFocusDescription:
                                 m.openTextModal(modalEditDescription, it.ID, "Markdown description…", it.Description)
                                 return m, nil
@@ -1685,6 +1788,12 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "D":
                         m.itemFocus = itemFocusDescription
                         m.openTextModal(modalEditDescription, it.ID, "Markdown description…", it.Description)
+                        return m, nil
+                case "p":
+                        // Toggle priority.
+                        if err := m.togglePriority(it.ID); err != nil {
+                                return m, m.reportError(it.ID, err)
+                        }
                         return m, nil
                 case "C":
                         // Add comment (keep the side panel open by focusing Comments).
@@ -1826,10 +1935,10 @@ func (m appModel) View() string {
 }
 
 func (m *appModel) breadcrumbText() string {
+        parts := []string{m.workspaceLabel()}
         if m.view == viewAgenda {
-                return "agenda"
+                return strings.Join(append(parts, "agenda"), " > ")
         }
-        parts := []string{"projects"}
         if m.view == viewProjects {
                 return strings.Join(parts, " > ")
         }
@@ -2561,6 +2670,8 @@ func (m *appModel) refreshProjects() {
                 }
                 items = append(items, projectItem{project: p, current: p.ID == m.db.CurrentProjectID})
         }
+        // Always-present affordance for creating a project (same as pressing "n").
+        items = append(items, addProjectRow{})
         m.projectsList.SetItems(items)
         if curID != "" {
                 selectListItemByID(&m.projectsList, curID)
@@ -2584,6 +2695,8 @@ func (m *appModel) refreshOutlines(projectID string) {
                         items = append(items, outlineItem{outline: o})
                 }
         }
+        // Always-present affordance for creating an outline (same as pressing "n").
+        items = append(items, addOutlineRow{})
         m.outlinesList.SetItems(items)
         if curID != "" {
                 selectListItemByID(&m.outlinesList, curID)
@@ -2985,6 +3098,12 @@ func (m *appModel) renderModal() string {
                 return renderModalBox(m.width, "Set status", m.statusList.View()+"\n\nenter: set   esc: cancel")
         case modalPickOutline:
                 return renderModalBox(m.width, "Move to outline", m.outlinePickList.View()+"\n\nenter: move   esc: cancel")
+        case modalPickWorkspace:
+                return renderModalBox(m.width, "Workspaces", m.workspaceList.View()+"\n\nenter: switch   n:new   r:rename   esc: close")
+        case modalNewWorkspace:
+                return renderModalBox(m.width, "New workspace", m.input.View()+"\n\nenter: create+switch   esc: cancel")
+        case modalRenameWorkspace:
+                return renderModalBox(m.width, "Rename workspace", m.input.View()+"\n\nenter: rename   esc: cancel")
         case modalEditOutlineStatuses:
                 return renderModalBox(m.width, "Outline statuses", m.outlineStatusDefsList.View()+"\n\na:add  r:rename  e:toggle end  d:delete  ctrl+k/j:move  esc:close")
         case modalAddOutlineStatus:
@@ -3141,14 +3260,15 @@ func tickReload() tea.Cmd {
 }
 
 func (m *appModel) captureStoreModTimes() {
-        m.lastDBModTime = fileModTime(filepath.Join(m.dir, "db.json"))
-        m.lastEventsModTime = fileModTime(filepath.Join(m.dir, "events.jsonl"))
+        // SQLite-only: use the sqlite file mtime as the single change indicator.
+        mt := fileModTime(filepath.Join(m.dir, "clarity.sqlite"))
+        m.lastDBModTime = mt
+        m.lastEventsModTime = mt
 }
 
 func (m *appModel) storeChanged() bool {
-        dbMT := fileModTime(filepath.Join(m.dir, "db.json"))
-        evMT := fileModTime(filepath.Join(m.dir, "events.jsonl"))
-        return dbMT.After(m.lastDBModTime) || evMT.After(m.lastEventsModTime)
+        mt := fileModTime(filepath.Join(m.dir, "clarity.sqlite"))
+        return mt.After(m.lastDBModTime)
 }
 
 func fileModTime(path string) time.Time {
@@ -3198,6 +3318,11 @@ func selectListItemByID(l *list.Model, id string) {
                         }
                 case outlineItem:
                         if it.outline.ID == id {
+                                l.Select(i)
+                                return
+                        }
+                case workspaceItem:
+                        if it.name == id {
                                 l.Select(i)
                                 return
                         }
@@ -3704,6 +3829,60 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, cmd
                 }
 
+                if m.modal == modalPickWorkspace {
+                        switch km := msg.(type) {
+                        case tea.KeyMsg:
+                                switch km.String() {
+                                case "esc":
+                                        m.modal = modalNone
+                                        m.modalForKey = ""
+                                        return m, nil
+                                case "enter":
+                                        name := ""
+                                        if it, ok := m.workspaceList.SelectedItem().(workspaceItem); ok {
+                                                name = strings.TrimSpace(it.name)
+                                        }
+                                        if name == "" {
+                                                return m, nil
+                                        }
+                                        nm, err := m.switchWorkspaceTo(name)
+                                        if err != nil {
+                                                m.showMinibuffer("Workspace error: " + err.Error())
+                                                return m, nil
+                                        }
+                                        (&nm).showMinibuffer("Workspace: " + name)
+                                        return nm, nil
+                                case "n":
+                                        m.modal = modalNewWorkspace
+                                        m.modalForKey = ""
+                                        m.input.Placeholder = "Workspace name"
+                                        m.input.SetValue("")
+                                        m.input.Focus()
+                                        return m, nil
+                                case "r":
+                                        old := strings.TrimSpace(m.workspace)
+                                        if old == "" {
+                                                if cfg, err := store.LoadConfig(); err == nil {
+                                                        old = strings.TrimSpace(cfg.CurrentWorkspace)
+                                                }
+                                        }
+                                        if old == "" {
+                                                m.showMinibuffer("Workspace: no current workspace")
+                                                return m, nil
+                                        }
+                                        m.modal = modalRenameWorkspace
+                                        m.modalForKey = old
+                                        m.input.Placeholder = "New workspace name"
+                                        m.input.SetValue(old)
+                                        m.input.Focus()
+                                        return m, nil
+                                }
+                        }
+                        var cmd tea.Cmd
+                        m.workspaceList, cmd = m.workspaceList.Update(msg)
+                        return m, cmd
+                }
+
                 switch km := msg.(type) {
                 case tea.KeyMsg:
                         switch km.String() {
@@ -3719,15 +3898,54 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         if val == "" {
                                                 return m, nil
                                         }
-                                        _ = m.createProjectFromModal(val)
+                                        if err := m.createProjectFromModal(val); err != nil {
+                                                m.showMinibuffer("Error: " + err.Error())
+                                                return m, nil
+                                        }
                                 case modalRenameProject:
                                         if val == "" {
                                                 return m, nil
                                         }
-                                        _ = m.renameProjectFromModal(val)
+                                        if err := m.renameProjectFromModal(val); err != nil {
+                                                m.showMinibuffer("Error: " + err.Error())
+                                                return m, nil
+                                        }
                                 case modalNewOutline:
                                         // Name optional.
-                                        _ = m.createOutlineFromModal(val)
+                                        if err := m.createOutlineFromModal(val); err != nil {
+                                                m.showMinibuffer("Error: " + err.Error())
+                                                return m, nil
+                                        }
+                                case modalNewWorkspace:
+                                        if val == "" {
+                                                return m, nil
+                                        }
+                                        nm, err := m.switchWorkspaceTo(val)
+                                        if err != nil {
+                                                m.showMinibuffer("Workspace error: " + err.Error())
+                                                return m, nil
+                                        }
+                                        (&nm).showMinibuffer("Workspace: " + strings.TrimSpace(val))
+                                        return nm, nil
+                                case modalRenameWorkspace:
+                                        old := strings.TrimSpace(m.modalForKey)
+                                        if old == "" {
+                                                old = strings.TrimSpace(m.workspace)
+                                        }
+                                        if old == "" {
+                                                m.showMinibuffer("Workspace: no current workspace")
+                                                return m, nil
+                                        }
+                                        if val == "" {
+                                                return m, nil
+                                        }
+                                        nm, err := m.renameWorkspaceTo(old, val)
+                                        if err != nil {
+                                                m.showMinibuffer("Workspace error: " + err.Error())
+                                                return m, nil
+                                        }
+                                        (&nm).showMinibuffer("Workspace: " + strings.TrimSpace(val))
+                                        return nm, nil
                                 case modalEditTitle:
                                         if val == "" {
                                                 return m, nil
@@ -3746,6 +3964,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 }
                                 m.modal = modalNone
                                 m.modalForID = ""
+                                m.modalForKey = ""
                                 m.input.Placeholder = "Title"
                                 m.input.SetValue("")
                                 m.input.Blur()
@@ -3857,17 +4076,18 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "y":
                         // Copy selected item ID.
                         if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-                                if err := copyToClipboard(it.row.item.ID); err != nil {
+                                txt := m.clipboardItemRef(it.row.item.ID)
+                                if err := copyToClipboard(txt); err != nil {
                                         m.showMinibuffer("Clipboard error: " + err.Error())
                                 } else {
-                                        m.showMinibuffer("Copied item ID " + it.row.item.ID)
+                                        m.showMinibuffer("Copied: " + txt)
                                 }
                                 return m, nil
                         }
                 case "Y":
                         // Copy a helpful CLI command for the selected item.
                         if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-                                cmd := "clarity items show " + it.row.item.ID
+                                cmd := m.clipboardShowCmd(it.row.item.ID)
                                 if err := copyToClipboard(cmd); err != nil {
                                         m.showMinibuffer("Clipboard error: " + err.Error())
                                 } else {
@@ -3885,6 +4105,14 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         // Add worklog entry to selected item.
                         if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
                                 m.openTextModal(modalAddWorklog, it.row.item.ID, "Log work…", "")
+                                return m, nil
+                        }
+                case "p":
+                        // Toggle priority for selected item.
+                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                if err := m.togglePriority(it.row.item.ID); err != nil {
+                                        return m, m.reportError(it.row.item.ID, err)
+                                }
                                 return m, nil
                         }
                 case "D":
@@ -4153,14 +4381,15 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.pane = paneOutline
                         return m, nil
                 case "y":
-                        if err := copyToClipboard(it.row.item.ID); err != nil {
+                        txt := m.clipboardItemRef(it.row.item.ID)
+                        if err := copyToClipboard(txt); err != nil {
                                 m.showMinibuffer("Clipboard error: " + err.Error())
                         } else {
-                                m.showMinibuffer("Copied item ID " + it.row.item.ID)
+                                m.showMinibuffer("Copied: " + txt)
                         }
                         return m, nil
                 case "Y":
-                        cmd := "clarity items show " + it.row.item.ID
+                        cmd := m.clipboardShowCmd(it.row.item.ID)
                         if err := copyToClipboard(cmd); err != nil {
                                 m.showMinibuffer("Clipboard error: " + err.Error())
                         } else {
@@ -5401,6 +5630,21 @@ func (m *appModel) setDescriptionFromModal(description string) error {
         })
 }
 
+func (m *appModel) togglePriority(itemID string) error {
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" {
+                return nil
+        }
+        return m.mutateItem(itemID, func(_ *store.DB, it *model.Item) (bool, itemMutationResult, error) {
+                it.Priority = !it.Priority
+                return true, itemMutationResult{
+                        eventType:    "item.set_priority",
+                        eventPayload: map[string]any{"priority": it.Priority},
+                        minibuffer:   fmt.Sprintf("Priority: %v", it.Priority),
+                }, nil
+        })
+}
+
 func (m *appModel) setOutlineNameFromModal(name string) error {
         outlineID := strings.TrimSpace(m.modalForID)
         if outlineID == "" {
@@ -5601,6 +5845,161 @@ func (m *appModel) openStatusPickerForOutline(outline model.Outline, currentStat
                 }
         }
         m.statusList.Select(selected)
+}
+
+func (m *appModel) openWorkspacePicker() {
+        if m == nil {
+                return
+        }
+        ws, err := store.ListWorkspaces()
+        if err != nil {
+                m.showMinibuffer("Workspace error: " + err.Error())
+                return
+        }
+
+        cur := strings.TrimSpace(m.workspace)
+        if cur == "" {
+                if cfg, err := store.LoadConfig(); err == nil {
+                        cur = strings.TrimSpace(cfg.CurrentWorkspace)
+                }
+        }
+        if cur == "" {
+                cur = "default"
+        }
+
+        seen := map[string]bool{}
+        names := []string{}
+        // Keep ListWorkspaces ordering but ensure we include current.
+        for _, n := range ws {
+                n = strings.TrimSpace(n)
+                if n == "" || seen[n] {
+                        continue
+                }
+                seen[n] = true
+                names = append(names, n)
+        }
+        if !seen[cur] {
+                names = append([]string{cur}, names...)
+        }
+
+        items := make([]list.Item, 0, len(names))
+        for _, n := range names {
+                items = append(items, workspaceItem{name: n, current: n == cur})
+        }
+        m.workspaceList.Title = ""
+        m.workspaceList.SetItems(items)
+
+        // Size similarly to other pickers.
+        modalW := m.width - 12
+        if modalW > m.width-4 {
+                modalW = m.width - 4
+        }
+        if modalW < 20 {
+                modalW = 20
+        }
+        if modalW > 96 {
+                modalW = 96
+        }
+        h := len(items) + 2
+        if h > 16 {
+                h = 16
+        }
+        if h < 8 {
+                h = 8
+        }
+        m.workspaceList.SetSize(modalW-6, h)
+
+        selectListItemByID(&m.workspaceList, cur)
+
+        m.modal = modalPickWorkspace
+        m.modalForID = ""
+        m.modalForKey = ""
+}
+
+func (m appModel) switchWorkspaceTo(name string) (appModel, error) {
+        name, err := store.NormalizeWorkspaceName(name)
+        if err != nil {
+                return m, err
+        }
+        dir, err := store.WorkspaceDir(name)
+        if err != nil {
+                return m, err
+        }
+        s := store.Store{Dir: dir}
+        db, err := s.Load()
+        if err != nil {
+                return m, err
+        }
+
+        // If this workspace has no identity yet, seed it from the current workspace so
+        // the user can immediately create projects/items.
+        if strings.TrimSpace(db.CurrentActorID) == "" && len(db.Actors) == 0 {
+                srcID := (&m).editActorID()
+                if srcID != "" && m.db != nil {
+                        if a, ok := m.db.FindActor(srcID); ok && a != nil {
+                                db.Actors = append(db.Actors, *a)
+                                db.CurrentActorID = srcID
+                                if err := s.Save(db); err != nil {
+                                        return m, err
+                                }
+                                _ = s.AppendEvent(srcID, "identity.seed", srcID, map[string]any{
+                                        "fromWorkspace": strings.TrimSpace(m.workspace),
+                                        "toWorkspace":   name,
+                                        "ts":            time.Now().UTC(),
+                                })
+                        }
+                }
+        }
+
+        if cfg, err := store.LoadConfig(); err == nil {
+                cfg.CurrentWorkspace = name
+                if err := store.SaveConfig(cfg); err != nil {
+                        return m, err
+                }
+        }
+
+        nm := newAppModelWithWorkspace(dir, db, name)
+        nm.width = m.width
+        nm.height = m.height
+        nm.seenWindowSize = m.seenWindowSize
+        return nm, nil
+}
+
+func (m appModel) renameWorkspaceTo(oldName, newName string) (appModel, error) {
+        oldName, err := store.NormalizeWorkspaceName(oldName)
+        if err != nil {
+                return m, err
+        }
+        newName, err = store.NormalizeWorkspaceName(newName)
+        if err != nil {
+                return m, err
+        }
+        if oldName == newName {
+                return m.switchWorkspaceTo(newName)
+        }
+        oldDir, err := store.WorkspaceDir(oldName)
+        if err != nil {
+                return m, err
+        }
+        newDir, err := store.WorkspaceDir(newName)
+        if err != nil {
+                return m, err
+        }
+        if err := os.Rename(oldDir, newDir); err != nil {
+                return m, err
+        }
+        if cfg, err := store.LoadConfig(); err == nil {
+                if strings.TrimSpace(cfg.CurrentWorkspace) == "" {
+                        cfg.CurrentWorkspace = "default"
+                }
+                if cfg.CurrentWorkspace == oldName {
+                        cfg.CurrentWorkspace = newName
+                        if err := store.SaveConfig(cfg); err != nil {
+                                return m, err
+                        }
+                }
+        }
+        return m.switchWorkspaceTo(newName)
 }
 
 func (m *appModel) openOutlineStatusDefsEditor(outline model.Outline, selectStatusID string) {

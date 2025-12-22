@@ -148,6 +148,15 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
 
         metaParts := make([]string, 0, 3)
 
+        // Progress cookie should follow immediately after the title (not float on the right).
+        progressCookie := ""
+        if it.row.totalChildren > 0 {
+                // Keep the "progress cookie" visual from earlier versions (like outline.js),
+                // but render it adjacent to the title for better scanability.
+                progressCookie = renderProgressCookie(it.row.doneChildren, it.row.totalChildren)
+        }
+        progressW := xansi.StringWidth(progressCookie)
+
         if it.row.item.Priority {
                 st := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
                 if focused {
@@ -162,25 +171,23 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
                 }
                 metaParts = append(metaParts, st.Render("on hold"))
         }
-        if it.row.totalChildren > 0 {
-                // Keep the "progress cookie" visual from earlier versions (like outline.js).
-                metaParts = append(metaParts, renderProgressCookie(it.row.doneChildren, it.row.totalChildren))
-        }
-
-        rightSeg := strings.Join(metaParts, base.Render(" "))
-        rightW := xansi.StringWidth(rightSeg)
+        inlineMetaSeg := strings.Join(metaParts, base.Render(" "))
+        inlineMetaW := xansi.StringWidth(inlineMetaSeg)
 
         title := strings.TrimSpace(it.row.item.Title)
         if title == "" {
                 title = "(untitled)"
         }
 
-        // Reserve room for metadata on the right; truncate the title ONLY when we're out of space.
+        // Reserve room for progress + inline metadata; truncate the title ONLY when we're out of space.
         leadW := xansi.StringWidth(leadRaw)
         statusW := xansi.StringWidth(statusRaw)
         availTitle := width - leadW - statusW
-        if rightSeg != "" {
-                availTitle -= (1 + rightW) // space + right side
+        if progressCookie != "" {
+                availTitle -= progressW
+        }
+        if inlineMetaSeg != "" {
+                availTitle -= (1 + inlineMetaW) // space + inline metadata
         }
         if availTitle < 0 {
                 availTitle = 0
@@ -194,28 +201,12 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
                         Strikethrough(true)
         }
         titleSeg := titleStyle.Render(titleTrunc)
-
-        spacerSeg := ""
-        if rightSeg != "" {
-                // Ensure right-side metadata stays visible; it takes precedence over title.
-                needW := leadW + statusW + xansi.StringWidth(titleTrunc) + 1 + rightW
-                if needW > width {
-                        availTitle = width - leadW - statusW - 1 - rightW
-                        if availTitle < 0 {
-                                availTitle = 0
-                        }
-                        titleTrunc = truncateText(title, availTitle)
-                        titleSeg = titleStyle.Render(titleTrunc)
-                        needW = leadW + statusW + xansi.StringWidth(titleTrunc) + 1 + rightW
-                }
-                spacerW := width - needW
-                if spacerW < 0 {
-                        spacerW = 0
-                }
-                spacerSeg = base.Render(" " + strings.Repeat(" ", spacerW))
+        progressSeg := progressCookie
+        metaSpacer := ""
+        if inlineMetaSeg != "" {
+                metaSpacer = base.Render(" ")
         }
-
-        out := leadSeg + statusSeg + titleSeg + spacerSeg + rightSeg
+        out := leadSeg + statusSeg + titleSeg + progressSeg + metaSpacer + inlineMetaSeg
         curW := xansi.StringWidth(out)
         if curW < width {
                 out += base.Render(strings.Repeat(" ", width-curW))

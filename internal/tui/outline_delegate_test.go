@@ -107,6 +107,64 @@ func TestOutlineDelegate_MetaTakesPrecedenceOverTitle(t *testing.T) {
         }
 }
 
+func TestOutlineDelegate_ProgressCookieFollowsTitle(t *testing.T) {
+        d := newOutlineItemDelegate()
+
+        outline := model.Outline{
+                ID:        "out-a",
+                ProjectID: "proj-a",
+                StatusDefs: []model.OutlineStatusDef{
+                        {ID: "todo", Label: "TODO", IsEndState: false},
+                },
+                CreatedBy: "act-human",
+                CreatedAt: time.Now().UTC(),
+        }
+
+        title := "MyTitle"
+        it := outlineRowItem{
+                outline: outline,
+                row: outlineRow{
+                        item: model.Item{
+                                ID:           "item-a",
+                                ProjectID:    "proj-a",
+                                OutlineID:    "out-a",
+                                Rank:         "h",
+                                Title:        title,
+                                StatusID:     "todo",
+                                Priority:     true, // keep some meta present
+                                OwnerActorID: "act-human",
+                                CreatedBy:    "act-human",
+                                CreatedAt:    time.Now().UTC(),
+                                UpdatedAt:    time.Now().UTC(),
+                        },
+                        depth:         0,
+                        hasChildren:   true,
+                        collapsed:     false,
+                        doneChildren:  1,
+                        totalChildren: 2,
+                },
+        }
+
+        out := d.renderOutlineRow(80, "", it, false)
+        plain := stripANSIEscapes(out)
+
+        titleIdx := strings.Index(plain, title)
+        if titleIdx < 0 {
+                t.Fatalf("expected rendered row to include title %q; got %q", title, plain)
+        }
+        cookieIdx := strings.Index(plain, "1/2")
+        if cookieIdx < 0 {
+                t.Fatalf("expected rendered row to include progress cookie 1/2; got %q", plain)
+        }
+
+        // The cookie includes a leading space plus a small fixed-width bar; it should appear
+        // close to the title, not separated by a large right-alignment spacer.
+        gap := cookieIdx - (titleIdx + len(title))
+        if gap > 20 {
+                t.Fatalf("expected progress cookie to follow title closely; gap=%d; got %q", gap, plain)
+        }
+}
+
 func TestOutlineDelegate_EndStateItem_IsGrayAndStruck(t *testing.T) {
         old := lipgloss.ColorProfile()
         lipgloss.SetColorProfile(termenv.ANSI256)

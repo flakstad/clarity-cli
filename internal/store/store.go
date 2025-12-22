@@ -20,15 +20,6 @@ const (
         eventsFileName = "events.jsonl"
 )
 
-const envStoreBackend = "CLARITY_STORE"
-
-type StoreBackend string
-
-const (
-        StoreBackendJSON   StoreBackend = "json"
-        StoreBackendSQLite StoreBackend = "sqlite"
-)
-
 type DB struct {
         Version          int                  `json:"version"`
         CurrentActorID   string               `json:"currentActorId,omitempty"`
@@ -52,17 +43,6 @@ type DB struct {
 
 type Store struct {
         Dir string
-}
-
-func (s Store) backend() StoreBackend {
-        v := strings.ToLower(strings.TrimSpace(getenv(envStoreBackend)))
-        switch v {
-        case string(StoreBackendJSON):
-                return StoreBackendJSON
-        default:
-                // Default: SQLite state store.
-                return StoreBackendSQLite
-        }
 }
 
 func DiscoverDir(start string) (string, bool) {
@@ -111,71 +91,13 @@ func (s Store) dbPath() string {
         return filepath.Join(s.Dir, dbFileName)
 }
 
-func (s Store) eventsPath() string {
-        return filepath.Join(s.Dir, eventsFileName)
-}
-
 func (s Store) Load() (*DB, error) {
         if err := s.Ensure(); err != nil {
                 return nil, err
         }
 
-        // Opt-in SQLite state store.
-        // This is a breaking/dev feature: when enabled, db.json is imported once and then SQLite becomes the source of truth.
-        if s.backend() == StoreBackendSQLite {
-                return s.LoadSQLite(context.Background())
-        }
-
-        b, err := os.ReadFile(s.dbPath())
-        if err != nil {
-                if errors.Is(err, os.ErrNotExist) {
-                        return &DB{
-                                Version: 1,
-                                NextIDs: map[string]int{},
-                        }, nil
-                }
-                return nil, err
-        }
-
-        db, legacyOrderByID, err := loadWireDB(b)
-        if err != nil {
-                return nil, err
-        }
-
-        dirty := false
-        if db.NextIDs == nil {
-                db.NextIDs = map[string]int{}
-                dirty = true
-        }
-        if len(db.Items) == 0 && len(db.LegacyTasks) > 0 {
-                db.Items = db.LegacyTasks
-                db.LegacyTasks = nil
-                dirty = true
-        }
-        if db.Version == 0 {
-                db.Version = 1
-                dirty = true
-        }
-        if migrateLegacyDates(&db) {
-                dirty = true
-        }
-        if migrateOutlines(&db) {
-                dirty = true
-        }
-        if migrateRanks(&db, legacyOrderByID) {
-                dirty = true
-        }
-        if migrateLegacyIDs(&db) {
-                dirty = true
-        }
-
-        // Persist migrations immediately so IDs (e.g. outline IDs) are stable across runs.
-        if dirty {
-                if err := s.Save(&db); err != nil {
-                        return nil, err
-                }
-        }
-        return &db, nil
+        // SQLite is the only source of truth. LoadSQLite will auto-import legacy db.json once if needed.
+        return s.LoadSQLite(context.Background())
 }
 
 func migrateRanks(db *DB, legacyOrderByID map[string]int) bool {
@@ -387,19 +309,8 @@ func (s Store) Save(db *DB) error {
         if err := s.Ensure(); err != nil {
                 return err
         }
-        // Opt-in SQLite state store.
-        if s.backend() == StoreBackendSQLite {
-                return s.SaveSQLite(context.Background(), db)
-        }
-        b, err := json.MarshalIndent(db, "", "  ")
-        if err != nil {
-                return err
-        }
-        tmp := s.dbPath() + ".tmp"
-        if err := os.WriteFile(tmp, b, 0o644); err != nil {
-                return err
-        }
-        return os.Rename(tmp, s.dbPath())
+        // SQLite-only: never write db.json.
+        return s.SaveSQLite(context.Background(), db)
 }
 
 func (s Store) NextID(db *DB, prefix string) string {
@@ -431,40 +342,8 @@ func (s Store) NextID(db *DB, prefix string) string {
 }
 
 func (s Store) AppendEvent(actorID, typ, entityID string, payload any) error {
-        // Opt-in SQLite event log (v1 contract). Keeps legacy JSONL as default.
-        if s.eventLogBackend() == EventLogBackendSQLite {
-                return s.appendEventSQLite(context.Background(), actorID, typ, entityID, payload)
-        }
-        if err := s.Ensure(); err != nil {
-                return err
-        }
-
-        ev := model.Event{
-                ID:       "", // filled below
-                TS:       time.Now().UTC(),
-                ActorID:  actorID,
-                Type:     typ,
-                EntityID: entityID,
-                Payload:  payload,
-        }
-
-        // Generate a monotonic event id without loading db.json.
-        // Format: evt-<unixms>-<rand-ish suffix from pid>
-        ev.ID = fmt.Sprintf("evt-%d-%d", ev.TS.UnixMilli(), os.Getpid())
-
-        line, err := json.Marshal(ev)
-        if err != nil {
-                return err
-        }
-
-        f, err := os.OpenFile(s.eventsPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-        if err != nil {
-                return err
-        }
-        defer f.Close()
-
-        _, err = fmt.Fprintln(f, string(line))
-        return err
+        // SQLite-only: never write events.jsonl.
+        return s.appendEventSQLite(context.Background(), actorID, typ, entityID, payload)
 }
 
 func (db *DB) FindActor(id string) (*model.Actor, bool) {
@@ -632,7 +511,8 @@ func ParseStatusID(s string) (string, error) {
 
 func ReadEvents(dir string, limit int) ([]model.Event, error) {
         st := Store{Dir: dir}
-        if st.eventLogBackend() == EventLogBackendSQLite {
+        // SQLite-only by default. Keep legacy JSONL reader for back-compat/forensics if explicitly requested.
+        if st.eventLogBackend() != EventLogBackendJSONL {
                 return st.readEventsSQLite(context.Background(), limit)
         }
         path := filepath.Join(dir, eventsFileName)
@@ -669,7 +549,7 @@ func ReadEvents(dir string, limit int) ([]model.Event, error) {
 // If limit <= 0, this behaves like ReadEvents(dir, 0) and returns all events.
 func ReadEventsTail(dir string, limit int) ([]model.Event, error) {
         st := Store{Dir: dir}
-        if st.eventLogBackend() == EventLogBackendSQLite {
+        if st.eventLogBackend() != EventLogBackendJSONL {
                 // Simple implementation: read all and take tail. We can optimize later.
                 // This preserves existing behavior while we transition the store.
                 evs, err := st.readEventsSQLite(context.Background(), 0)
@@ -741,7 +621,7 @@ func ReadEventsForEntity(dir, entityID string, limit int) ([]model.Event, error)
                 return []model.Event{}, nil
         }
         st := Store{Dir: dir}
-        if st.eventLogBackend() == EventLogBackendSQLite {
+        if st.eventLogBackend() != EventLogBackendJSONL {
                 return st.readEventsForEntitySQLite(context.Background(), entityID, limit)
         }
 

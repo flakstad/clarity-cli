@@ -78,7 +78,7 @@ func runTUI(app *App) error {
         if err != nil {
                 return err
         }
-        return tui.Run(app.Dir, st)
+        return tui.RunWithWorkspace(app.Dir, st, app.Workspace)
 }
 
 func loadDB(app *App) (*store.DB, store.Store, error) {

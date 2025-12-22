@@ -36,8 +36,7 @@ func newInitCmd(app *App) *cobra.Command {
                         return writeOut(cmd, app, map[string]any{
                                 "data": map[string]any{
                                         "dir":        app.Dir,
-                                        "dbPath":     filepath.Join(app.Dir, "db.json"),
-                                        "eventsPath": filepath.Join(app.Dir, "events.jsonl"),
+                                        "sqlitePath": filepath.Join(app.Dir, "clarity.sqlite"),
                                 },
                         })
                 },
