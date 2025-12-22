@@ -11,9 +11,20 @@ import (
 
 type GlobalConfig struct {
         CurrentWorkspace string `json:"currentWorkspace,omitempty"`
+
+        // DeviceID is a stable per-machine identifier. It is used to derive per-workspace replica IDs
+        // so that cloning a workspace directory to another machine yields a new replicaId automatically.
+        DeviceID string `json:"deviceId,omitempty"`
+
+        // Replicas maps workspaceId -> replicaId for this device.
+        Replicas map[string]string `json:"replicas,omitempty"`
 }
 
 func ConfigDir() (string, error) {
+        // Test/advanced override (keeps unit tests from touching ~/.clarity).
+        if v := strings.TrimSpace(os.Getenv("CLARITY_CONFIG_DIR")); v != "" {
+                return v, nil
+        }
         home, err := os.UserHomeDir()
         if err != nil {
                 return "", err

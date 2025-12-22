@@ -243,13 +243,13 @@ func TestRenderItemDetail_ShowsHistoryForItem(t *testing.T) {
         }
 
         s := renderItemDetail(db, outline, db.Items[0], 80, 30, true, events)
-        if !strings.Contains(s, "History") {
-                t.Fatalf("expected history section; got: %q", s)
+        if !strings.Contains(s, "History:") {
+                t.Fatalf("expected History summary line; got: %q", s)
         }
-        if !strings.Contains(s, "set title:") {
-                t.Fatalf("expected title-change summary in history; got: %q", s)
+        if !strings.Contains(s, "History:   2") {
+                t.Fatalf("expected history count=2; got: %q", s)
         }
-        if !strings.Contains(s, "Alice") {
-                t.Fatalf("expected actor name to render in history; got: %q", s)
+        if want := fmtTS(now.Add(-2 * time.Hour)); !strings.Contains(s, "History:   2 (last "+want+")") {
+                t.Fatalf("expected history last timestamp to match newest event; want=%q got=%q", want, s)
         }
 }

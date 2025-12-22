@@ -43,26 +43,26 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
         children := db.ChildrenOf(it.ID)
         sort.Slice(children, func(i, j int) bool { return compareOutlineItems(children[i], children[j]) < 0 })
 
-        commentsCount := 0
         comments := db.CommentsForItem(it.ID)
-        commentsCount = len(comments)
-
-        worklogCount := "-"
-        var myWorklog []model.WorklogEntry
-        if db.CurrentActorID != "" {
-                if humanID, ok := db.HumanUserIDForActor(db.CurrentActorID); ok {
-                        n := 0
-                        for _, w := range db.WorklogForItem(it.ID) {
-                                if authorHuman, ok := db.HumanUserIDForActor(w.AuthorID); ok && authorHuman == humanID {
-                                        n++
-                                        myWorklog = append(myWorklog, w)
-                                }
-                        }
-                        worklogCount = fmt.Sprintf("%d", n)
-                }
+        commentsCount := len(comments)
+        lastComment := "-"
+        if commentsCount > 0 {
+                lastComment = fmtTS(comments[0].CreatedAt)
         }
+
+        worklog := db.WorklogForItem(it.ID)
         // WorklogForItem is sorted by CreatedAt desc; keep stable ordering in case of ties.
-        sort.SliceStable(myWorklog, func(i, j int) bool { return myWorklog[i].CreatedAt.After(myWorklog[j].CreatedAt) })
+        sort.SliceStable(worklog, func(i, j int) bool { return worklog[i].CreatedAt.After(worklog[j].CreatedAt) })
+        lastWorklog := "-"
+        if len(worklog) > 0 {
+                lastWorklog = fmtTS(worklog[0].CreatedAt)
+        }
+
+        history := filterEventsForItem(db, events, it.ID)
+        lastHistory := "-"
+        if len(history) > 0 {
+                lastHistory = fmtTS(history[0].TS)
+        }
 
         desc := "(no description)"
         if strings.TrimSpace(it.Description) != "" {
@@ -96,16 +96,9 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
                 renderChildren(children, 8),
                 "",
                 labelStyle.Render("Related"),
-                fmt.Sprintf("Comments: %d  Worklog (yours): %s", commentsCount, worklogCount),
-                "",
-                labelStyle.Render("Recent comments"),
-                renderComments(comments, 3),
-                "",
-                labelStyle.Render("Recent worklog (yours)"),
-                renderWorklog(myWorklog, 3),
-                "",
-                labelStyle.Render("History"),
-                renderHistory(db, events, it.ID, 8),
+                fmt.Sprintf("Comments: %d (last %s)", commentsCount, lastComment),
+                fmt.Sprintf("Worklog:   %d (last %s)", len(worklog), lastWorklog),
+                fmt.Sprintf("History:   %d (last %s)", len(history), lastHistory),
                 "",
                 labelStyle.Render("Hints"),
                 "- tab toggles focus between outline/detail",
@@ -154,7 +147,7 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
                 Foreground(colorSurfaceFg).
                 Background(colorControlBg).
                 MaxWidth(innerW)
-        btnActive := btnBase.Copy().
+        btnActive := btnBase.
                 Foreground(colorSelectedFg).
                 Background(colorAccent).
                 Bold(true)
@@ -177,23 +170,24 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
 
         comments := db.CommentsForItem(it.ID)
         commentsCount := len(comments)
-
-        worklogCount := "-"
-        var myWorklog []model.WorklogEntry
-        if db.CurrentActorID != "" {
-                if humanID, ok := db.HumanUserIDForActor(db.CurrentActorID); ok {
-                        n := 0
-                        for _, w := range db.WorklogForItem(it.ID) {
-                                if authorHuman, ok := db.HumanUserIDForActor(w.AuthorID); ok && authorHuman == humanID {
-                                        n++
-                                        myWorklog = append(myWorklog, w)
-                                }
-                        }
-                        worklogCount = fmt.Sprintf("%d", n)
-                }
+        lastComment := "-"
+        if commentsCount > 0 {
+                lastComment = fmtTS(comments[0].CreatedAt)
         }
+
+        worklog := db.WorklogForItem(it.ID)
         // WorklogForItem is sorted by CreatedAt desc; keep stable ordering in case of ties.
-        sort.SliceStable(myWorklog, func(i, j int) bool { return myWorklog[i].CreatedAt.After(myWorklog[j].CreatedAt) })
+        sort.SliceStable(worklog, func(i, j int) bool { return worklog[i].CreatedAt.After(worklog[j].CreatedAt) })
+        lastWorklog := "-"
+        if len(worklog) > 0 {
+                lastWorklog = fmtTS(worklog[0].CreatedAt)
+        }
+
+        history := filterEventsForItem(db, events, it.ID)
+        lastHistory := "-"
+        if len(history) > 0 {
+                lastHistory = fmtTS(history[0].TS)
+        }
 
         desc := "(no description)"
         if strings.TrimSpace(it.Description) != "" {
@@ -225,25 +219,13 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
                 btn(focus == itemFocusDescription).Render("Description (edit)"),
                 desc,
                 "",
+                labelStyle.Render("Related"),
+                btn(focus == itemFocusComments).Render(fmt.Sprintf("Comments: %d (last %s)", commentsCount, lastComment)),
+                btn(focus == itemFocusWorklog).Render(fmt.Sprintf("Worklog:   %d (last %s)", len(worklog), lastWorklog)),
+                btn(focus == itemFocusHistory).Render(fmt.Sprintf("History:   %d (last %s)", len(history), lastHistory)),
+                "",
                 labelStyle.Render("Children"),
                 renderChildren(children, 8),
-                "",
-                labelStyle.Render("Related"),
-                fmt.Sprintf("Comments: %d  %s    Worklog (yours): %s  %s",
-                        commentsCount,
-                        btn(focus == itemFocusAddComment).Render("Add comment"),
-                        worklogCount,
-                        btn(focus == itemFocusAddWorklog).Render("Add worklog"),
-                ),
-                "",
-                labelStyle.Render("Recent comments"),
-                renderComments(comments, 3),
-                "",
-                labelStyle.Render("Recent worklog (yours)"),
-                renderWorklog(myWorklog, 3),
-                "",
-                labelStyle.Render("History"),
-                renderHistory(db, events, it.ID, 8),
                 "",
                 labelStyle.Render("Hints"),
                 "- tab / shift+tab: move focus",
@@ -251,6 +233,7 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
                 "- e edits title; Shift+D edits description",
                 "- C adds a comment; w adds a worklog entry",
                 "- space sets status",
+                "- Comments/Worklog/History: up/down selects entry (in right panel); pgup/pgdown scrolls expanded entry",
                 "- More via CLI:",
                 "  clarity comments list " + it.ID,
                 "  clarity worklog list " + it.ID,
@@ -298,103 +281,11 @@ func renderChildren(children []model.Item, max int) string {
         return strings.Join(lines, "\n")
 }
 
-func renderComments(comments []model.Comment, max int) string {
-        if len(comments) == 0 {
-                return "(no comments)"
-        }
-        if max <= 0 {
-                max = 1
-        }
-        n := len(comments)
-        if n > max {
-                n = max
-        }
-        lines := make([]string, 0, n+1)
-        for i := 0; i < n; i++ {
-                c := comments[i]
-                snippet := strings.TrimSpace(c.Body)
-                snippet = strings.ReplaceAll(snippet, "\n", " ")
-                if len(snippet) > 80 {
-                        snippet = snippet[:80] + "…"
-                }
-                lines = append(lines, fmt.Sprintf("- %s  %s  %s", fmtTS(c.CreatedAt), c.AuthorID, snippet))
-        }
-        if len(comments) > max {
-                lines = append(lines, fmt.Sprintf("… and %d more", len(comments)-max))
-        }
-        return strings.Join(lines, "\n")
-}
-
-func renderWorklog(entries []model.WorklogEntry, max int) string {
-        if len(entries) == 0 {
-                return "(no worklog)"
-        }
-        if max <= 0 {
-                max = 1
-        }
-        n := len(entries)
-        if n > max {
-                n = max
-        }
-        lines := make([]string, 0, n+1)
-        for i := 0; i < n; i++ {
-                w := entries[i]
-                snippet := strings.TrimSpace(w.Body)
-                snippet = strings.ReplaceAll(snippet, "\n", " ")
-                if len(snippet) > 80 {
-                        snippet = snippet[:80] + "…"
-                }
-                lines = append(lines, fmt.Sprintf("- %s  %s", fmtTS(w.CreatedAt), snippet))
-        }
-        if len(entries) > max {
-                lines = append(lines, fmt.Sprintf("… and %d more", len(entries)-max))
-        }
-        return strings.Join(lines, "\n")
-}
-
 func fmtTS(t time.Time) string {
         if t.IsZero() {
                 return "-"
         }
         return t.Local().Format("2006-01-02 15:04")
-}
-
-func renderHistory(db *store.DB, events []model.Event, itemID string, max int) string {
-        if max <= 0 {
-                max = 1
-        }
-        if len(events) == 0 {
-                return "(no events)"
-        }
-
-        // Filter once, then render newest-first.
-        matches := make([]model.Event, 0)
-        for _, ev := range events {
-                if eventIsForItem(ev, itemID) {
-                        matches = append(matches, ev)
-                }
-        }
-        if len(matches) == 0 {
-                return "(no events)"
-        }
-
-        lines := make([]string, 0, max+1)
-        shown := 0
-        for i := len(matches) - 1; i >= 0 && shown < max; i-- {
-                ev := matches[i]
-                actor := strings.TrimSpace(ev.ActorID)
-                if db != nil {
-                        if a, ok := db.FindActor(actor); ok && strings.TrimSpace(a.Name) != "" {
-                                actor = a.Name
-                        }
-                }
-                lines = append(lines, fmt.Sprintf("- %s  %s  %s", fmtTS(ev.TS), actor, eventSummary(ev)))
-                shown++
-        }
-        if len(matches) > max {
-                lines = append(lines, fmt.Sprintf("… and %d more", len(matches)-max))
-        }
-        return strings.Join(lines, "\n")
 }
 
 func eventIsForItem(ev model.Event, itemID string) bool {

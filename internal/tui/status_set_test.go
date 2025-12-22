@@ -123,6 +123,8 @@ func TestStatusPicker_Enter_SetsStatus_WhenCurrentActorIsAgent(t *testing.T) {
         m2.selectedProjectID = "proj-a"
         m2.selectedOutlineID = "out-a"
         m2.openItemID = "item-a"
+        m2.itemFocus = itemFocusHistory
+        m2.itemHistoryIdx = 0
         m2.width = 120
         // Ensure enough vertical space to include the History section in the rendered view.
         m2.height = 80

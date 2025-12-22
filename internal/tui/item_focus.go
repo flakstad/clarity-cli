@@ -8,16 +8,18 @@ const (
         itemFocusTitle itemPageFocus = iota
         itemFocusStatus
         itemFocusDescription
-        itemFocusAddComment
-        itemFocusAddWorklog
+        itemFocusComments
+        itemFocusWorklog
+        itemFocusHistory
 )
 
 var itemFocusOrder = []itemPageFocus{
         itemFocusTitle,
         itemFocusStatus,
         itemFocusDescription,
-        itemFocusAddComment,
-        itemFocusAddWorklog,
+        itemFocusComments,
+        itemFocusWorklog,
+        itemFocusHistory,
 }
 
 func (f itemPageFocus) next() itemPageFocus {

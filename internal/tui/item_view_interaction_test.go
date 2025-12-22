@@ -145,10 +145,13 @@ func TestItemView_ShortcutsOpenModals(t *testing.T) {
         m2.modal = modalNone
         m2.modalForID = ""
 
-        // C => add comment modal.
+        // C => add comment modal (and focus comments so the side panel stays open after save).
         mAny, _ = m2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
         m3 := mAny.(appModel)
         if m3.modal != modalAddComment {
                 t.Fatalf("expected modalAddComment, got %v", m3.modal)
+        }
+        if m3.itemFocus != itemFocusComments {
+                t.Fatalf("expected focus=%v, got %v", itemFocusComments, m3.itemFocus)
         }
 }

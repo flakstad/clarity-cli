@@ -2,6 +2,7 @@ package store
 
 import (
         "bufio"
+        "context"
         "encoding/json"
         "errors"
         "fmt"
@@ -17,6 +18,15 @@ import (
 const (
         dbFileName     = "db.json"
         eventsFileName = "events.jsonl"
+)
+
+const envStoreBackend = "CLARITY_STORE"
+
+type StoreBackend string
+
+const (
+        StoreBackendJSON   StoreBackend = "json"
+        StoreBackendSQLite StoreBackend = "sqlite"
 )
 
 type DB struct {
@@ -42,6 +52,16 @@ type DB struct {
 
 type Store struct {
         Dir string
+}
+
+func (s Store) backend() StoreBackend {
+        v := strings.ToLower(strings.TrimSpace(getenv(envStoreBackend)))
+        switch v {
+        case string(StoreBackendSQLite):
+                return StoreBackendSQLite
+        default:
+                return StoreBackendJSON
+        }
 }
 
 func DiscoverDir(start string) (string, bool) {
@@ -97,6 +117,12 @@ func (s Store) eventsPath() string {
 func (s Store) Load() (*DB, error) {
         if err := s.Ensure(); err != nil {
                 return nil, err
+        }
+
+        // Opt-in SQLite state store.
+        // This is a breaking/dev feature: when enabled, db.json is imported once and then SQLite becomes the source of truth.
+        if s.backend() == StoreBackendSQLite {
+                return s.LoadSQLite(context.Background())
         }
 
         b, err := os.ReadFile(s.dbPath())
@@ -360,6 +386,10 @@ func (s Store) Save(db *DB) error {
         if err := s.Ensure(); err != nil {
                 return err
         }
+        // Opt-in SQLite state store.
+        if s.backend() == StoreBackendSQLite {
+                return s.SaveSQLite(context.Background(), db)
+        }
         b, err := json.MarshalIndent(db, "", "  ")
         if err != nil {
                 return err
@@ -400,6 +430,10 @@ func (s Store) NextID(db *DB, prefix string) string {
 }
 
 func (s Store) AppendEvent(actorID, typ, entityID string, payload any) error {
+        // Opt-in SQLite event log (v1 contract). Keeps legacy JSONL as default.
+        if s.eventLogBackend() == EventLogBackendSQLite {
+                return s.appendEventSQLite(context.Background(), actorID, typ, entityID, payload)
+        }
         if err := s.Ensure(); err != nil {
                 return err
         }
@@ -596,6 +630,10 @@ func ParseStatusID(s string) (string, error) {
 }
 
 func ReadEvents(dir string, limit int) ([]model.Event, error) {
+        st := Store{Dir: dir}
+        if st.eventLogBackend() == EventLogBackendSQLite {
+                return st.readEventsSQLite(context.Background(), limit)
+        }
         path := filepath.Join(dir, eventsFileName)
         f, err := os.Open(path)
         if err != nil {
@@ -629,6 +667,19 @@ func ReadEvents(dir string, limit int) ([]model.Event, error) {
 // The returned slice is in chronological order (oldest-first within the returned window).
 // If limit <= 0, this behaves like ReadEvents(dir, 0) and returns all events.
 func ReadEventsTail(dir string, limit int) ([]model.Event, error) {
+        st := Store{Dir: dir}
+        if st.eventLogBackend() == EventLogBackendSQLite {
+                // Simple implementation: read all and take tail. We can optimize later.
+                // This preserves existing behavior while we transition the store.
+                evs, err := st.readEventsSQLite(context.Background(), 0)
+                if err != nil {
+                        return nil, err
+                }
+                if limit <= 0 || len(evs) <= limit {
+                        return evs, nil
+                }
+                return evs[len(evs)-limit:], nil
+        }
         if limit <= 0 {
                 return ReadEvents(dir, 0)
         }
@@ -687,6 +738,10 @@ func ReadEventsForEntity(dir, entityID string, limit int) ([]model.Event, error)
         entityID = strings.TrimSpace(entityID)
         if entityID == "" {
                 return []model.Event{}, nil
+        }
+        st := Store{Dir: dir}
+        if st.eventLogBackend() == EventLogBackendSQLite {
+                return st.readEventsForEntitySQLite(context.Background(), entityID, limit)
         }
 
         path := filepath.Join(dir, eventsFileName)

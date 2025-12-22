@@ -208,7 +208,11 @@ type appModel struct {
         collapseInitialized bool
         // itemFocus is used on the full-screen item view to allow Tab navigation across
         // editable fields (title/status/description/comment/worklog).
-        itemFocus itemPageFocus
+        itemFocus      itemPageFocus
+        itemCommentIdx int
+        itemWorklogIdx int
+        itemHistoryIdx int
+        itemSideScroll int
         // Per-outline display mode for the outline view (experimental).
         outlineViewMode map[string]outlineViewMode
 
@@ -476,6 +480,10 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                                         }
                                         mm.view = viewItem
                                         mm.itemFocus = itemFocusTitle
+                                        mm.itemCommentIdx = 0
+                                        mm.itemWorklogIdx = 0
+                                        mm.itemHistoryIdx = 0
+                                        mm.itemSideScroll = 0
                                         mm.showPreview = false
                                         mm.pane = paneOutline
                                         return mm, nil
@@ -939,6 +947,10 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
                         m.openItemID = it.ID
                         m.view = viewItem
                         m.itemFocus = itemFocusTitle
+                        m.itemCommentIdx = 0
+                        m.itemWorklogIdx = 0
+                        m.itemHistoryIdx = 0
+                        m.itemSideScroll = 0
                         m.showPreview = false
                         m.pane = paneOutline
 
@@ -1330,6 +1342,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.openItemID = it.row.item.ID
                                         m.view = viewItem
                                         m.itemFocus = itemFocusTitle
+                                        m.itemCommentIdx = 0
+                                        m.itemWorklogIdx = 0
+                                        m.itemHistoryIdx = 0
+                                        m.itemSideScroll = 0
                                         m.hasReturnView = true
                                         m.returnView = viewAgenda
                                         m.showPreview = false
@@ -1510,7 +1526,107 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, nil
                 }
 
+                comments := m.db.CommentsForItem(it.ID)
+                worklog := m.db.WorklogForItem(it.ID)
+                history := filterEventsForItem(m.db, m.eventsTail, it.ID)
+
                 switch km.String() {
+                case "up", "k":
+                        switch m.itemFocus {
+                        case itemFocusComments:
+                                if len(comments) > 0 && m.itemCommentIdx > 0 {
+                                        m.itemCommentIdx--
+                                        m.itemSideScroll = 0
+                                }
+                                return m, nil
+                        case itemFocusWorklog:
+                                if len(worklog) > 0 && m.itemWorklogIdx > 0 {
+                                        m.itemWorklogIdx--
+                                        m.itemSideScroll = 0
+                                }
+                                return m, nil
+                        case itemFocusHistory:
+                                if len(history) > 0 && m.itemHistoryIdx > 0 {
+                                        m.itemHistoryIdx--
+                                        m.itemSideScroll = 0
+                                }
+                                return m, nil
+                        }
+                case "down", "j":
+                        switch m.itemFocus {
+                        case itemFocusComments:
+                                if n := len(comments); n > 0 && m.itemCommentIdx < n-1 {
+                                        m.itemCommentIdx++
+                                        m.itemSideScroll = 0
+                                }
+                                return m, nil
+                        case itemFocusWorklog:
+                                if n := len(worklog); n > 0 && m.itemWorklogIdx < n-1 {
+                                        m.itemWorklogIdx++
+                                        m.itemSideScroll = 0
+                                }
+                                return m, nil
+                        case itemFocusHistory:
+                                if n := len(history); n > 0 && m.itemHistoryIdx < n-1 {
+                                        m.itemHistoryIdx++
+                                        m.itemSideScroll = 0
+                                }
+                                return m, nil
+                        }
+                case "pgup", "ctrl+u":
+                        switch m.itemFocus {
+                        case itemFocusComments, itemFocusWorklog, itemFocusHistory:
+                                m.itemSideScroll -= 10
+                                return m, nil
+                        }
+                case "pgdown", "ctrl+d":
+                        switch m.itemFocus {
+                        case itemFocusComments, itemFocusWorklog, itemFocusHistory:
+                                m.itemSideScroll += 10
+                                return m, nil
+                        }
+                case "home":
+                        switch m.itemFocus {
+                        case itemFocusComments, itemFocusWorklog, itemFocusHistory:
+                                // Jump to start of list (top) and reset scroll.
+                                switch m.itemFocus {
+                                case itemFocusComments:
+                                        if len(comments) > 0 {
+                                                m.itemCommentIdx = 0 // comments are rendered oldest-first
+                                        }
+                                case itemFocusWorklog:
+                                        if len(worklog) > 0 {
+                                                m.itemWorklogIdx = 0 // worklog rendered newest-first
+                                        }
+                                case itemFocusHistory:
+                                        if len(history) > 0 {
+                                                m.itemHistoryIdx = 0 // history rendered newest-first
+                                        }
+                                }
+                                m.itemSideScroll = 0
+                                return m, nil
+                        }
+                case "end":
+                        switch m.itemFocus {
+                        case itemFocusComments:
+                                if len(comments) > 0 {
+                                        m.itemCommentIdx = len(comments) - 1 // comments rendered oldest-first
+                                }
+                                m.itemSideScroll = 0
+                                return m, nil
+                        case itemFocusWorklog:
+                                if len(worklog) > 0 {
+                                        m.itemWorklogIdx = len(worklog) - 1 // newest-first
+                                }
+                                m.itemSideScroll = 0
+                                return m, nil
+                        case itemFocusHistory:
+                                if len(history) > 0 {
+                                        m.itemHistoryIdx = len(history) - 1 // newest-first
+                                }
+                                m.itemSideScroll = 0
+                                return m, nil
+                        }
                 case "tab":
                         m.itemFocus = m.itemFocus.next()
                         return m, nil
@@ -1535,12 +1651,6 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         case itemFocusDescription:
                                 m.openTextModal(modalEditDescription, it.ID, "Markdown description…", it.Description)
                                 return m, nil
-                        case itemFocusAddComment:
-                                m.openTextModal(modalAddComment, it.ID, "Write a comment…", "")
-                                return m, nil
-                        case itemFocusAddWorklog:
-                                m.openTextModal(modalAddWorklog, it.ID, "Log work…", "")
-                                return m, nil
                         default:
                                 return m, nil
                         }
@@ -1556,11 +1666,17 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.openTextModal(modalEditDescription, it.ID, "Markdown description…", it.Description)
                         return m, nil
                 case "C":
-                        m.itemFocus = itemFocusAddComment
+                        // Add comment (keep the side panel open by focusing Comments).
+                        m.itemFocus = itemFocusComments
+                        m.itemCommentIdx = 0
+                        m.itemSideScroll = 0
                         m.openTextModal(modalAddComment, it.ID, "Write a comment…", "")
                         return m, nil
                 case "w":
-                        m.itemFocus = itemFocusAddWorklog
+                        // Add worklog entry (keep the side panel open by focusing Worklog).
+                        m.itemFocus = itemFocusWorklog
+                        m.itemWorklogIdx = 0
+                        m.itemSideScroll = 0
                         m.openTextModal(modalAddWorklog, it.ID, "Log work…", "")
                         return m, nil
                 case " ":
@@ -2764,6 +2880,22 @@ func (m *appModel) viewItem() string {
         }
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+
+        // Split view when focusing a section that has a side panel.
+        if sidePanelKindForFocus(m.itemFocus) != itemSideNone {
+                leftW, rightW := splitPaneWidths(contentW)
+                left := renderItemDetailInteractive(m.db, *outline, *it, leftW, bodyHeight, m.itemFocus, m.eventsTail)
+                right := renderItemSidePanelWithEvents(m.db, *it, rightW, bodyHeight, sidePanelKindForFocus(m.itemFocus), m.itemCommentIdx, m.itemWorklogIdx, m.itemHistoryIdx, m.itemSideScroll, m.eventsTail)
+
+                left = normalizePane(left, leftW, bodyHeight)
+                right = normalizePane(right, rightW, bodyHeight)
+                split := lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", splitGapW), right)
+                // Ensure exact size for stable centering/margins.
+                split = lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render(split)
+                block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + split
+                return wrap(block)
+        }
+
         card := renderItemDetailInteractive(m.db, *outline, *it, contentW, bodyHeight, m.itemFocus, m.eventsTail)
         block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + card
         return wrap(block)
@@ -2869,7 +3001,7 @@ func (m *appModel) renderTextAreaModal(title string) string {
                 Padding(0, 1).
                 Foreground(colorSurfaceFg).
                 Background(colorControlBg)
-        btnActive := btnBase.Copy().
+        btnActive := btnBase.
                 Foreground(colorSelectedFg).
                 Background(colorAccent).
                 Bold(true)
@@ -3681,6 +3813,10 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.view = viewItem
                                         m.openItemID = it.row.item.ID
                                         m.itemFocus = itemFocusTitle
+                                        m.itemCommentIdx = 0
+                                        m.itemWorklogIdx = 0
+                                        m.itemHistoryIdx = 0
+                                        m.itemSideScroll = 0
                                         // Leaving preview mode when entering the full item page.
                                         m.showPreview = false
                                         m.previewCacheForID = ""
@@ -3884,6 +4020,10 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.openItemID = it.row.item.ID
                         m.view = viewItem
                         m.itemFocus = itemFocusTitle
+                        m.itemCommentIdx = 0
+                        m.itemWorklogIdx = 0
+                        m.itemHistoryIdx = 0
+                        m.itemSideScroll = 0
                         m.hasReturnView = true
                         m.returnView = viewAgenda
                         m.showPreview = false
@@ -6298,6 +6438,17 @@ func (m *appModel) addComment(itemID, body string) error {
         m.refreshEventsTail()
         m.captureStoreModTimes()
 
+        // If we're currently viewing this item, keep the comments panel pinned to the newest entry.
+        if strings.TrimSpace(m.openItemID) == itemID {
+                // Comments side panel is oldest-first; newest is at the end.
+                if n := len(m.db.CommentsForItem(itemID)); n > 0 {
+                        m.itemCommentIdx = n - 1
+                } else {
+                        m.itemCommentIdx = 0
+                }
+                m.itemSideScroll = 0
+        }
+
         if m.selectedOutline != nil {
                 if o, ok := m.db.FindOutline(m.selectedOutline.ID); ok {
                         m.selectedOutline = o
@@ -6344,6 +6495,12 @@ func (m *appModel) addWorklog(itemID, body string) error {
         _ = m.store.AppendEvent(actorID, "worklog.add", w.ID, w)
         m.refreshEventsTail()
         m.captureStoreModTimes()
+
+        // If we're currently viewing this item, keep the worklog panel pinned to the newest entry.
+        if strings.TrimSpace(m.openItemID) == itemID {
+                m.itemWorklogIdx = 0
+                m.itemSideScroll = 0
+        }
 
         if m.selectedOutline != nil {
                 if o, ok := m.db.FindOutline(m.selectedOutline.ID); ok {
