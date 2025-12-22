@@ -16,6 +16,10 @@ For autonomous agents, use a stable **session key** and a dedicated agent identi
 - Or, start work on an item (ensure identity + claim item):
   - `CLARITY_AGENT_SESSION=... clarity agent start <item-id>`
 
+Session keys are opaque strings chosen by the agent/tool. If your tool generates a dated key like
+`cursor-YYYY-MM-DD`, Clarity will normalize it deterministically to `cursor-<3 letters>` for
+readability while preserving "same input session => same agent identity".
+
 If you don't care about session stability, you can omit the session key and Clarity will
 generate one automatically (i.e. **new agent identity per run**):
 

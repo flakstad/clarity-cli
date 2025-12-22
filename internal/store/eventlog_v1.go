@@ -65,10 +65,11 @@ type EventV1 struct {
 func (s Store) eventLogBackend() EventLogBackend {
         v := strings.ToLower(strings.TrimSpace(getenv(envEventLogBackend)))
         switch v {
-        case string(EventLogBackendSQLite):
-                return EventLogBackendSQLite
-        default:
+        case string(EventLogBackendJSONL):
                 return EventLogBackendJSONL
+        default:
+                // Default: SQLite event log (durable, ordered, sync-ready).
+                return EventLogBackendSQLite
         }
 }
 

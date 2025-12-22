@@ -103,11 +103,12 @@ type Dependency struct {
 }
 
 type Comment struct {
-        ID        string    `json:"id"`
-        ItemID    string    `json:"itemId"`
-        AuthorID  string    `json:"authorId"`
-        Body      string    `json:"body"`
-        CreatedAt time.Time `json:"createdAt"`
+        ID               string    `json:"id"`
+        ItemID           string    `json:"itemId"`
+        AuthorID         string    `json:"authorId"`
+        ReplyToCommentID *string   `json:"replyToCommentId,omitempty"`
+        Body             string    `json:"body"`
+        CreatedAt        time.Time `json:"createdAt"`
 
         LegacyTaskID string `json:"taskId,omitempty"`
 }

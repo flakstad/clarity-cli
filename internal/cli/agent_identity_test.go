@@ -75,6 +75,74 @@ func TestIdentityAgentEnsure_CreatesOrReusesSessionIdentity(t *testing.T) {
         }
 }
 
+func TestIdentityAgentEnsure_NormalizesDateSessionDeterministically(t *testing.T) {
+        t.Parallel()
+
+        dir := t.TempDir()
+
+        humanID := "act-human"
+        db := &store.DB{
+                Version:        1,
+                CurrentActorID: humanID,
+                NextIDs:        map[string]int{},
+                Actors: []model.Actor{
+                        {ID: humanID, Kind: model.ActorKindHuman, Name: "Human"},
+                },
+                Projects: []model.Project{},
+                Outlines: []model.Outline{},
+                Items:    []model.Item{},
+                Deps:     []model.Dependency{},
+                Comments: []model.Comment{},
+                Worklog:  []model.WorklogEntry{},
+        }
+        if err := (store.Store{Dir: dir}).Save(db); err != nil {
+                t.Fatalf("seed store: %v", err)
+        }
+
+        // Simulates a tool that bakes a date into the session key (e.g. cursor-YYYY-MM-DD).
+        // Clarity should normalize this deterministically to keep the ID stable for the same input.
+        session := "cursor-2025-12-20"
+
+        out1, err1, err := runCLI(t, []string{"--dir", dir, "--actor", humanID, "identity", "agent", "ensure", "--session", session, "--name", "Cursor Agent", "--use"})
+        if err != nil {
+                t.Fatalf("ensure 1 error: %v\nstderr:\n%s", err, string(err1))
+        }
+        var env1 map[string]any
+        if err := json.Unmarshal(out1, &env1); err != nil {
+                t.Fatalf("unmarshal ensure 1: %v\nstdout:\n%s", err, string(out1))
+        }
+        meta1, _ := env1["meta"].(map[string]any)
+        norm1, _ := meta1["session"].(string)
+        if norm1 == "" {
+                t.Fatalf("expected meta.session; got: %#v", meta1)
+        }
+
+        out2, err2, err := runCLI(t, []string{"--dir", dir, "--actor", humanID, "identity", "agent", "ensure", "--session", session, "--name", "Cursor Agent", "--use"})
+        if err != nil {
+                t.Fatalf("ensure 2 error: %v\nstderr:\n%s", err, string(err2))
+        }
+        var env2 map[string]any
+        if err := json.Unmarshal(out2, &env2); err != nil {
+                t.Fatalf("unmarshal ensure 2: %v\nstdout:\n%s", err, string(out2))
+        }
+        meta2, _ := env2["meta"].(map[string]any)
+        norm2, _ := meta2["session"].(string)
+        if norm2 != norm1 {
+                t.Fatalf("expected deterministic normalization; got %q then %q", norm1, norm2)
+        }
+
+        data1, _ := env1["data"].(map[string]any)
+        data2, _ := env2["data"].(map[string]any)
+        actorID1, _ := data1["id"].(string)
+        actorID2, _ := data2["id"].(string)
+        if actorID1 == "" || actorID2 == "" {
+                t.Fatalf("expected actor ids; got: %#v / %#v", data1, data2)
+        }
+        if actorID1 != actorID2 {
+                t.Fatalf("expected same actor id after normalization; got %q then %q", actorID1, actorID2)
+        }
+}
+
 func TestAgentStart_EnsuresIdentityAndClaimsItem(t *testing.T) {
         t.Parallel()
 

@@ -30,7 +30,7 @@ func TestItemsReady_ExcludesAssignedByDefault(t *testing.T) {
                 NextIDs:        map[string]int{},
                 Actors: []model.Actor{
                         {ID: humanID, Kind: model.ActorKindHuman, Name: "Human"},
-                        {ID: agent1, Kind: model.ActorKindAgent, Name: "[agent-session:s1] Agent1", UserID: ptr(humanID)},
+                        {ID: agent1, Kind: model.ActorKindAgent, Name: "s1 Agent1", UserID: ptr(humanID)},
                 },
                 Projects: []model.Project{
                         {ID: projectID, Name: "P", CreatedBy: humanID, CreatedAt: now},
@@ -125,8 +125,8 @@ func TestItemsClaim_RequiresTakeAssignedToSteal(t *testing.T) {
                 NextIDs:        map[string]int{},
                 Actors: []model.Actor{
                         {ID: humanID, Kind: model.ActorKindHuman, Name: "Human"},
-                        {ID: agent1, Kind: model.ActorKindAgent, Name: "[agent-session:s1] Agent1", UserID: ptr(humanID)},
-                        {ID: agent2, Kind: model.ActorKindAgent, Name: "[agent-session:s2] Agent2", UserID: ptr(humanID)},
+                        {ID: agent1, Kind: model.ActorKindAgent, Name: "s1 Agent1", UserID: ptr(humanID)},
+                        {ID: agent2, Kind: model.ActorKindAgent, Name: "s2 Agent2", UserID: ptr(humanID)},
                 },
                 Projects: []model.Project{
                         {ID: projectID, Name: "P", CreatedBy: humanID, CreatedAt: now},

@@ -1,10 +1,12 @@
 package cli
 
 import (
+        "crypto/rand"
+        "crypto/sha256"
         "errors"
         "fmt"
         "os"
-        "strconv"
+        "regexp"
         "strings"
         "time"
 
@@ -63,7 +65,7 @@ clarity identity agent ensure
                                 return writeErr(cmd, err)
                         }
 
-                        actor, created, err := ensureAgentIdentity(app, db, s, ensureAgentOpts{
+                        actor, created, sessionKey, err := ensureAgentIdentity(app, db, s, ensureAgentOpts{
                                 Session: session,
                                 Name:    name,
                                 UserID:  user,
@@ -77,12 +79,12 @@ clarity identity agent ensure
                                 "data": actor,
                                 "meta": map[string]any{
                                         "created": created,
-                                        "session": sessionOrEnv(session),
+                                        "session": sessionKey,
                                 },
                                 "_hints": []string{
                                         "clarity identity whoami",
                                         "clarity items ready",
-                                        "clarity agent start <item-id> --session " + sessionOrEnv(session),
+                                        "clarity agent start <item-id> --session " + sessionKey,
                                 },
                         })
                 },
@@ -96,8 +98,8 @@ clarity identity agent ensure
         return cmd
 }
 
-func ensureAgentIdentity(app *App, db *store.DB, s store.Store, opts ensureAgentOpts) (actor model.Actor, created bool, _ error) {
-        session := strings.TrimSpace(opts.Session)
+func ensureAgentIdentity(app *App, db *store.DB, s store.Store, opts ensureAgentOpts) (actor model.Actor, created bool, session string, _ error) {
+        session = strings.TrimSpace(opts.Session)
         if session == "" {
                 session = strings.TrimSpace(os.Getenv("CLARITY_AGENT_SESSION"))
         }
@@ -106,10 +108,11 @@ func ensureAgentIdentity(app *App, db *store.DB, s store.Store, opts ensureAgent
                 // This is "good enough" for most agents and avoids agents having to invent a session key.
                 session = autoSessionKey()
         }
+        session = normalizeAgentSessionKey(session)
 
         humanID, err := resolveHumanForAgent(db, app, opts.UserID)
         if err != nil {
-                return model.Actor{}, false, err
+                return model.Actor{}, false, "", err
         }
 
         tag := agentSessionTag(session)
@@ -121,16 +124,16 @@ func ensureAgentIdentity(app *App, db *store.DB, s store.Store, opts ensureAgent
                 if a.UserID == nil || *a.UserID != humanID {
                         continue
                 }
-                if strings.Contains(a.Name, tag) {
+                if strings.HasPrefix(a.Name, tag+" ") || strings.HasPrefix(a.Name, legacyAgentSessionTag(tag)+" ") {
                         if opts.Use {
                                 db.CurrentActorID = a.ID
                                 app.ActorID = a.ID
                                 if err := s.Save(db); err != nil {
-                                        return model.Actor{}, false, err
+                                        return model.Actor{}, false, "", err
                                 }
                                 _ = s.AppendEvent(a.ID, "identity.use", a.ID, map[string]any{"actorId": a.ID})
                         }
-                        return a, false, nil
+                        return a, false, tag, nil
                 }
         }
 
@@ -152,7 +155,7 @@ func ensureAgentIdentity(app *App, db *store.DB, s store.Store, opts ensureAgent
                 app.ActorID = a.ID
         }
         if err := s.Save(db); err != nil {
-                return model.Actor{}, false, err
+                return model.Actor{}, false, "", err
         }
         _ = s.AppendEvent(a.ID, "identity.create", a.ID, map[string]any{
                 "name":    a.Name,
@@ -162,7 +165,7 @@ func ensureAgentIdentity(app *App, db *store.DB, s store.Store, opts ensureAgent
                 "session": session,
                 "ts":      time.Now().UTC(),
         })
-        return a, true, nil
+        return a, true, tag, nil
 }
 
 func resolveHumanForAgent(db *store.DB, app *App, userFlag string) (string, error) {
@@ -191,18 +194,70 @@ func resolveHumanForAgent(db *store.DB, app *App, userFlag string) (string, erro
 
 func agentSessionTag(session string) string {
         // Stored in actor.Name so we can look up the session identity without changing schema.
+        return strings.TrimSpace(session)
+}
+
+func legacyAgentSessionTag(session string) string {
         return "[agent-session:" + strings.TrimSpace(session) + "]"
 }
 
-func sessionOrEnv(session string) string {
+var sessionDateSuffixRe = regexp.MustCompile(`^([a-zA-Z0-9][a-zA-Z0-9_-]*)-\d{4}-\d{2}-\d{2}$`)
+
+func normalizeAgentSessionKey(session string) string {
         session = strings.TrimSpace(session)
-        if session != "" {
+        if session == "" {
                 return session
         }
-        return strings.TrimSpace(os.Getenv("CLARITY_AGENT_SESSION"))
+        m := sessionDateSuffixRe.FindStringSubmatch(session)
+        if m == nil {
+                return session
+        }
+        prefix := strings.TrimSpace(m[1])
+        if prefix == "" {
+                return session
+        }
+        // Deterministic short suffix so the same input session always maps to the same key.
+        // This preserves the "stable identity per session" property while removing the confusing date.
+        return prefix + "-" + stableLettersFromString(session, 3)
 }
 
 func autoSessionKey() string {
-        // human-readable, collision-resistant enough for local-only use
-        return "run-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 10) + "-" + strconv.Itoa(os.Getpid())
+        // Intentionally avoids dates/timestamps to reduce confusion in generated agent session IDs.
+        return randomLetters(3)
+}
+
+func randomLetters(n int) string {
+        const letters = "abcdefghijklmnopqrstuvwxyz"
+        if n <= 0 {
+                return ""
+        }
+        b := make([]byte, n)
+        if _, err := rand.Read(b); err == nil {
+                for i := range b {
+                        b[i] = letters[int(b[i])%len(letters)]
+                }
+                return string(b)
+        }
+
+        // Extremely rare fallback: derive letters deterministically from host + pid (no timestamps).
+        host, _ := os.Hostname()
+        sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%s", os.Getpid(), host)))
+        out := make([]byte, n)
+        for i := range out {
+                out[i] = letters[int(sum[i])%len(letters)]
+        }
+        return string(out)
+}
+
+func stableLettersFromString(s string, n int) string {
+        const letters = "abcdefghijklmnopqrstuvwxyz"
+        if n <= 0 {
+                return ""
+        }
+        sum := sha256.Sum256([]byte(s))
+        out := make([]byte, n)
+        for i := range out {
+                out[i] = letters[int(sum[i])%len(letters)]
+        }
+        return string(out)
 }

@@ -48,12 +48,15 @@ If you are an autonomous agent (Cursor/Codex/etc), you should operate under your
 Two supported patterns:
 
 - **Stable identity per session (recommended)**:
-  - Set a session key once (e.g. `CLARITY_AGENT_SESSION=codex-123`)
+  - Set a session key once (e.g. `CLARITY_AGENT_SESSION=codex-abc`)
   - Run `clarity agent start <item-id>` to ensure identity + claim item
 
 - **New identity per run (sufficient default)**:
   - Omit the session key; Clarity will generate one automatically
   - Run `clarity agent start <item-id>`
+
+For session key conventions and ownership details, see:
+- `skills/clarity-cli/identity.md`
 
 Minimal loop:
 

@@ -1,8 +1,6 @@
 package cli
 
 import (
-        "os"
-
         "clarity-cli/internal/store"
 
         "github.com/spf13/cobra"
@@ -19,14 +17,12 @@ func newStatusCmd(app *App) *cobra.Command {
                         }
 
                         var eventsCount int
-                        if st, err := os.Stat(s.Dir + "/events.jsonl"); err == nil && st.Size() > 0 {
-                                // count lines lazily
-                                evs, err := store.ReadEvents(s.Dir, 0)
-                                if err != nil {
-                                        return writeErr(cmd, err)
-                                }
-                                eventsCount = len(evs)
+                        // Count events via the store layer (supports both legacy JSONL and SQLite eventlog).
+                        evs, err := store.ReadEvents(s.Dir, 0)
+                        if err != nil {
+                                return writeErr(cmd, err)
                         }
+                        eventsCount = len(evs)
 
                         return writeOut(cmd, app, map[string]any{
                                 "data": map[string]any{

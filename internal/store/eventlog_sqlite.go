@@ -106,31 +106,44 @@ func (s Store) migrateSQLite(ctx context.Context, db *sql.DB) error {
                 return err
         }
 
+        // Only use global config (device/workspace->replica mapping) for workspace-root stores.
+        // This avoids writing ~/.clarity/config.json for ephemeral --dir usage (tests/fixtures).
+        useGlobalReplicaMap := false
+        if cfgDir, err := ConfigDir(); err == nil {
+                wsRoot := filepath.Join(cfgDir, "workspaces") + string(os.PathSeparator)
+                dir := filepath.Clean(s.Dir) + string(os.PathSeparator)
+                if strings.HasPrefix(dir, wsRoot) {
+                        useGlobalReplicaMap = true
+                }
+        }
+
         // Ensure replicaId exists and has desired clone behavior:
         // - Clone workspace dir to another machine => same workspace_id, but that machine generates a new replicaId
         //   and overwrites the copied sqlite meta replica_id.
         // - Move/rename workspace on the same machine => replicaId stays stable.
         //
         // Mechanism: store a per-device mapping workspaceId -> replicaId in ~/.clarity/config.json.
-        if cfg, cfgErr := LoadConfig(); cfgErr == nil {
-                _, dirty1, _ := ensureDeviceID(cfg)
-                wantReplicaID, dirty2, err := ensureReplicaIDForWorkspace(cfg, wsID)
-                if err != nil {
-                        return err
-                }
-                if dirty1 || dirty2 {
-                        _ = SaveConfig(cfg) // best-effort
-                }
-                curReplicaID, err := ensureMetaUUID(ctx, db, "replica_id")
-                if err != nil {
-                        return err
-                }
-                if strings.TrimSpace(curReplicaID) != strings.TrimSpace(wantReplicaID) {
-                        if _, err := db.ExecContext(ctx, `INSERT OR REPLACE INTO meta(k, v) VALUES(?, ?)`, "replica_id", wantReplicaID); err != nil {
+        if useGlobalReplicaMap {
+                if cfg, cfgErr := LoadConfig(); cfgErr == nil {
+                        _, dirty1, _ := ensureDeviceID(cfg)
+                        wantReplicaID, dirty2, err := ensureReplicaIDForWorkspace(cfg, wsID)
+                        if err != nil {
                                 return err
                         }
+                        if dirty1 || dirty2 {
+                                _ = SaveConfig(cfg) // best-effort
+                        }
+                        curReplicaID, err := ensureMetaUUID(ctx, db, "replica_id")
+                        if err != nil {
+                                return err
+                        }
+                        if strings.TrimSpace(curReplicaID) != strings.TrimSpace(wantReplicaID) {
+                                if _, err := db.ExecContext(ctx, `INSERT OR REPLACE INTO meta(k, v) VALUES(?, ?)`, "replica_id", wantReplicaID); err != nil {
+                                        return err
+                                }
+                        }
+                        return nil
                 }
-                return nil
         }
 
         // Fallback: keep replicaId inside sqlite only.

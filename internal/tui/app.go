@@ -116,6 +116,7 @@ const (
         modalPickStatus
         modalPickOutline
         modalAddComment
+        modalReplyComment
         modalAddWorklog
         modalEditOutlineStatuses
         modalAddOutlineStatus
@@ -216,13 +217,14 @@ type appModel struct {
         // Per-outline display mode for the outline view (experimental).
         outlineViewMode map[string]outlineViewMode
 
-        modal       modalKind
-        modalForID  string
-        modalForKey string
-        archiveFor  archiveTarget
-        input       textinput.Model
-        textarea    textarea.Model
-        textFocus   textModalFocus
+        modal        modalKind
+        modalForID   string
+        modalForKey  string
+        archiveFor   archiveTarget
+        input        textinput.Model
+        textarea     textarea.Model
+        textFocus    textModalFocus
+        replyQuoteMD string
 
         // pendingMoveOutlineTo is set when a move-outline flow needs the user to pick a status
         // compatible with the target outline. While set, the status picker "enter" applies the move.
@@ -255,6 +257,24 @@ type appModel struct {
         lastEventsModTime time.Time
 
         minibufferText string
+}
+
+func (m *appModel) currentWriteActorID() string {
+        if m == nil || m.db == nil {
+                return ""
+        }
+        cur := strings.TrimSpace(m.db.CurrentActorID)
+        if cur == "" {
+                return ""
+        }
+        // In the TUI, we treat manual actions as coming from the owning human actor even if
+        // CurrentActorID is currently an agent actor.
+        if humanID, ok := m.db.HumanUserIDForActor(cur); ok {
+                if strings.TrimSpace(humanID) != "" {
+                        return strings.TrimSpace(humanID)
+                }
+        }
+        return cur
 }
 
 type outlineViewMode int
@@ -1529,12 +1549,13 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                 comments := m.db.CommentsForItem(it.ID)
                 worklog := m.db.WorklogForItem(it.ID)
                 history := filterEventsForItem(m.db, m.eventsTail, it.ID)
+                commentRows := buildCommentThreadRows(comments)
 
                 switch km.String() {
                 case "up", "k":
                         switch m.itemFocus {
                         case itemFocusComments:
-                                if len(comments) > 0 && m.itemCommentIdx > 0 {
+                                if len(commentRows) > 0 && m.itemCommentIdx > 0 {
                                         m.itemCommentIdx--
                                         m.itemSideScroll = 0
                                 }
@@ -1555,7 +1576,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "down", "j":
                         switch m.itemFocus {
                         case itemFocusComments:
-                                if n := len(comments); n > 0 && m.itemCommentIdx < n-1 {
+                                if n := len(commentRows); n > 0 && m.itemCommentIdx < n-1 {
                                         m.itemCommentIdx++
                                         m.itemSideScroll = 0
                                 }
@@ -1591,8 +1612,8 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 // Jump to start of list (top) and reset scroll.
                                 switch m.itemFocus {
                                 case itemFocusComments:
-                                        if len(comments) > 0 {
-                                                m.itemCommentIdx = 0 // comments are rendered oldest-first
+                                        if len(commentRows) > 0 {
+                                                m.itemCommentIdx = 0
                                         }
                                 case itemFocusWorklog:
                                         if len(worklog) > 0 {
@@ -1609,8 +1630,8 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "end":
                         switch m.itemFocus {
                         case itemFocusComments:
-                                if len(comments) > 0 {
-                                        m.itemCommentIdx = len(comments) - 1 // comments rendered oldest-first
+                                if len(commentRows) > 0 {
+                                        m.itemCommentIdx = len(commentRows) - 1
                                 }
                                 m.itemSideScroll = 0
                                 return m, nil
@@ -1668,9 +1689,40 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "C":
                         // Add comment (keep the side panel open by focusing Comments).
                         m.itemFocus = itemFocusComments
-                        m.itemCommentIdx = 0
+                        if n := len(commentRows); n > 0 {
+                                m.itemCommentIdx = n - 1
+                        } else {
+                                m.itemCommentIdx = 0
+                        }
                         m.itemSideScroll = 0
                         m.openTextModal(modalAddComment, it.ID, "Write a comment…", "")
+                        return m, nil
+                case "R":
+                        // Reply to selected comment (comments side panel).
+                        if m.itemFocus != itemFocusComments || len(commentRows) == 0 {
+                                return m, nil
+                        }
+                        idx := m.itemCommentIdx
+                        if idx < 0 {
+                                idx = 0
+                        }
+                        if idx >= len(commentRows) {
+                                idx = len(commentRows) - 1
+                        }
+                        parent := commentRows[idx].Comment
+                        parentID := strings.TrimSpace(parent.ID)
+                        if parentID == "" {
+                                return m, nil
+                        }
+                        quote := truncateInline(parent.Body, 280)
+                        m.replyQuoteMD = fmt.Sprintf("> %s  %s\n> %s", fmtTS(parent.CreatedAt), strings.TrimSpace(parent.AuthorID), quote)
+                        m.modal = modalReplyComment
+                        m.modalForID = it.ID
+                        m.modalForKey = parentID
+                        m.textFocus = textFocusBody
+                        m.textarea.SetValue("")
+                        m.textarea.Placeholder = "Write a reply…"
+                        m.textarea.Focus()
                         return m, nil
                 case "w":
                         // Add worklog entry (keep the side panel open by focusing Worklog).
@@ -1980,6 +2032,9 @@ func (m appModel) footerText() string {
                 }
                 if m.modal == modalAddComment {
                         return "comment: tab: focus  ctrl+s: save  esc: cancel"
+                }
+                if m.modal == modalReplyComment {
+                        return "reply: tab: focus  ctrl+s: save  esc: cancel"
                 }
                 if m.modal == modalAddWorklog {
                         return "worklog: tab: focus  ctrl+s: save  esc: cancel"
@@ -2421,6 +2476,27 @@ func splitPaneWidths(contentW int) (leftW, rightW int) {
         return leftW, rightW
 }
 
+func renderSplitWithLeftBreadcrumb(contentW, frameH, bodyHeight, leftW, rightW int, breadcrumb string, leftBody string, rightBody string) string {
+        // Split view: render the breadcrumb only over the LEFT pane, so the right pane
+        // can start at the top without wasted header padding.
+        leftCrumb := lipgloss.NewStyle().Width(leftW).Foreground(lipgloss.Color("243")).Render(breadcrumb)
+        leftCol := leftCrumb + strings.Repeat("\n", breadcrumbGap+1) + leftBody
+
+        // Below top padding, we render a full-height block (stable split rendering).
+        contentH := frameH - topPadLines
+        if contentH < 0 {
+                contentH = 0
+        }
+
+        leftCol = normalizePane(leftCol, leftW, contentH)
+        rightCol := normalizePane(rightBody, rightW, contentH)
+
+        body := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, strings.Repeat(" ", splitGapW), rightCol)
+        // Ensure exact size for stable centering/margins.
+        body = lipgloss.NewStyle().Width(contentW).Height(contentH).Render(body)
+        return strings.Repeat("\n", topPadLines) + body
+}
+
 func (m *appModel) outlineLayout() (frameH, bodyH, contentW int) {
         frameH = m.height - 6
         if frameH < 8 {
@@ -2769,9 +2845,7 @@ func (m *appModel) viewOutline() string {
                 leftW, rightW := splitPaneWidths(contentW)
                 m.itemsList.SetSize(leftW, bodyHeight)
 
-                leftCrumb := lipgloss.NewStyle().Width(leftW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
                 leftBody := m.itemsList.View()
-                leftCol := leftCrumb + strings.Repeat("\n", breadcrumbGap+1) + leftBody
 
                 placeholder := lipgloss.NewStyle().Width(rightW).Height(bodyHeight).Padding(0, 1).Render("(loading…)")
                 right := placeholder
@@ -2788,19 +2862,7 @@ func (m *appModel) viewOutline() string {
                         }
                 }
 
-                // Below top padding, we render a full-height block (stable split rendering).
-                contentH := frameH - topPadLines
-                if contentH < 0 {
-                        contentH = 0
-                }
-
-                leftCol = normalizePane(leftCol, leftW, contentH)
-                rightCol := normalizePane(right, rightW, contentH)
-
-                body := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, strings.Repeat(" ", splitGapW), rightCol)
-                // Ensure exact size for stable centering/margins.
-                body = lipgloss.NewStyle().Width(contentW).Height(contentH).Render(body)
-                main = strings.Repeat("\n", topPadLines) + body
+                main = renderSplitWithLeftBreadcrumb(contentW, frameH, bodyHeight, leftW, rightW, m.breadcrumbText(), leftBody, right)
         }
         // Outline content should be left-aligned with a small outer margin (same feel as split view).
         main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
@@ -2886,14 +2948,10 @@ func (m *appModel) viewItem() string {
                 leftW, rightW := splitPaneWidths(contentW)
                 left := renderItemDetailInteractive(m.db, *outline, *it, leftW, bodyHeight, m.itemFocus, m.eventsTail)
                 right := renderItemSidePanelWithEvents(m.db, *it, rightW, bodyHeight, sidePanelKindForFocus(m.itemFocus), m.itemCommentIdx, m.itemWorklogIdx, m.itemHistoryIdx, m.itemSideScroll, m.eventsTail)
-
-                left = normalizePane(left, leftW, bodyHeight)
-                right = normalizePane(right, rightW, bodyHeight)
-                split := lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", splitGapW), right)
-                // Ensure exact size for stable centering/margins.
-                split = lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render(split)
-                block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + split
-                return wrap(block)
+                main := renderSplitWithLeftBreadcrumb(contentW, frameH, bodyHeight, leftW, rightW, m.breadcrumbText(), left, right)
+                // Item view uses the standard (full-width) breadcrumb in non-split mode; in split mode
+                // the breadcrumb is rendered only over the left pane (like outline preview).
+                return wrap(main)
         }
 
         card := renderItemDetailInteractive(m.db, *outline, *it, contentW, bodyHeight, m.itemFocus, m.eventsTail)
@@ -2935,6 +2993,8 @@ func (m *appModel) renderModal() string {
                 return renderModalBox(m.width, "Rename status", m.input.View()+"\n\nenter: save   esc: cancel")
         case modalAddComment:
                 return m.renderTextAreaModal("Add comment")
+        case modalReplyComment:
+                return m.renderReplyCommentModal()
         case modalAddWorklog:
                 return m.renderTextAreaModal("Add worklog")
         case modalConfirmArchive:
@@ -3025,6 +3085,55 @@ func (m *appModel) renderTextAreaModal(title string) string {
                 "ctrl+s: save    tab: focus    esc: cancel",
         }, "\n")
         return renderModalBox(m.width, title, body)
+}
+
+func (m *appModel) renderReplyCommentModal() string {
+        // Avoid borders here: some terminals show background artifacts when nesting bordered
+        // components inside a modal with a background color.
+        btnBase := lipgloss.NewStyle().
+                Padding(0, 1).
+                Foreground(colorSurfaceFg).
+                Background(colorControlBg)
+        btnActive := btnBase.
+                Foreground(colorSelectedFg).
+                Background(colorAccent).
+                Bold(true)
+
+        save := btnBase.Render("Save")
+        cancel := btnBase.Render("Cancel")
+        if m.textFocus == textFocusSave {
+                save = btnActive.Render("Save")
+        }
+        if m.textFocus == textFocusCancel {
+                cancel = btnActive.Render("Cancel")
+        }
+
+        sep := lipgloss.NewStyle().Background(colorControlBg).Render(" ")
+        controls := lipgloss.JoinHorizontal(lipgloss.Top, save, sep, cancel)
+
+        quoteMD := strings.TrimSpace(m.replyQuoteMD)
+        if quoteMD == "" {
+                quoteMD = "> (original comment missing)"
+        }
+        // Render markdown for consistent wrapping, but keep it compact.
+        // Use the textarea width as the effective modal body width.
+        bodyW := m.textarea.Width()
+        if bodyW < 10 {
+                bodyW = 10
+        }
+        quoteRendered := truncateLines(strings.TrimSpace(renderMarkdown(quoteMD, bodyW)), 8)
+        quoteRendered = faintIfDark(lipgloss.NewStyle()).Render(quoteRendered)
+
+        body := strings.Join([]string{
+                quoteRendered,
+                "",
+                m.textarea.View(),
+                "",
+                controls,
+                "",
+                "tab: focus   ctrl+s: save   esc: cancel",
+        }, "\n")
+        return renderModalBox(m.width, "Reply", body)
 }
 
 func tickReload() tea.Cmd {
@@ -3371,13 +3480,15 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, nil
                 }
 
-                if m.modal == modalAddComment || m.modal == modalAddWorklog || m.modal == modalEditDescription {
+                if m.modal == modalAddComment || m.modal == modalReplyComment || m.modal == modalAddWorklog || m.modal == modalEditDescription {
                         switch km := msg.(type) {
                         case tea.KeyMsg:
                                 switch km.String() {
                                 case "esc":
                                         m.modal = modalNone
                                         m.modalForID = ""
+                                        m.modalForKey = ""
+                                        m.replyQuoteMD = ""
                                         m.textarea.Blur()
                                         m.textFocus = textFocusBody
                                         return m, nil
@@ -3424,13 +3535,18 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                                 return m, nil
                                                         }
                                                         if m.modal == modalAddComment {
-                                                                _ = m.addComment(itemID, body)
+                                                                _, _ = m.addComment(itemID, body, nil)
+                                                        } else if m.modal == modalReplyComment {
+                                                                replyTo := strings.TrimSpace(m.modalForKey)
+                                                                _, _ = m.addComment(itemID, body, &replyTo)
                                                         } else {
                                                                 _ = m.addWorklog(itemID, body)
                                                         }
                                                 }
                                                 m.modal = modalNone
                                                 m.modalForID = ""
+                                                m.modalForKey = ""
+                                                m.replyQuoteMD = ""
                                                 m.textarea.SetValue("")
                                                 m.textarea.Blur()
                                                 m.textFocus = textFocusBody
@@ -3439,6 +3555,8 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         if m.textFocus == textFocusCancel {
                                                 m.modal = modalNone
                                                 m.modalForID = ""
+                                                m.modalForKey = ""
+                                                m.replyQuoteMD = ""
                                                 m.textarea.Blur()
                                                 m.textFocus = textFocusBody
                                                 return m, nil
@@ -3456,13 +3574,18 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                         return m, nil
                                                 }
                                                 if m.modal == modalAddComment {
-                                                        _ = m.addComment(itemID, body)
+                                                        _, _ = m.addComment(itemID, body, nil)
+                                                } else if m.modal == modalReplyComment {
+                                                        replyTo := strings.TrimSpace(m.modalForKey)
+                                                        _, _ = m.addComment(itemID, body, &replyTo)
                                                 } else {
                                                         _ = m.addWorklog(itemID, body)
                                                 }
                                         }
                                         m.modal = modalNone
                                         m.modalForID = ""
+                                        m.modalForKey = ""
+                                        m.replyQuoteMD = ""
                                         m.textarea.SetValue("")
                                         m.textarea.Blur()
                                         m.textFocus = textFocusBody
@@ -4921,7 +5044,7 @@ func (m *appModel) createItemFromModal(title string) error {
                 return nil
         }
         outline := *m.selectedOutline
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        actorID := m.currentWriteActorID()
         if actorID == "" {
                 return nil
         }
@@ -6109,7 +6232,7 @@ func (m *appModel) reorderItem(t *model.Item, afterID, beforeID string) error {
         if err := m.store.Save(m.db); err != nil {
                 return err
         }
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        actorID := m.currentWriteActorID()
         _ = m.store.AppendEvent(actorID, "item.move", t.ID, map[string]any{"before": beforeID, "after": afterID, "rank": t.Rank})
         m.refreshEventsTail()
         m.captureStoreModTimes()
@@ -6402,50 +6525,54 @@ func (m *appModel) openTextModal(kind modalKind, itemID, placeholder, initial st
         m.textarea.Focus()
 }
 
-func (m *appModel) addComment(itemID, body string) error {
+func (m *appModel) addComment(itemID, body string, replyToCommentID *string) (string, error) {
         itemID = strings.TrimSpace(itemID)
         body = strings.TrimSpace(body)
         if itemID == "" || body == "" {
-                return nil
+                return "", nil
         }
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        actorID := m.currentWriteActorID()
         if actorID == "" {
-                return nil
+                return "", nil
         }
 
         db, err := m.store.Load()
         if err != nil {
-                return err
+                return "", err
         }
         m.db = db
 
         if _, ok := m.db.FindItem(itemID); !ok {
-                return nil
+                return "", nil
+        }
+
+        var replyPtr *string
+        if replyToCommentID != nil {
+                if v := strings.TrimSpace(*replyToCommentID); v != "" {
+                        replyPtr = &v
+                }
         }
 
         c := model.Comment{
-                ID:        m.store.NextID(m.db, "cmt"),
-                ItemID:    itemID,
-                AuthorID:  actorID,
-                Body:      body,
-                CreatedAt: time.Now().UTC(),
+                ID:               m.store.NextID(m.db, "cmt"),
+                ItemID:           itemID,
+                AuthorID:         actorID,
+                ReplyToCommentID: replyPtr,
+                Body:             body,
+                CreatedAt:        time.Now().UTC(),
         }
         m.db.Comments = append(m.db.Comments, c)
         if err := m.store.Save(m.db); err != nil {
-                return err
+                return "", err
         }
         _ = m.store.AppendEvent(actorID, "comment.add", c.ID, c)
         m.refreshEventsTail()
         m.captureStoreModTimes()
 
-        // If we're currently viewing this item, keep the comments panel pinned to the newest entry.
+        // If we're currently viewing this item, keep the comments panel selection on the new entry.
         if strings.TrimSpace(m.openItemID) == itemID {
-                // Comments side panel is oldest-first; newest is at the end.
-                if n := len(m.db.CommentsForItem(itemID)); n > 0 {
-                        m.itemCommentIdx = n - 1
-                } else {
-                        m.itemCommentIdx = 0
-                }
+                rows := buildCommentThreadRows(m.db.CommentsForItem(itemID))
+                m.itemCommentIdx = indexOfCommentRow(rows, c.ID)
                 m.itemSideScroll = 0
         }
 
@@ -6457,7 +6584,7 @@ func (m *appModel) addComment(itemID, body string) error {
                 selectListItemByID(&m.itemsList, itemID)
         }
         m.showMinibuffer("Comment added")
-        return nil
+        return c.ID, nil
 }
 
 func (m *appModel) addWorklog(itemID, body string) error {
@@ -6466,7 +6593,7 @@ func (m *appModel) addWorklog(itemID, body string) error {
         if itemID == "" || body == "" {
                 return nil
         }
-        actorID := strings.TrimSpace(m.db.CurrentActorID)
+        actorID := m.currentWriteActorID()
         if actorID == "" {
                 return nil
         }

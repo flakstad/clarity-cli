@@ -52,7 +52,8 @@ func renderItemSidePanelWithEvents(db *store.DB, it model.Item, width, height in
         box := lipgloss.NewStyle().Width(innerW).Height(height).Padding(0, padX)
 
         headerStyle := styleMuted()
-        selectedStyle := lipgloss.NewStyle().Foreground(colorSelectedFg).Background(colorAccent).Bold(true)
+        // Subtle focus highlight that reads on both dark/light. We keep the text the same; just add bg.
+        focusRowStyle := lipgloss.NewStyle().Background(colorControlBg)
         moreStyle := styleMuted()
 
         lines := []string{}
@@ -60,27 +61,27 @@ func renderItemSidePanelWithEvents(db *store.DB, it model.Item, width, height in
         case itemSideComments:
                 comments := db.CommentsForItem(it.ID)
                 lines = append(lines, headerStyle.Render(fmt.Sprintf("Comments (%d)", len(comments))))
-                lines = append(lines, headerStyle.Render("up/down: select  home/end: jump  pgup/pgdown: scroll"))
+                lines = append(lines, headerStyle.Render("up/down: select  home/end: jump  pgup/pgdown: scroll  R: reply"))
                 lines = append(lines, "")
-                lines = append(lines, renderAccordionComments(comments, commentIdx, innerW, height-3, scroll, selectedStyle, moreStyle)...)
+                lines = append(lines, renderThreadedComments(db, comments, commentIdx, innerW, height-3, scroll, focusRowStyle, moreStyle)...)
         case itemSideWorklog:
                 worklog := db.WorklogForItem(it.ID)
                 lines = append(lines, headerStyle.Render(fmt.Sprintf("Worklog (%d)", len(worklog))))
                 lines = append(lines, headerStyle.Render("up/down: select  home/end: jump  pgup/pgdown: scroll"))
                 lines = append(lines, "")
-                lines = append(lines, renderAccordionWorklog(worklog, worklogIdx, innerW, height-3, scroll, selectedStyle, moreStyle)...)
+                lines = append(lines, renderAccordionWorklog(db, worklog, worklogIdx, innerW, height-3, scroll, focusRowStyle, moreStyle)...)
         case itemSideHistory:
                 evs := filterEventsForItem(db, events, it.ID)
                 lines = append(lines, headerStyle.Render(fmt.Sprintf("History (%d)", len(evs))))
                 lines = append(lines, headerStyle.Render("up/down: select  home/end: jump  pgup/pgdown: scroll"))
                 lines = append(lines, "")
-                lines = append(lines, renderAccordionHistory(db, events, it.ID, historyIdx, innerW, height-3, scroll, selectedStyle, moreStyle)...)
+                lines = append(lines, renderAccordionHistory(db, events, it.ID, historyIdx, innerW, height-3, scroll, focusRowStyle, moreStyle)...)
         }
 
         return normalizePane(box.Render(strings.Join(lines, "\n")), width, height)
 }
 
-func renderAccordionComments(comments []model.Comment, selected int, width, height, scroll int, selectedStyle lipgloss.Style, moreStyle lipgloss.Style) []string {
+func renderThreadedComments(db *store.DB, comments []model.Comment, selected int, width, height, scroll int, focusRowStyle lipgloss.Style, moreStyle lipgloss.Style) []string {
         if height < 1 {
                 return []string{}
         }
@@ -88,77 +89,120 @@ func renderAccordionComments(comments []model.Comment, selected int, width, heig
                 return []string{"(no comments)"}
         }
 
-        // Comments are rendered oldest-first for reading flow.
-        ordered := make([]model.Comment, 0, len(comments))
-        for i := len(comments) - 1; i >= 0; i-- {
-                ordered = append(ordered, comments[i])
+        rows := buildCommentThreadRows(comments)
+        if len(rows) == 0 {
+                return []string{"(no comments)"}
         }
-
         if selected < 0 {
                 selected = 0
         }
-        if selected >= len(ordered) {
-                selected = len(ordered) - 1
+        if selected >= len(rows) {
+                selected = len(rows) - 1
         }
-        // Clamp scroll.
         if scroll < 0 {
                 scroll = 0
         }
 
-        // Reserve space: selected block uses some rows; rest are collapsed lines.
-        maxBlock := height
-        // Leave at least 2 collapsed lines if possible.
-        if maxBlock > 6 {
-                maxBlock = height - 2
-        }
-        if maxBlock < 3 {
-                maxBlock = 3
+        // Collapsed line (always rendered, even when selected).
+        lineFor := func(r commentThreadRow) string {
+                indent := strings.Repeat("  ", r.Depth)
+                prefix := ""
+                if r.Depth > 0 {
+                        prefix = "↳ "
+                }
+                actor := actorLabel(db, r.Comment.AuthorID)
+                snippetMax := maxInt(20, width-26-(2*r.Depth))
+                snippet := truncateInline(r.Comment.Body, snippetMax)
+                return fmt.Sprintf("%s%s%s  %s  %s", indent, prefix, fmtTS(r.Comment.CreatedAt), actor, snippet)
         }
 
-        title := fmt.Sprintf("%s  %s", fmtTS(ordered[selected].CreatedAt), strings.TrimSpace(ordered[selected].AuthorID))
-        mdLines := strings.Split(renderMarkdown(strings.TrimSpace(ordered[selected].Body), maxInt(10, width-2)), "\n")
+        // Expanded markdown for selected comment: include inline quote if it's a reply.
+        c := rows[selected].Comment
+        md := strings.TrimSpace(c.Body)
+        if c.ReplyToCommentID != nil && strings.TrimSpace(*c.ReplyToCommentID) != "" {
+                parentID := strings.TrimSpace(*c.ReplyToCommentID)
+                if parent, ok := findCommentByID(comments, parentID); ok {
+                        q := truncateInline(parent.Body, 280)
+                        md = fmt.Sprintf("> %s  %s\n> %s\n\n%s",
+                                fmtTS(parent.CreatedAt),
+                                actorLabel(db, parent.AuthorID),
+                                q,
+                                strings.TrimSpace(c.Body),
+                        )
+                }
+        }
+
+        mdLines := strings.Split(renderMarkdown(md, maxInt(10, width-2)), "\n")
         if scroll > len(mdLines) {
                 scroll = len(mdLines)
         }
-        mdH := maxBlock - 2 // title + at least 1 md line
+
+        // Fit expanded markdown into the available height. We dynamically account for the optional
+        // "more" indicator rows instead of permanently reserving space, so the expanded view uses
+        // the full pane height when possible.
+        mdH := height - 1 // 1 collapsed line + mdH lines
         if mdH < 1 {
                 mdH = 1
         }
-        if scroll > 0 && scroll > len(mdLines)-mdH {
-                scroll = maxInt(0, len(mdLines)-mdH)
-        }
-        mdWin := mdLines
-        if len(mdWin) > mdH {
-                end := scroll + mdH
-                if end > len(mdLines) {
-                        end = len(mdLines)
+        var (
+                start int
+                end   int
+                mdWin []string
+        )
+        for iter := 0; iter < 6; iter++ {
+                if scroll > 0 && scroll > len(mdLines)-mdH {
+                        scroll = maxInt(0, len(mdLines)-mdH)
                 }
-                mdWin = mdLines[scroll:end]
+                mdWin = mdLines
+                if len(mdWin) > mdH {
+                        mdEnd := scroll + mdH
+                        if mdEnd > len(mdLines) {
+                                mdEnd = len(mdLines)
+                        }
+                        mdWin = mdLines[scroll:mdEnd]
+                }
+
+                selectedBlockLen := 1 + len(mdWin)
+                remain := height - selectedBlockLen
+                if remain < 0 {
+                        remain = 0
+                }
+                beforeN := remain / 2
+                afterN := remain - beforeN
+
+                start = selected - beforeN
+                if start < 0 {
+                        start = 0
+                }
+                end = selected + 1 + afterN
+                if end > len(rows) {
+                        end = len(rows)
+                }
+
+                outLen := (end - start - 1) + selectedBlockLen
+                if start > 0 {
+                        outLen++
+                }
+                if end < len(rows) {
+                        outLen++
+                }
+
+                overflow := outLen - height
+                if overflow <= 0 {
+                        break
+                }
+                // Reduce markdown window to make room for indicators/neighbor rows.
+                mdH -= overflow
+                if mdH < 1 {
+                        mdH = 1
+                        break
+                }
         }
 
-        selectedBlock := []string{selectedStyle.Render("▸ " + title)}
+        selectedLine := focusRowStyle.Render(lineFor(commentThreadRow{Comment: c, Depth: rows[selected].Depth}))
+        selectedBlock := []string{selectedLine}
         for _, ln := range mdWin {
                 selectedBlock = append(selectedBlock, "  "+ln)
-        }
-
-        remain := height - len(selectedBlock)
-        if remain < 0 {
-                remain = 0
-        }
-        beforeN := remain / 2
-        afterN := remain - beforeN
-
-        start := selected - beforeN
-        if start < 0 {
-                start = 0
-        }
-        end := selected + 1 + afterN
-        if end > len(ordered) {
-                end = len(ordered)
-        }
-        // Rebalance if we hit edges.
-        for end-start < 1 && start > 0 {
-                start--
         }
 
         out := []string{}
@@ -170,16 +214,28 @@ func renderAccordionComments(comments []model.Comment, selected int, width, heig
                         out = append(out, selectedBlock...)
                         continue
                 }
-                snippet := truncateInline(ordered[i].Body, maxInt(20, width-26))
-                out = append(out, fmt.Sprintf("- %s  %s  %s", fmtTS(ordered[i].CreatedAt), strings.TrimSpace(ordered[i].AuthorID), snippet))
+                out = append(out, lineFor(rows[i]))
         }
-        if end < len(ordered) {
-                out = append(out, moreStyle.Render(fmt.Sprintf("↓ %d more", len(ordered)-end)))
+        if end < len(rows) {
+                out = append(out, moreStyle.Render(fmt.Sprintf("↓ %d more", len(rows)-end)))
         }
         return out
 }
 
-func renderAccordionWorklog(worklog []model.WorklogEntry, selected int, width, height, scroll int, selectedStyle lipgloss.Style, moreStyle lipgloss.Style) []string {
+func findCommentByID(comments []model.Comment, id string) (model.Comment, bool) {
+        id = strings.TrimSpace(id)
+        if id == "" {
+                return model.Comment{}, false
+        }
+        for _, c := range comments {
+                if strings.TrimSpace(c.ID) == id {
+                        return c, true
+                }
+        }
+        return model.Comment{}, false
+}
+
+func renderAccordionWorklog(db *store.DB, worklog []model.WorklogEntry, selected int, width, height, scroll int, focusRowStyle lipgloss.Style, moreStyle lipgloss.Style) []string {
         if height < 1 {
                 return []string{}
         }
@@ -196,54 +252,88 @@ func renderAccordionWorklog(worklog []model.WorklogEntry, selected int, width, h
                 scroll = 0
         }
 
-        maxBlock := height
-        if maxBlock > 6 {
-                maxBlock = height - 2
-        }
-        if maxBlock < 3 {
-                maxBlock = 3
+        lineFor := func(w model.WorklogEntry) string {
+                actor := actorLabel(db, w.AuthorID)
+                snippet := truncateInline(w.Body, maxInt(20, width-26))
+                return fmt.Sprintf("%s  %s  %s", fmtTS(w.CreatedAt), actor, snippet)
         }
 
-        title := fmt.Sprintf("%s  %s", fmtTS(worklog[selected].CreatedAt), strings.TrimSpace(worklog[selected].AuthorID))
         mdLines := strings.Split(renderMarkdown(strings.TrimSpace(worklog[selected].Body), maxInt(10, width-2)), "\n")
+        // Glamour often emits "visually empty" spacer lines that contain only ANSI styling codes.
+        // Those consume vertical space without adding information; drop them so expanded bodies
+        // use available height for real content.
+        filtered := make([]string, 0, len(mdLines))
+        for _, ln := range mdLines {
+                if strings.TrimSpace(stripANSIEscapes(ln)) == "" {
+                        continue
+                }
+                filtered = append(filtered, ln)
+        }
+        mdLines = filtered
         if scroll > len(mdLines) {
                 scroll = len(mdLines)
         }
-        mdH := maxBlock - 2
+
+        mdH := height - 1
         if mdH < 1 {
                 mdH = 1
         }
-        if scroll > 0 && scroll > len(mdLines)-mdH {
-                scroll = maxInt(0, len(mdLines)-mdH)
-        }
-        mdWin := mdLines
-        if len(mdWin) > mdH {
-                end := scroll + mdH
-                if end > len(mdLines) {
-                        end = len(mdLines)
+        var (
+                start int
+                end   int
+                mdWin []string
+        )
+        for iter := 0; iter < 6; iter++ {
+                if scroll > 0 && scroll > len(mdLines)-mdH {
+                        scroll = maxInt(0, len(mdLines)-mdH)
                 }
-                mdWin = mdLines[scroll:end]
+                mdWin = mdLines
+                if len(mdWin) > mdH {
+                        mdEnd := scroll + mdH
+                        if mdEnd > len(mdLines) {
+                                mdEnd = len(mdLines)
+                        }
+                        mdWin = mdLines[scroll:mdEnd]
+                }
+
+                selectedBlockLen := 1 + len(mdWin)
+                remain := height - selectedBlockLen
+                if remain < 0 {
+                        remain = 0
+                }
+                beforeN := remain / 2
+                afterN := remain - beforeN
+
+                start = selected - beforeN
+                if start < 0 {
+                        start = 0
+                }
+                end = selected + 1 + afterN
+                if end > len(worklog) {
+                        end = len(worklog)
+                }
+
+                outLen := (end - start - 1) + selectedBlockLen
+                if start > 0 {
+                        outLen++
+                }
+                if end < len(worklog) {
+                        outLen++
+                }
+                overflow := outLen - height
+                if overflow <= 0 {
+                        break
+                }
+                mdH -= overflow
+                if mdH < 1 {
+                        mdH = 1
+                        break
+                }
         }
 
-        selectedBlock := []string{selectedStyle.Render("▸ " + title)}
+        selectedBlock := []string{focusRowStyle.Render(lineFor(worklog[selected]))}
         for _, ln := range mdWin {
                 selectedBlock = append(selectedBlock, "  "+ln)
-        }
-
-        remain := height - len(selectedBlock)
-        if remain < 0 {
-                remain = 0
-        }
-        beforeN := remain / 2
-        afterN := remain - beforeN
-
-        start := selected - beforeN
-        if start < 0 {
-                start = 0
-        }
-        end := selected + 1 + afterN
-        if end > len(worklog) {
-                end = len(worklog)
         }
 
         out := []string{}
@@ -255,8 +345,7 @@ func renderAccordionWorklog(worklog []model.WorklogEntry, selected int, width, h
                         out = append(out, selectedBlock...)
                         continue
                 }
-                snippet := truncateInline(worklog[i].Body, maxInt(20, width-26))
-                out = append(out, fmt.Sprintf("- %s  %s  %s", fmtTS(worklog[i].CreatedAt), strings.TrimSpace(worklog[i].AuthorID), snippet))
+                out = append(out, lineFor(worklog[i]))
         }
         if end < len(worklog) {
                 out = append(out, moreStyle.Render(fmt.Sprintf("↓ %d more", len(worklog)-end)))
@@ -264,7 +353,7 @@ func renderAccordionWorklog(worklog []model.WorklogEntry, selected int, width, h
         return out
 }
 
-func renderAccordionHistory(db *store.DB, events []model.Event, itemID string, selected int, width, height, scroll int, selectedStyle lipgloss.Style, moreStyle lipgloss.Style) []string {
+func renderAccordionHistory(db *store.DB, events []model.Event, itemID string, selected int, width, height, scroll int, focusRowStyle lipgloss.Style, moreStyle lipgloss.Style) []string {
         if height < 1 {
                 return []string{}
         }
@@ -282,21 +371,8 @@ func renderAccordionHistory(db *store.DB, events []model.Event, itemID string, s
                 scroll = 0
         }
 
-        maxBlock := height
-        if maxBlock > 6 {
-                maxBlock = height - 2
-        }
-        if maxBlock < 3 {
-                maxBlock = 3
-        }
-
         ev := evs[selected]
-        actor := strings.TrimSpace(ev.ActorID)
-        if db != nil {
-                if a, ok := db.FindActor(actor); ok && strings.TrimSpace(a.Name) != "" {
-                        actor = a.Name
-                }
-        }
+        actor := actorLabel(db, ev.ActorID)
 
         payloadJSON := ""
         if m, err := json.MarshalIndent(ev.Payload, "", "  "); err == nil {
@@ -315,41 +391,67 @@ func renderAccordionHistory(db *store.DB, events []model.Event, itemID string, s
         if scroll > len(mdLines) {
                 scroll = len(mdLines)
         }
-        mdH := maxBlock - 2
+
+        mdH := height - 1
         if mdH < 1 {
                 mdH = 1
         }
-        if scroll > 0 && scroll > len(mdLines)-mdH {
-                scroll = maxInt(0, len(mdLines)-mdH)
-        }
-        mdWin := mdLines
-        if len(mdWin) > mdH {
-                end := scroll + mdH
-                if end > len(mdLines) {
-                        end = len(mdLines)
+        var (
+                start int
+                end   int
+                mdWin []string
+        )
+        for iter := 0; iter < 6; iter++ {
+                if scroll > 0 && scroll > len(mdLines)-mdH {
+                        scroll = maxInt(0, len(mdLines)-mdH)
                 }
-                mdWin = mdLines[scroll:end]
+                mdWin = mdLines
+                if len(mdWin) > mdH {
+                        mdEnd := scroll + mdH
+                        if mdEnd > len(mdLines) {
+                                mdEnd = len(mdLines)
+                        }
+                        mdWin = mdLines[scroll:mdEnd]
+                }
+
+                selectedBlockLen := 1 + len(mdWin)
+                remain := height - selectedBlockLen
+                if remain < 0 {
+                        remain = 0
+                }
+                beforeN := remain / 2
+                afterN := remain - beforeN
+
+                start = selected - beforeN
+                if start < 0 {
+                        start = 0
+                }
+                end = selected + 1 + afterN
+                if end > len(evs) {
+                        end = len(evs)
+                }
+
+                outLen := (end - start - 1) + selectedBlockLen
+                if start > 0 {
+                        outLen++
+                }
+                if end < len(evs) {
+                        outLen++
+                }
+                overflow := outLen - height
+                if overflow <= 0 {
+                        break
+                }
+                mdH -= overflow
+                if mdH < 1 {
+                        mdH = 1
+                        break
+                }
         }
 
-        selectedBlock := []string{selectedStyle.Render("▸ " + truncateInline(title, maxInt(20, width-2)))}
+        selectedBlock := []string{focusRowStyle.Render(truncateInline(title, maxInt(20, width-2)))}
         for _, ln := range mdWin {
                 selectedBlock = append(selectedBlock, "  "+ln)
-        }
-
-        remain := height - len(selectedBlock)
-        if remain < 0 {
-                remain = 0
-        }
-        beforeN := remain / 2
-        afterN := remain - beforeN
-
-        start := selected - beforeN
-        if start < 0 {
-                start = 0
-        }
-        end := selected + 1 + afterN
-        if end > len(evs) {
-                end = len(evs)
         }
 
         out := []string{}
@@ -362,18 +464,27 @@ func renderAccordionHistory(db *store.DB, events []model.Event, itemID string, s
                         continue
                 }
                 ev := evs[i]
-                actor := strings.TrimSpace(ev.ActorID)
-                if db != nil {
-                        if a, ok := db.FindActor(actor); ok && strings.TrimSpace(a.Name) != "" {
-                                actor = a.Name
-                        }
-                }
-                out = append(out, fmt.Sprintf("- %s  %s  %s", fmtTS(ev.TS), actor, truncateInline(eventSummary(ev), maxInt(20, width-26))))
+                actor := actorLabel(db, ev.ActorID)
+                out = append(out, fmt.Sprintf("%s  %s  %s", fmtTS(ev.TS), actor, truncateInline(eventSummary(ev), maxInt(20, width-26))))
         }
         if end < len(evs) {
                 out = append(out, moreStyle.Render(fmt.Sprintf("↓ %d more", len(evs)-end)))
         }
         return out
+}
+
+func actorLabel(db *store.DB, actorID string) string {
+        id := strings.TrimSpace(actorID)
+        if id == "" || db == nil {
+                return id
+        }
+        if a, ok := db.FindActor(id); ok {
+                // Important: if an agent wrote it, show the agent identity (do NOT collapse to the owning human).
+                if strings.TrimSpace(a.Name) != "" {
+                        return strings.TrimSpace(a.Name)
+                }
+        }
+        return id
 }
 
 func filterEventsForItem(db *store.DB, events []model.Event, itemID string) []model.Event {

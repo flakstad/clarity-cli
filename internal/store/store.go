@@ -57,10 +57,11 @@ type Store struct {
 func (s Store) backend() StoreBackend {
         v := strings.ToLower(strings.TrimSpace(getenv(envStoreBackend)))
         switch v {
-        case string(StoreBackendSQLite):
-                return StoreBackendSQLite
-        default:
+        case string(StoreBackendJSON):
                 return StoreBackendJSON
+        default:
+                // Default: SQLite state store.
+                return StoreBackendSQLite
         }
 }
 

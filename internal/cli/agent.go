@@ -66,7 +66,7 @@ clarity agent start <item-id> --take-assigned
                                 return writeErr(cmd, err)
                         }
 
-                        actor, created, err := ensureAgentIdentity(app, db, s, ensureAgentOpts{
+                        actor, created, _, err := ensureAgentIdentity(app, db, s, ensureAgentOpts{
                                 Session: session,
                                 Name:    name,
                                 UserID:  user,
