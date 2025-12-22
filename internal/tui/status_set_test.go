@@ -90,4 +90,47 @@ func TestStatusPicker_Enter_SetsStatus_WhenCurrentActorIsAgent(t *testing.T) {
         if got := strings.TrimSpace(m2.minibufferText); got == "" || !strings.Contains(got, "Status:") {
                 t.Fatalf("expected minibuffer status confirmation; got %q", m2.minibufferText)
         }
+
+        // Ensure the status transition was recorded in the event log with from/to.
+        evs, err := store.ReadEventsForEntity(dir, "item-a", 0)
+        if err != nil {
+                t.Fatalf("read events: %v", err)
+        }
+        found := false
+        for _, ev := range evs {
+                if ev.Type != "item.set_status" {
+                        continue
+                }
+                payload, ok := ev.Payload.(map[string]any)
+                if !ok {
+                        t.Fatalf("expected payload object; got %#v", ev.Payload)
+                }
+                if got, _ := payload["from"].(string); got != "todo" {
+                        t.Fatalf("expected from=todo; got %q (payload=%#v)", got, payload)
+                }
+                if got, _ := payload["to"].(string); got != "doing" {
+                        t.Fatalf("expected to=doing; got %q (payload=%#v)", got, payload)
+                }
+                found = true
+                break
+        }
+        if !found {
+                t.Fatalf("expected an item.set_status event for item-a; got %d events", len(evs))
+        }
+
+        // Ensure the item details page "History" reflects the new event immediately.
+        m2.view = viewItem
+        m2.selectedProjectID = "proj-a"
+        m2.selectedOutlineID = "out-a"
+        m2.openItemID = "item-a"
+        m2.width = 120
+        // Ensure enough vertical space to include the History section in the rendered view.
+        m2.height = 80
+        out := m2.viewItem()
+        if !strings.Contains(out, "History") {
+                t.Fatalf("expected History section in item view; got: %q", out)
+        }
+        if !strings.Contains(out, "set status: todo -> doing") {
+                t.Fatalf("expected status transition in History; got: %q", out)
+        }
 }

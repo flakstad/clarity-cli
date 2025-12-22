@@ -95,6 +95,23 @@ func (i statusOptionItem) FilterValue() string { return "" }
 func (i statusOptionItem) Title() string       { return i.label }
 func (i statusOptionItem) Description() string { return i.id }
 
+type outlineStatusDefItem struct {
+        def model.OutlineStatusDef
+}
+
+func (i outlineStatusDefItem) FilterValue() string { return strings.TrimSpace(i.def.Label) }
+func (i outlineStatusDefItem) Title() string {
+        lbl := strings.TrimSpace(i.def.Label)
+        if lbl == "" {
+                lbl = "(unnamed)"
+        }
+        if i.def.IsEndState {
+                return lbl + "  (end)"
+        }
+        return lbl
+}
+func (i outlineStatusDefItem) Description() string { return strings.TrimSpace(i.def.ID) }
+
 func statusLabel(outline model.Outline, statusID string) string {
         if strings.TrimSpace(statusID) == "" {
                 return ""

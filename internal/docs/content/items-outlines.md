@@ -41,6 +41,18 @@ clarity items get <item-id>
 clarity <item-id>
 ```
 
+## Event history
+
+Clarity keeps an append-only event log (`events.jsonl`) which records changes over time.
+
+```bash
+# List events for an item (oldest-first)
+clarity items events <item-id>
+
+# Limit the number of events returned (0 = all)
+clarity items events <item-id> --limit 50
+```
+
 ## Short aliases (ergonomics)
 The canonical mutation commands use `set-*` naming, and there are **short verb aliases**
 for interactive use. These aliases are **additive**; scripts can keep using the canonical
@@ -88,3 +100,27 @@ clarity items set-assign <item-id> --clear
 - Status definitions live on the outline.
 - Items store a `status_id` (stable) but CLI accepts status **labels** too.
 - Items can always have **no status**: `--status none`.
+
+### Customize status values per outline
+Each outline can define its own `statusDefs` (labels + which ones count as “end-state”).
+
+```bash
+# List statuses for an outline
+clarity outlines status list <outline-id>
+
+# Add a status (id is derived from label, e.g. "IN REVIEW" -> "in-review")
+clarity outlines status add <outline-id> --label "IN REVIEW"
+
+# Mark a status as an end-state (affects agenda filtering + completion semantics)
+clarity outlines status update <outline-id> "IN REVIEW" --end
+
+# Change the cycling/column order (must include all labels exactly once)
+clarity outlines status reorder <outline-id> \
+  --label "TODO" \
+  --label "DOING" \
+  --label "IN REVIEW" \
+  --label "DONE"
+
+# Remove a status (blocked if any item in the outline uses it)
+clarity outlines status remove <outline-id> "IN REVIEW"
+```

@@ -70,6 +70,54 @@ func TestViewItem_IsLeftAlignedWithOuterMargin(t *testing.T) {
         }
 }
 
+func TestViewItem_RendersModalOverlay(t *testing.T) {
+        db := &store.DB{
+                CurrentActorID: "act-test",
+                Actors:         []model.Actor{{ID: "act-test", Kind: model.ActorKindHuman, Name: "tester"}},
+                Projects: []model.Project{{
+                        ID:        "proj-a",
+                        Name:      "Project A",
+                        CreatedBy: "act-test",
+                        CreatedAt: time.Now().UTC(),
+                }},
+                Outlines: []model.Outline{{
+                        ID:         "out-a",
+                        ProjectID:  "proj-a",
+                        StatusDefs: store.DefaultOutlineStatusDefs(),
+                        CreatedBy:  "act-test",
+                        CreatedAt:  time.Now().UTC(),
+                }},
+                Items: []model.Item{{
+                        ID:           "item-a",
+                        ProjectID:    "proj-a",
+                        OutlineID:    "out-a",
+                        Rank:         "h",
+                        Title:        "Title",
+                        Description:  "desc",
+                        StatusID:     "todo",
+                        OwnerActorID: "act-test",
+                        CreatedBy:    "act-test",
+                        CreatedAt:    time.Now().UTC(),
+                        UpdatedAt:    time.Now().UTC(),
+                }},
+        }
+
+        m := newAppModel(t.TempDir(), db)
+        m.view = viewItem
+        m.modal = modalEditTitle
+        m.modalForID = "item-a"
+        m.selectedProjectID = "proj-a"
+        m.selectedOutlineID = "out-a"
+        m.openItemID = "item-a"
+        m.width = 120
+        m.height = 30
+
+        out := m.viewItem()
+        if !strings.Contains(out, "Edit title") {
+                t.Fatalf("expected item view to include modal title; got:\n%s", out)
+        }
+}
+
 func TestRenderItemDetail_RespectsWidth(t *testing.T) {
         db := &store.DB{
                 CurrentActorID: "act-test",

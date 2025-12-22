@@ -21,6 +21,7 @@ func newItemsCmd(app *App) *cobra.Command {
         cmd.AddCommand(newItemsCreateCmd(app))
         cmd.AddCommand(newItemsListCmd(app))
         cmd.AddCommand(newItemsShowCmd(app))
+        cmd.AddCommand(newItemsEventsCmd(app))
         cmd.AddCommand(newItemsClaimCmd(app))
         cmd.AddCommand(newItemsSetTitleCmd(app))
         cmd.AddCommand(newItemsSetDescriptionCmd(app))
@@ -302,6 +303,37 @@ func newItemsShowCmd(app *App) *cobra.Command {
         return cmd
 }
 
+func newItemsEventsCmd(app *App) *cobra.Command {
+        var limit int
+        cmd := &cobra.Command{
+                Use:   "events <item-id>",
+                Short: "List an item's event history (oldest-first)",
+                Args:  cobra.ExactArgs(1),
+                RunE: func(cmd *cobra.Command, args []string) error {
+                        id := strings.TrimSpace(args[0])
+                        if id == "" {
+                                return writeErr(cmd, errors.New("missing item id"))
+                        }
+
+                        db, s, err := loadDB(app)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if _, ok := db.FindItem(id); !ok {
+                                return writeErr(cmd, errNotFound("item", id))
+                        }
+
+                        evs, err := store.ReadEventsForEntity(s.Dir, id, limit)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        return writeOut(cmd, app, map[string]any{"data": evs})
+                },
+        }
+        cmd.Flags().IntVar(&limit, "limit", 200, "Max events to return (0 = all)")
+        return cmd
+}
+
 func showItem(app *App, cmd *cobra.Command, id string) error {
         db, _, err := loadDB(app)
         if err != nil {
@@ -352,6 +384,7 @@ func showItem(app *App, cmd *cobra.Command, id string) error {
                 "clarity worklog list " + id,
                 "clarity deps list " + id,
                 "clarity deps tree " + id,
+                "clarity items events " + id,
         }
 
         return writeOut(cmd, app, map[string]any{
@@ -459,12 +492,17 @@ func newItemsSetStatusCmd(app *App) *cobra.Command {
                                         return writeErr(cmd, completionBlockedError{taskID: t.ID, reason: explainCompletionBlockers(db, t.ID)})
                                 }
                         }
+                        prev := strings.TrimSpace(t.StatusID)
                         t.StatusID = st
                         t.UpdatedAt = time.Now().UTC()
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.set_status", t.ID, map[string]any{"status": t.StatusID})
+                        _ = s.AppendEvent(actorID, "item.set_status", t.ID, map[string]any{
+                                "from":   prev,
+                                "to":     strings.TrimSpace(t.StatusID),
+                                "status": strings.TrimSpace(t.StatusID), // backwards-compat
+                        })
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }

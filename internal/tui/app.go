@@ -117,6 +117,9 @@ const (
         modalPickOutline
         modalAddComment
         modalAddWorklog
+        modalEditOutlineStatuses
+        modalAddOutlineStatus
+        modalRenameOutlineStatus
         modalActionPanel
 )
 
@@ -186,6 +189,8 @@ type appModel struct {
         statusList      list.Model
         outlinePickList list.Model
         agendaList      list.Model
+        // outlineStatusDefsList is used in the outline statuses editor modal.
+        outlineStatusDefsList list.Model
 
         selectedProjectID string
         selectedOutlineID string
@@ -201,15 +206,19 @@ type appModel struct {
         agendaCollapsed     map[string]bool
         collapsed           map[string]bool
         collapseInitialized bool
+        // itemFocus is used on the full-screen item view to allow Tab navigation across
+        // editable fields (title/status/description/comment/worklog).
+        itemFocus itemPageFocus
         // Per-outline display mode for the outline view (experimental).
         outlineViewMode map[string]outlineViewMode
 
-        modal      modalKind
-        modalForID string
-        archiveFor archiveTarget
-        input      textinput.Model
-        textarea   textarea.Model
-        textFocus  textModalFocus
+        modal       modalKind
+        modalForID  string
+        modalForKey string
+        archiveFor  archiveTarget
+        input       textinput.Model
+        textarea    textarea.Model
+        textFocus   textModalFocus
 
         // pendingMoveOutlineTo is set when a move-outline flow needs the user to pick a status
         // compatible with the target outline. While set, the status picker "enter" applies the move.
@@ -466,6 +475,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                                                 return mm, nil
                                         }
                                         mm.view = viewItem
+                                        mm.itemFocus = itemFocusTitle
                                         mm.showPreview = false
                                         mm.pane = paneOutline
                                         return mm, nil
@@ -518,6 +528,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         actions["enter"] = actionPanelAction{label: "Select outline", kind: actionPanelActionExec}
                         actions["n"] = actionPanelAction{label: "New outline", kind: actionPanelActionExec}
                         actions["e"] = actionPanelAction{label: "Rename outline", kind: actionPanelActionExec}
+                        actions["S"] = actionPanelAction{label: "Edit outline statuses…", kind: actionPanelActionExec}
                         actions["r"] = actionPanelAction{label: "Archive outline", kind: actionPanelActionExec}
                         actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
                 case viewItem:
@@ -530,6 +541,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         actions["enter"] = actionPanelAction{label: "Open item", kind: actionPanelActionExec}
                         actions["o"] = actionPanelAction{label: "Toggle preview", kind: actionPanelActionExec}
                         actions["v"] = actionPanelAction{label: "Toggle column view (experimental)", kind: actionPanelActionExec}
+                        actions["S"] = actionPanelAction{label: "Edit outline statuses…", kind: actionPanelActionExec}
                         if m.splitPreviewVisible() {
                                 actions["tab"] = actionPanelAction{label: "Toggle focus (outline/detail)", kind: actionPanelActionExec}
                         }
@@ -621,6 +633,14 @@ func newAppModel(dir string, db *store.DB) appModel {
         m.outlinePickList.SetShowHelp(false)
         m.outlinePickList.SetShowStatusBar(false)
         m.outlinePickList.SetShowPagination(false)
+
+        m.outlineStatusDefsList = newList("Statuses", "Edit outline statuses", []list.Item{})
+        m.outlineStatusDefsList.SetDelegate(newCompactItemDelegate())
+        m.outlineStatusDefsList.SetFilteringEnabled(false)
+        m.outlineStatusDefsList.SetShowFilter(false)
+        m.outlineStatusDefsList.SetShowHelp(false)
+        m.outlineStatusDefsList.SetShowStatusBar(false)
+        m.outlineStatusDefsList.SetShowPagination(false)
 
         m.input = textinput.New()
         m.input.Placeholder = "Title"
@@ -918,6 +938,7 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
                 if it, ok := m.db.FindItem(openItemID); ok && it != nil && !it.Archived {
                         m.openItemID = it.ID
                         m.view = viewItem
+                        m.itemFocus = itemFocusTitle
                         m.showPreview = false
                         m.pane = paneOutline
 
@@ -1308,10 +1329,21 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.selectedOutline = &it.outline
                                         m.openItemID = it.row.item.ID
                                         m.view = viewItem
+                                        m.itemFocus = itemFocusTitle
                                         m.hasReturnView = true
                                         m.returnView = viewAgenda
                                         m.showPreview = false
                                         m.pane = paneOutline
+                                        return m, nil
+                                }
+                        }
+                case "S":
+                        // Edit outline status definitions (outline list view).
+                        if m.view == viewOutlines {
+                                if it, ok := m.outlinesList.SelectedItem().(outlineItem); ok {
+                                        m.selectedOutlineID = strings.TrimSpace(it.outline.ID)
+                                        m.selectedOutline = &it.outline
+                                        m.openOutlineStatusDefsEditor(it.outline, "")
                                         return m, nil
                                 }
                         }
@@ -1416,8 +1448,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case viewOutline:
                         return m.updateOutline(msg)
                 case viewItem:
-                        // Read-only for now. Back/quit handled in the root key handler.
-                        return m, nil
+                        return m.updateItem(msg)
                 default:
                         return m, nil
                 }
@@ -1464,6 +1495,93 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 }
         }
 
+        return m, nil
+}
+
+func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
+        switch km := msg.(type) {
+        case tea.KeyMsg:
+                itemID := strings.TrimSpace(m.openItemID)
+                if itemID == "" {
+                        return m, nil
+                }
+                it, ok := m.db.FindItem(itemID)
+                if !ok {
+                        return m, nil
+                }
+
+                switch km.String() {
+                case "tab":
+                        m.itemFocus = m.itemFocus.next()
+                        return m, nil
+                case "shift+tab", "backtab":
+                        m.itemFocus = m.itemFocus.prev()
+                        return m, nil
+                case "enter":
+                        switch m.itemFocus {
+                        case itemFocusTitle:
+                                m.modal = modalEditTitle
+                                m.modalForID = it.ID
+                                m.input.SetValue(it.Title)
+                                m.input.Focus()
+                                return m, nil
+                        case itemFocusStatus:
+                                if o, ok := m.db.FindOutline(it.OutlineID); ok {
+                                        m.openStatusPicker(*o, it.ID, it.StatusID)
+                                        m.modal = modalPickStatus
+                                        m.modalForID = it.ID
+                                }
+                                return m, nil
+                        case itemFocusDescription:
+                                m.openTextModal(modalEditDescription, it.ID, "Markdown description…", it.Description)
+                                return m, nil
+                        case itemFocusAddComment:
+                                m.openTextModal(modalAddComment, it.ID, "Write a comment…", "")
+                                return m, nil
+                        case itemFocusAddWorklog:
+                                m.openTextModal(modalAddWorklog, it.ID, "Log work…", "")
+                                return m, nil
+                        default:
+                                return m, nil
+                        }
+                case "e":
+                        m.itemFocus = itemFocusTitle
+                        m.modal = modalEditTitle
+                        m.modalForID = it.ID
+                        m.input.SetValue(it.Title)
+                        m.input.Focus()
+                        return m, nil
+                case "D":
+                        m.itemFocus = itemFocusDescription
+                        m.openTextModal(modalEditDescription, it.ID, "Markdown description…", it.Description)
+                        return m, nil
+                case "C":
+                        m.itemFocus = itemFocusAddComment
+                        m.openTextModal(modalAddComment, it.ID, "Write a comment…", "")
+                        return m, nil
+                case "w":
+                        m.itemFocus = itemFocusAddWorklog
+                        m.openTextModal(modalAddWorklog, it.ID, "Log work…", "")
+                        return m, nil
+                case " ":
+                        m.itemFocus = itemFocusStatus
+                        if o, ok := m.db.FindOutline(it.OutlineID); ok {
+                                m.openStatusPicker(*o, it.ID, it.StatusID)
+                                m.modal = modalPickStatus
+                                m.modalForID = it.ID
+                        }
+                        return m, nil
+                case "m":
+                        m.openMoveOutlinePicker(it.ID)
+                        return m, nil
+                case "r":
+                        m.modal = modalConfirmArchive
+                        m.modalForID = it.ID
+                        m.archiveFor = archiveTargetItem
+                        m.input.Blur()
+                        return m, nil
+                }
+        }
         return m, nil
 }
 
@@ -1719,6 +1837,15 @@ func (m appModel) footerText() string {
         if m.modal == modalEditOutlineName {
                 return "rename outline: type, enter: save, esc: cancel"
         }
+        if m.modal == modalEditOutlineStatuses {
+                return "outline statuses: a:add  r:rename  e:toggle end  d:delete  ctrl+k/j:move  esc:close"
+        }
+        if m.modal == modalAddOutlineStatus {
+                return "add status: type label, enter: add, esc: cancel"
+        }
+        if m.modal == modalRenameOutlineStatus {
+                return "rename status: type label, enter: save, esc: cancel"
+        }
         if m.modal != modalNone {
                 if m.modal == modalConfirmArchive {
                         return "archive: y/enter: confirm  n/esc: cancel"
@@ -1790,51 +1917,256 @@ func (m appModel) renderActionPanel() string {
                 return renderModalBox(m.width, title, "(no actions)")
         }
 
-        // Group global actions first, then nav, then everything else.
-        globalOrder := []string{}
-        if m.curActionPanelKind() == actionPanelContext {
-                globalOrder = []string{"a", "c"}
+        // Approximate the available content width inside the modal box.
+        // This mirrors renderModalBox's sizing and accounts for horizontal padding.
+        modalW := m.width - 12
+        if modalW > m.width-4 {
+                modalW = m.width - 4
         }
-        navOrder := []string{"g", "p", "o", "l", "i"}
-        seen := map[string]bool{}
-        lines := []string{}
+        if modalW < 20 {
+                modalW = 20
+        }
+        if modalW > 96 {
+                modalW = 96
+        }
+        contentW := modalW - 4 // Padding(1,2) => 2 columns of padding on each side.
+        if contentW < 20 {
+                contentW = 20
+        }
 
         actions := m.actionPanelActions()
-        addKey := func(k string) {
+        seen := map[string]bool{}
+
+        isFocusedItemContext := m.curActionPanelKind() == actionPanelContext && m.view == viewOutline && m.pane == paneOutline
+
+        renderCell := func(k string, a actionPanelAction) string {
+                return fmt.Sprintf("%-12s %s", actionPanelDisplayKey(k), a.label)
+        }
+
+        cutToWidth := func(s string, w int) string {
+                if w <= 0 {
+                        return s
+                }
+                if xansi.StringWidth(s) <= w {
+                        return s
+                }
+                if w <= 1 {
+                        return xansi.Cut(s, 0, w)
+                }
+                return xansi.Cut(s, 0, w-1) + "…"
+        }
+
+        addKey := func(k string, cells *[]string) bool {
                 if seen[k] {
-                        return
+                        return false
                 }
                 a, ok := actions[k]
                 if !ok {
-                        return
+                        return false
                 }
                 seen[k] = true
-                lines = append(lines, fmt.Sprintf("%-12s %s", actionPanelDisplayKey(k), a.label))
+                *cells = append(*cells, renderCell(k, a))
+                return true
         }
 
-        for _, k := range globalOrder {
-                addKey(k)
+        type sectionBlock struct {
+                header string
+                lines  []string // already cut/padded appropriately for its column width later
         }
-        if len(lines) > 0 {
-                lines = append(lines, "")
-        }
-        for _, k := range navOrder {
-                addKey(k)
-        }
-        if len(lines) > 0 && lines[len(lines)-1] != "" {
-                lines = append(lines, "")
-        }
+        blocks := []sectionBlock{}
 
-        rest := make([]string, 0, len(entries))
-        for _, e := range entries {
-                if seen[e.key] {
-                        continue
+        addSection := func(header string, keys []string) {
+                cells := []string{}
+                for _, k := range keys {
+                        addKey(k, &cells)
                 }
-                rest = append(rest, e.key)
+                if len(cells) == 0 {
+                        return
+                }
+                lns := []string{strings.ToUpper(strings.TrimSpace(header))}
+                lns = append(lns, cells...) // keep per-group as a single vertical list
+                blocks = append(blocks, sectionBlock{header: header, lines: lns})
         }
-        sort.Strings(rest)
-        for _, k := range rest {
-                addKey(k)
+
+        // Only the root action panel (opened with x) shows global entrypoints.
+        if m.curActionPanelKind() == actionPanelContext {
+                // Note: "Global" group below will pick up nav actions (g/a/c) automatically.
+        }
+
+        // Navigation group:
+        // - In the context panel, only include actions that actually navigate to a subpanel.
+        //   (We don't want to "steal" exec actions like "o" Toggle preview from the View section.)
+        // - In the Navigate panel, show destinations explicitly.
+        if m.curActionPanelKind() == actionPanelNav {
+                addSection("Destinations", []string{"p", "o", "l", "i"})
+        } else if !isFocusedItemContext {
+                navKeys := []string{}
+                // Stable "nice" order first.
+                for _, k := range []string{"g", "a", "c"} {
+                        if a, ok := actions[k]; ok && a.kind == actionPanelActionNav {
+                                navKeys = append(navKeys, k)
+                        }
+                }
+                // Any other nav actions (sorted).
+                other := []string{}
+                for k, a := range actions {
+                        if a.kind != actionPanelActionNav {
+                                continue
+                        }
+                        if k == "g" || k == "a" || k == "c" {
+                                continue
+                        }
+                        other = append(other, k)
+                }
+                sort.Strings(other)
+                navKeys = append(navKeys, other...)
+                addSection("Navigate", navKeys)
+        }
+
+        // When focused on an item (outline pane), present clearer grouped actions.
+        if isFocusedItemContext {
+                // Regroup by "what you're operating on":
+                // - Outline View: view/navigation of the outline split view
+                // - Item: mutations + collaboration actions on the selected item
+                // - Global: app-level entrypoints (navigate / agenda / capture / quit)
+
+                addSection("Outline View", []string{"enter", "o", "v", "S", "tab", "z", "Z"})
+
+                // Item work: all changes + notes/comments, and related helpers.
+                addSection("Item", []string{
+                        "e", "n", "N", // title/new items
+                        " ", "shift+left", "shift+right", // status
+                        "m",      // move
+                        "C", "w", // comment/worklog
+                        "y", "Y", // copy helpers (still item-scoped)
+                        "r", // archive
+                })
+
+                // Global entrypoints.
+                globalKeys := []string{}
+                for _, k := range []string{"g", "a", "c"} {
+                        if a, ok := actions[k]; ok && a.kind == actionPanelActionNav {
+                                globalKeys = append(globalKeys, k)
+                        }
+                }
+                // Quit is always global.
+                if _, ok := actions["q"]; ok {
+                        globalKeys = append(globalKeys, "q")
+                }
+                addSection("Global", globalKeys)
+        } else {
+                // Default: show remaining actions in sorted order.
+                rest := make([]string, 0, len(entries))
+                for _, e := range entries {
+                        if seen[e.key] {
+                                continue
+                        }
+                        rest = append(rest, e.key)
+                }
+                sort.Strings(rest)
+                cells := []string{}
+                for _, k := range rest {
+                        addKey(k, &cells)
+                }
+                if len(cells) > 0 {
+                        lns := []string{strings.ToUpper("Other")}
+                        lns = append(lns, cells...)
+                        blocks = append(blocks, sectionBlock{header: "Other", lines: lns})
+                }
+        }
+
+        // Render blocks: prefer two columns of whole sections when there's room.
+        const colGap = 4
+        const minColW = 34
+        useTwoCols := len(blocks) > 1 && contentW >= (minColW*2+colGap)
+
+        lines := []string{}
+        if !useTwoCols {
+                for bi := range blocks {
+                        for _, ln := range blocks[bi].lines {
+                                lines = append(lines, cutToWidth(ln, contentW))
+                        }
+                        lines = append(lines, "")
+                }
+        } else {
+                colW := (contentW - colGap) / 2
+                if colW < minColW {
+                        // Safety fallback to single column.
+                        for bi := range blocks {
+                                for _, ln := range blocks[bi].lines {
+                                        lines = append(lines, cutToWidth(ln, contentW))
+                                }
+                                lines = append(lines, "")
+                        }
+                } else {
+                        left := []string{}
+                        right := []string{}
+
+                        colHeight := func(col []string) int {
+                                // Trim trailing blanks for height.
+                                n := len(col)
+                                for n > 0 && strings.TrimSpace(col[n-1]) == "" {
+                                        n--
+                                }
+                                return n
+                        }
+
+                        appendBlock := func(col *[]string, b sectionBlock) {
+                                for _, ln := range b.lines {
+                                        *col = append(*col, cutToWidth(ln, colW))
+                                }
+                                *col = append(*col, "")
+                        }
+
+                        // Greedy balance by line count, but keep each section as an atomic block.
+                        for _, b := range blocks {
+                                if colHeight(left) <= colHeight(right) {
+                                        appendBlock(&left, b)
+                                } else {
+                                        appendBlock(&right, b)
+                                }
+                        }
+
+                        trimTrailingBlanks := func(col []string) []string {
+                                for len(col) > 0 && strings.TrimSpace(col[len(col)-1]) == "" {
+                                        col = col[:len(col)-1]
+                                }
+                                return col
+                        }
+                        left = trimTrailingBlanks(left)
+                        right = trimTrailingBlanks(right)
+
+                        maxN := len(left)
+                        if len(right) > maxN {
+                                maxN = len(right)
+                        }
+                        for i := 0; i < maxN; i++ {
+                                l := ""
+                                r := ""
+                                if i < len(left) {
+                                        l = left[i]
+                                }
+                                if i < len(right) {
+                                        r = right[i]
+                                }
+                                l = cutToWidth(l, colW)
+                                if n := xansi.StringWidth(l); n < colW {
+                                        l += strings.Repeat(" ", colW-n)
+                                }
+                                if strings.TrimSpace(r) == "" {
+                                        lines = append(lines, strings.TrimRight(l, " "))
+                                        continue
+                                }
+                                r = cutToWidth(r, colW)
+                                line := l + strings.Repeat(" ", colGap) + r
+                                lines = append(lines, strings.TrimRight(line, " "))
+                        }
+                }
+        }
+
+        // Trim trailing blank lines.
+        for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+                lines = lines[:len(lines)-1]
         }
 
         body := strings.Join(lines, "\n")
@@ -2391,12 +2723,28 @@ func (m *appModel) viewItem() string {
                 contentW = w
         }
 
+        wrap := func(content string) string {
+                main := lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(content)
+                if m.modal == modalNone {
+                        if m.debugEnabled && m.debugOverlay {
+                                ov := m.debugOverlayView()
+                                if strings.TrimSpace(ov) != "" {
+                                        main = overlayCenter(main, ov, w, frameH)
+                                }
+                        }
+                        return main
+                }
+                bg := dimBackground(main)
+                fg := m.renderModal()
+                return overlayCenter(bg, fg, w, frameH)
+        }
+
         itemID := strings.TrimSpace(m.openItemID)
         if itemID == "" {
                 crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
                 msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("No item selected.")
                 block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
-                return lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(block)
+                return wrap(block)
         }
 
         outline, ok := m.db.FindOutline(m.selectedOutlineID)
@@ -2404,7 +2752,7 @@ func (m *appModel) viewItem() string {
                 crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
                 msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("Outline not found.")
                 block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
-                return lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(block)
+                return wrap(block)
         }
 
         it, ok := m.db.FindItem(itemID)
@@ -2412,13 +2760,13 @@ func (m *appModel) viewItem() string {
                 crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
                 msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("Item not found.")
                 block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
-                return lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(block)
+                return wrap(block)
         }
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-        card := renderItemDetail(m.db, *outline, *it, contentW, bodyHeight, true, m.eventsTail)
+        card := renderItemDetailInteractive(m.db, *outline, *it, contentW, bodyHeight, m.itemFocus, m.eventsTail)
         block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + card
-        return lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(block)
+        return wrap(block)
 }
 
 func (m *appModel) renderModal() string {
@@ -2447,6 +2795,12 @@ func (m *appModel) renderModal() string {
                 return renderModalBox(m.width, "Set status", m.statusList.View()+"\n\nenter: set   esc: cancel")
         case modalPickOutline:
                 return renderModalBox(m.width, "Move to outline", m.outlinePickList.View()+"\n\nenter: move   esc: cancel")
+        case modalEditOutlineStatuses:
+                return renderModalBox(m.width, "Outline statuses", m.outlineStatusDefsList.View()+"\n\na:add  r:rename  e:toggle end  d:delete  ctrl+k/j:move  esc:close")
+        case modalAddOutlineStatus:
+                return renderModalBox(m.width, "Add status", m.input.View()+"\n\nenter: add   esc: cancel")
+        case modalRenameOutlineStatus:
+                return renderModalBox(m.width, "Rename status", m.input.View()+"\n\nenter: save   esc: cancel")
         case modalAddComment:
                 return m.renderTextAreaModal("Add comment")
         case modalAddWorklog:
@@ -2667,6 +3021,126 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 }
                         }
                         return m, nil
+                }
+
+                if m.modal == modalEditOutlineStatuses {
+                        if km, ok := msg.(tea.KeyMsg); ok {
+                                switch km.String() {
+                                case "esc":
+                                        m.modal = modalNone
+                                        m.modalForID = ""
+                                        m.modalForKey = ""
+                                        return m, nil
+                                case "a":
+                                        m.modal = modalAddOutlineStatus
+                                        m.modalForKey = ""
+                                        m.input.Placeholder = "Status label"
+                                        m.input.SetValue("")
+                                        m.input.Focus()
+                                        return m, nil
+                                case "r":
+                                        if it, ok := m.outlineStatusDefsList.SelectedItem().(outlineStatusDefItem); ok {
+                                                m.modal = modalRenameOutlineStatus
+                                                m.modalForKey = strings.TrimSpace(it.def.ID)
+                                                m.input.Placeholder = "Status label"
+                                                m.input.SetValue(strings.TrimSpace(it.def.Label))
+                                                m.input.Focus()
+                                                return m, nil
+                                        }
+                                case "e":
+                                        if it, ok := m.outlineStatusDefsList.SelectedItem().(outlineStatusDefItem); ok {
+                                                oid := strings.TrimSpace(m.modalForID)
+                                                if err := m.toggleOutlineStatusEndState(oid, strings.TrimSpace(it.def.ID)); err != nil {
+                                                        m.showMinibuffer("Update failed: " + err.Error())
+                                                        return m, nil
+                                                }
+                                                m.refreshOutlineStatusDefsEditor(oid, strings.TrimSpace(it.def.ID))
+                                                return m, nil
+                                        }
+                                case "d":
+                                        if it, ok := m.outlineStatusDefsList.SelectedItem().(outlineStatusDefItem); ok {
+                                                oid := strings.TrimSpace(m.modalForID)
+                                                if err := m.removeOutlineStatusDef(oid, strings.TrimSpace(it.def.ID)); err != nil {
+                                                        m.showMinibuffer("Remove failed: " + err.Error())
+                                                        return m, nil
+                                                }
+                                                m.refreshOutlineStatusDefsEditor(oid, "")
+                                                return m, nil
+                                        }
+                                case "ctrl+k":
+                                        if it, ok := m.outlineStatusDefsList.SelectedItem().(outlineStatusDefItem); ok {
+                                                oid := strings.TrimSpace(m.modalForID)
+                                                if err := m.moveOutlineStatusDef(oid, strings.TrimSpace(it.def.ID), -1); err != nil {
+                                                        m.showMinibuffer("Reorder failed: " + err.Error())
+                                                        return m, nil
+                                                }
+                                                m.refreshOutlineStatusDefsEditor(oid, strings.TrimSpace(it.def.ID))
+                                                return m, nil
+                                        }
+                                case "ctrl+j":
+                                        if it, ok := m.outlineStatusDefsList.SelectedItem().(outlineStatusDefItem); ok {
+                                                oid := strings.TrimSpace(m.modalForID)
+                                                if err := m.moveOutlineStatusDef(oid, strings.TrimSpace(it.def.ID), +1); err != nil {
+                                                        m.showMinibuffer("Reorder failed: " + err.Error())
+                                                        return m, nil
+                                                }
+                                                m.refreshOutlineStatusDefsEditor(oid, strings.TrimSpace(it.def.ID))
+                                                return m, nil
+                                        }
+                                }
+                        }
+                        var cmd tea.Cmd
+                        m.outlineStatusDefsList, cmd = m.outlineStatusDefsList.Update(msg)
+                        return m, cmd
+                }
+
+                if m.modal == modalAddOutlineStatus || m.modal == modalRenameOutlineStatus {
+                        switch km := msg.(type) {
+                        case tea.KeyMsg:
+                                switch km.String() {
+                                case "esc":
+                                        m.modal = modalEditOutlineStatuses
+                                        m.modalForKey = ""
+                                        m.input.Placeholder = "Title"
+                                        m.input.SetValue("")
+                                        m.input.Blur()
+                                        return m, nil
+                                case "enter":
+                                        val := strings.TrimSpace(m.input.Value())
+                                        if val == "" {
+                                                return m, nil
+                                        }
+                                        oid := strings.TrimSpace(m.modalForID)
+                                        switch m.modal {
+                                        case modalAddOutlineStatus:
+                                                id, err := m.addOutlineStatusDef(oid, val, false)
+                                                if err != nil {
+                                                        m.showMinibuffer("Add failed: " + err.Error())
+                                                        return m, nil
+                                                }
+                                                m.refreshOutlineStatusDefsEditor(oid, id)
+                                        case modalRenameOutlineStatus:
+                                                sid := strings.TrimSpace(m.modalForKey)
+                                                if sid == "" {
+                                                        return m, nil
+                                                }
+                                                if err := m.renameOutlineStatusDef(oid, sid, val); err != nil {
+                                                        m.showMinibuffer("Rename failed: " + err.Error())
+                                                        return m, nil
+                                                }
+                                                m.refreshOutlineStatusDefsEditor(oid, sid)
+                                        }
+                                        m.modal = modalEditOutlineStatuses
+                                        m.modalForKey = ""
+                                        m.input.Placeholder = "Title"
+                                        m.input.SetValue("")
+                                        m.input.Blur()
+                                        return m, nil
+                                }
+                        }
+                        var cmd tea.Cmd
+                        m.input, cmd = m.input.Update(msg)
+                        return m, cmd
                 }
 
                 if m.modal == modalConfirmArchive {
@@ -3206,6 +3680,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
                                         m.view = viewItem
                                         m.openItemID = it.row.item.ID
+                                        m.itemFocus = itemFocusTitle
                                         // Leaving preview mode when entering the full item page.
                                         m.showPreview = false
                                         m.previewCacheForID = ""
@@ -3231,6 +3706,19 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "v":
                         // Toggle experimental column view (status as columns).
                         m.toggleOutlineViewMode()
+                        return m, nil
+                case "S":
+                        // Edit outline status definitions.
+                        oid := strings.TrimSpace(m.selectedOutlineID)
+                        if oid == "" {
+                                m.showMinibuffer("No outline selected")
+                                return m, nil
+                        }
+                        if o, ok := m.db.FindOutline(oid); ok && o != nil {
+                                m.openOutlineStatusDefsEditor(*o, "")
+                                return m, nil
+                        }
+                        m.showMinibuffer("Outline not found")
                         return m, nil
                 case "e":
                         // Edit title for selected item.
@@ -3395,6 +3883,7 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                         m.openItemID = it.row.item.ID
                         m.view = viewItem
+                        m.itemFocus = itemFocusTitle
                         m.hasReturnView = true
                         m.returnView = viewAgenda
                         m.showPreview = false
@@ -3640,6 +4129,7 @@ func (m *appModel) archiveItemTree(rootID string) (int, error) {
         if err := m.store.Save(m.db); err != nil {
                 return archived, err
         }
+        m.refreshEventsTail()
         m.captureStoreModTimes()
         return archived, nil
 }
@@ -3694,6 +4184,7 @@ func (m *appModel) archiveOutlineTree(outlineID string) (int, error) {
         if err := m.store.Save(m.db); err != nil {
                 return itemsArchived, err
         }
+        m.refreshEventsTail()
         m.captureStoreModTimes()
         return itemsArchived, nil
 }
@@ -4376,6 +4867,7 @@ func (m *appModel) createItemFromModal(title string) error {
                 return err
         }
         _ = m.store.AppendEvent(actorID, "item.create", newItem.ID, newItem)
+        m.refreshEventsTail()
         m.captureStoreModTimes()
         m.showMinibuffer("Created " + newItem.ID)
 
@@ -4452,6 +4944,8 @@ func (m *appModel) mutateItem(itemID string, mutate func(db *store.DB, it *model
         }
         if strings.TrimSpace(res.eventType) != "" {
                 _ = m.store.AppendEvent(actorID, res.eventType, it.ID, res.eventPayload)
+                // Keep in-memory history fresh for the item detail "History" section.
+                m.refreshEventsTail()
         }
         m.captureStoreModTimes()
         if strings.TrimSpace(res.minibuffer) != "" {
@@ -4516,6 +5010,7 @@ func (m *appModel) mutateProject(projectID string, mutate func(db *store.DB, p *
         }
         if strings.TrimSpace(res.eventType) != "" {
                 _ = m.store.AppendEvent(actorID, res.eventType, p.ID, res.eventPayload)
+                m.refreshEventsTail()
         }
         m.captureStoreModTimes()
         if strings.TrimSpace(res.minibuffer) != "" {
@@ -4576,6 +5071,7 @@ func (m *appModel) mutateOutline(outlineID string, mutate func(db *store.DB, o *
         }
         if strings.TrimSpace(res.eventType) != "" {
                 _ = m.store.AppendEvent(actorID, res.eventType, o.ID, res.eventPayload)
+                m.refreshEventsTail()
         }
         m.captureStoreModTimes()
         if strings.TrimSpace(res.minibuffer) != "" {
@@ -4699,6 +5195,7 @@ func (m *appModel) createProjectFromModal(name string) error {
                 return err
         }
         _ = m.store.AppendEvent(actorID, "project.create", p.ID, p)
+        m.refreshEventsTail()
         m.captureStoreModTimes()
 
         m.selectedProjectID = p.ID
@@ -4774,6 +5271,7 @@ func (m *appModel) createOutlineFromModal(name string) error {
                 return err
         }
         _ = m.store.AppendEvent(actorID, "outline.create", o.ID, o)
+        m.refreshEventsTail()
         m.captureStoreModTimes()
 
         m.refreshOutlines(projectID)
@@ -4840,6 +5338,225 @@ func (m *appModel) openStatusPickerForOutline(outline model.Outline, currentStat
                 }
         }
         m.statusList.Select(selected)
+}
+
+func (m *appModel) openOutlineStatusDefsEditor(outline model.Outline, selectStatusID string) {
+        if m == nil {
+                return
+        }
+        oid := strings.TrimSpace(outline.ID)
+        if oid == "" {
+                return
+        }
+
+        items := make([]list.Item, 0, len(outline.StatusDefs))
+        for _, def := range outline.StatusDefs {
+                items = append(items, outlineStatusDefItem{def: def})
+        }
+        m.outlineStatusDefsList.Title = ""
+        m.outlineStatusDefsList.SetItems(items)
+
+        // Size similarly to the pickers, but allow more height.
+        modalW := m.width - 12
+        if modalW > m.width-4 {
+                modalW = m.width - 4
+        }
+        if modalW < 20 {
+                modalW = 20
+        }
+        if modalW > 96 {
+                modalW = 96
+        }
+        h := len(items) + 2
+        if h > 18 {
+                h = 18
+        }
+        if h < 8 {
+                h = 8
+        }
+        m.outlineStatusDefsList.SetSize(modalW-6, h)
+
+        // Preselect.
+        selected := 0
+        if strings.TrimSpace(selectStatusID) != "" {
+                for i := 0; i < len(items); i++ {
+                        if it, ok := items[i].(outlineStatusDefItem); ok && strings.TrimSpace(it.def.ID) == strings.TrimSpace(selectStatusID) {
+                                selected = i
+                                break
+                        }
+                }
+        }
+        m.outlineStatusDefsList.Select(selected)
+
+        m.modal = modalEditOutlineStatuses
+        m.modalForID = oid
+        m.modalForKey = ""
+}
+
+func (m *appModel) refreshOutlineStatusDefsEditor(outlineID, selectStatusID string) {
+        if m == nil {
+                return
+        }
+        oid := strings.TrimSpace(outlineID)
+        if oid == "" {
+                return
+        }
+        if m.db == nil {
+                return
+        }
+        if o, ok := m.db.FindOutline(oid); ok && o != nil {
+                m.selectedOutline = o
+                m.openOutlineStatusDefsEditor(*o, selectStatusID)
+        }
+}
+
+func (m *appModel) addOutlineStatusDef(outlineID, label string, end bool) (string, error) {
+        label = strings.TrimSpace(label)
+        if label == "" {
+                return "", errors.New("missing label")
+        }
+        createdID := ""
+        err := m.mutateOutline(outlineID, func(db *store.DB, o *model.Outline) (bool, outlineMutationResult, error) {
+                for _, def := range o.StatusDefs {
+                        if strings.TrimSpace(def.Label) == label {
+                                return false, outlineMutationResult{}, errors.New("status label already exists on this outline")
+                        }
+                }
+                id := store.NewStatusIDFromLabel(o, label)
+                createdID = id
+                o.StatusDefs = append(o.StatusDefs, model.OutlineStatusDef{ID: id, Label: label, IsEndState: end})
+                return true, outlineMutationResult{
+                        eventType:    "outline.status.add",
+                        eventPayload: map[string]any{"id": id, "label": label, "isEndState": end},
+                        minibuffer:   "Added status " + id,
+                }, nil
+        })
+        return createdID, err
+}
+
+func (m *appModel) renameOutlineStatusDef(outlineID, statusID, label string) error {
+        label = strings.TrimSpace(label)
+        if label == "" {
+                return errors.New("missing label")
+        }
+        statusID = strings.TrimSpace(statusID)
+        if statusID == "" {
+                return errors.New("missing status id")
+        }
+        return m.mutateOutline(outlineID, func(db *store.DB, o *model.Outline) (bool, outlineMutationResult, error) {
+                for _, def := range o.StatusDefs {
+                        if strings.TrimSpace(def.Label) == label {
+                                return false, outlineMutationResult{}, errors.New("status label already exists on this outline")
+                        }
+                }
+                for i := range o.StatusDefs {
+                        if strings.TrimSpace(o.StatusDefs[i].ID) != statusID {
+                                continue
+                        }
+                        if strings.TrimSpace(o.StatusDefs[i].Label) == label {
+                                return false, outlineMutationResult{}, nil
+                        }
+                        o.StatusDefs[i].Label = label
+                        return true, outlineMutationResult{
+                                eventType:    "outline.status.update",
+                                eventPayload: map[string]any{"id": statusID, "label": label, "ts": time.Now().UTC()},
+                                minibuffer:   "Renamed status " + statusID,
+                        }, nil
+                }
+                return false, outlineMutationResult{}, errors.New("status not found")
+        })
+}
+
+func (m *appModel) toggleOutlineStatusEndState(outlineID, statusID string) error {
+        statusID = strings.TrimSpace(statusID)
+        if statusID == "" {
+                return errors.New("missing status id")
+        }
+        return m.mutateOutline(outlineID, func(db *store.DB, o *model.Outline) (bool, outlineMutationResult, error) {
+                for i := range o.StatusDefs {
+                        if strings.TrimSpace(o.StatusDefs[i].ID) != statusID {
+                                continue
+                        }
+                        o.StatusDefs[i].IsEndState = !o.StatusDefs[i].IsEndState
+                        return true, outlineMutationResult{
+                                eventType:    "outline.status.update",
+                                eventPayload: map[string]any{"id": statusID, "isEndState": o.StatusDefs[i].IsEndState, "ts": time.Now().UTC()},
+                                minibuffer:   "Updated status " + statusID,
+                        }, nil
+                }
+                return false, outlineMutationResult{}, errors.New("status not found")
+        })
+}
+
+func (m *appModel) removeOutlineStatusDef(outlineID, statusID string) error {
+        statusID = strings.TrimSpace(statusID)
+        if statusID == "" {
+                return errors.New("missing status id")
+        }
+        return m.mutateOutline(outlineID, func(db *store.DB, o *model.Outline) (bool, outlineMutationResult, error) {
+                // Block removal if any item uses it.
+                for _, it := range db.Items {
+                        if strings.TrimSpace(it.OutlineID) == strings.TrimSpace(o.ID) && strings.TrimSpace(it.StatusID) == statusID {
+                                return false, outlineMutationResult{}, errors.New("cannot remove status: in use by items")
+                        }
+                }
+                next := make([]model.OutlineStatusDef, 0, len(o.StatusDefs))
+                removed := false
+                for _, def := range o.StatusDefs {
+                        if strings.TrimSpace(def.ID) == statusID {
+                                removed = true
+                                continue
+                        }
+                        next = append(next, def)
+                }
+                if !removed {
+                        return false, outlineMutationResult{}, errors.New("status not found")
+                }
+                if len(next) == 0 {
+                        return false, outlineMutationResult{}, errors.New("cannot remove last status from an outline")
+                }
+                o.StatusDefs = next
+                return true, outlineMutationResult{
+                        eventType:    "outline.status.remove",
+                        eventPayload: map[string]any{"id": statusID},
+                        minibuffer:   "Removed status " + statusID,
+                }, nil
+        })
+}
+
+func (m *appModel) moveOutlineStatusDef(outlineID, statusID string, delta int) error {
+        statusID = strings.TrimSpace(statusID)
+        if statusID == "" || delta == 0 {
+                return nil
+        }
+        return m.mutateOutline(outlineID, func(db *store.DB, o *model.Outline) (bool, outlineMutationResult, error) {
+                idx := -1
+                for i := range o.StatusDefs {
+                        if strings.TrimSpace(o.StatusDefs[i].ID) == statusID {
+                                idx = i
+                                break
+                        }
+                }
+                if idx < 0 {
+                        return false, outlineMutationResult{}, errors.New("status not found")
+                }
+                nextIdx := idx + delta
+                if nextIdx < 0 || nextIdx >= len(o.StatusDefs) {
+                        return false, outlineMutationResult{}, nil
+                }
+                defs := o.StatusDefs
+                defs[idx], defs[nextIdx] = defs[nextIdx], defs[idx]
+                o.StatusDefs = defs
+                labels := make([]string, 0, len(o.StatusDefs))
+                for _, d := range o.StatusDefs {
+                        labels = append(labels, d.Label)
+                }
+                return true, outlineMutationResult{
+                        eventType:    "outline.status.reorder",
+                        eventPayload: map[string]any{"labels": labels},
+                        minibuffer:   "Reordered statuses",
+                }, nil
+        })
 }
 
 func (m *appModel) openMoveOutlinePicker(itemID string) {
@@ -5122,9 +5839,14 @@ func (m *appModel) setStatusForItem(itemID, statusID string) error {
                         return false, itemMutationResult{}, nil
                 }
 
+                var outline model.Outline
+                if o, ok := db.FindOutline(strings.TrimSpace(it.OutlineID)); ok && o != nil {
+                        outline = *o
+                }
+
                 // Validate against outline status defs (empty is always allowed).
                 if statusID != "" {
-                        if o, ok := db.FindOutline(it.OutlineID); ok {
+                        if o, ok := db.FindOutline(it.OutlineID); ok && o != nil {
                                 valid := false
                                 for _, def := range o.StatusDefs {
                                         if def.ID == statusID {
@@ -5135,6 +5857,13 @@ func (m *appModel) setStatusForItem(itemID, statusID string) error {
                                 if !valid {
                                         return false, itemMutationResult{}, errors.New("invalid status")
                                 }
+                        }
+                }
+
+                // If setting an end-state status, ensure we can complete (no incomplete children/deps).
+                if isEndState(outline, statusID) {
+                        if reason := explainCompletionBlockers(db, it.ID); strings.TrimSpace(reason) != "" {
+                                return false, itemMutationResult{}, completionBlockedError{taskID: it.ID, reason: reason}
                         }
                 }
 
@@ -5155,9 +5884,13 @@ func (m *appModel) setStatusForItem(itemID, statusID string) error {
                 }
 
                 return true, itemMutationResult{
-                        eventType:    "item.set_status",
-                        eventPayload: map[string]any{"status": it.StatusID},
-                        minibuffer:   msg,
+                        eventType: "item.set_status",
+                        eventPayload: map[string]any{
+                                "from":   prev,
+                                "to":     strings.TrimSpace(it.StatusID),
+                                "status": strings.TrimSpace(it.StatusID), // backwards-compat
+                        },
+                        minibuffer: msg,
                 }, nil
         })
 }
@@ -5238,6 +5971,7 @@ func (m *appModel) reorderItem(t *model.Item, afterID, beforeID string) error {
         }
         actorID := strings.TrimSpace(m.db.CurrentActorID)
         _ = m.store.AppendEvent(actorID, "item.move", t.ID, map[string]any{"before": beforeID, "after": afterID, "rank": t.Rank})
+        m.refreshEventsTail()
         m.captureStoreModTimes()
         m.showMinibuffer("Moved " + t.ID)
         if m.selectedOutline != nil {
@@ -5287,6 +6021,7 @@ func (m *appModel) indentSelected() error {
                 return err
         }
         _ = m.store.AppendEvent(actorID, "item.set_parent", t.ID, map[string]any{"parent": newParentID, "rank": t.Rank})
+        m.refreshEventsTail()
         m.captureStoreModTimes()
         m.showMinibuffer("Indented " + t.ID)
         // Expand new parent so the moved item stays visible.
@@ -5367,6 +6102,7 @@ func (m *appModel) outdentSelected() error {
                 payload["parent"] = *destParentID
         }
         _ = m.store.AppendEvent(actorID, "item.set_parent", t.ID, payload)
+        m.refreshEventsTail()
         m.captureStoreModTimes()
         m.showMinibuffer("Outdented " + t.ID)
         if m.selectedOutline != nil {
@@ -5559,6 +6295,7 @@ func (m *appModel) addComment(itemID, body string) error {
                 return err
         }
         _ = m.store.AppendEvent(actorID, "comment.add", c.ID, c)
+        m.refreshEventsTail()
         m.captureStoreModTimes()
 
         if m.selectedOutline != nil {
@@ -5605,6 +6342,7 @@ func (m *appModel) addWorklog(itemID, body string) error {
                 return err
         }
         _ = m.store.AppendEvent(actorID, "worklog.add", w.ID, w)
+        m.refreshEventsTail()
         m.captureStoreModTimes()
 
         if m.selectedOutline != nil {

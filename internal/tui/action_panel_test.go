@@ -1,6 +1,7 @@
 package tui
 
 import (
+        "strings"
         "testing"
         "time"
 
@@ -185,5 +186,102 @@ func TestActionPanel_GlobalKeys_OpenPanels(t *testing.T) {
         }
         if got := m4.curActionPanelKind(); got != actionPanelCapture {
                 t.Fatalf("expected capture panel, got %v", got)
+        }
+}
+
+func TestActionPanel_ItemFocus_ShowsGroupedSectionsWithHeaders(t *testing.T) {
+        dir := t.TempDir()
+        s := store.Store{Dir: dir}
+
+        actorID := "act-human"
+        now := time.Now().UTC()
+        db := &store.DB{
+                CurrentActorID: actorID,
+                Actors:         []model.Actor{{ID: actorID, Kind: model.ActorKindHuman, Name: "human"}},
+                Projects: []model.Project{{
+                        ID:        "proj-a",
+                        Name:      "Project A",
+                        CreatedBy: actorID,
+                        CreatedAt: now,
+                }},
+                Outlines: []model.Outline{{
+                        ID:         "out-a",
+                        ProjectID:  "proj-a",
+                        StatusDefs: store.DefaultOutlineStatusDefs(),
+                        CreatedBy:  actorID,
+                        CreatedAt:  now,
+                }},
+                Items: []model.Item{{
+                        ID:           "item-a",
+                        ProjectID:    "proj-a",
+                        OutlineID:    "out-a",
+                        Rank:         "h",
+                        Title:        "Title",
+                        StatusID:     "todo",
+                        OwnerActorID: actorID,
+                        CreatedBy:    actorID,
+                        CreatedAt:    now,
+                        UpdatedAt:    now,
+                }},
+        }
+        if err := s.Save(db); err != nil {
+                t.Fatalf("save db: %v", err)
+        }
+
+        m := newAppModel(dir, db)
+        m.width = 120
+        m.view = viewOutline
+        m.pane = paneOutline
+        m.selectedProjectID = "proj-a"
+        m.selectedOutlineID = "out-a"
+        m.openActionPanel(actionPanelContext)
+
+        out := m.renderActionPanel()
+
+        // Ensure outline-status editing is advertised in the action panel.
+        if !strings.Contains(out, "Edit outline statuses") {
+                t.Fatalf("expected action panel to contain outline status editor entry; got:\n%s", out)
+        }
+
+        // Descriptive section headers.
+        wantHeaders := []string{
+                "OUTLINE VIEW",
+                "ITEM",
+                "GLOBAL",
+        }
+        for _, h := range wantHeaders {
+                if !strings.Contains(out, h) {
+                        t.Fatalf("expected action panel to contain header %q; got:\n%s", h, out)
+                }
+        }
+        if strings.Contains(out, "NAVIGATE") || strings.Contains(out, "DESTINATIONS") {
+                t.Fatalf("expected focused-item action panel not to include navigate grouping header; got:\n%s", out)
+        }
+
+        // For wide layouts, we should use multiple columns, meaning at least one line
+        // should contain two headers (sections are atomic and placed as whole blocks).
+        foundTwoHeadersInOneLine := false
+        for _, ln := range strings.Split(out, "\n") {
+                seen := 0
+                for _, h := range wantHeaders {
+                        if strings.Contains(ln, h) {
+                                seen++
+                        }
+                }
+                if seen >= 2 {
+                        foundTwoHeadersInOneLine = true
+                        break
+                }
+        }
+        if !foundTwoHeadersInOneLine {
+                t.Fatalf("expected at least one multi-column line containing 2+ section headers (section blocks); got:\n%s", out)
+        }
+
+        // Since groups are placed as whole blocks, actions inside a group should be listed
+        // vertically (not packed side-by-side within the same group).
+        for _, ln := range strings.Split(out, "\n") {
+                if strings.Contains(ln, "Open item") && strings.Contains(ln, "Toggle preview") {
+                        t.Fatalf("expected group actions not to be packed into a single line; got:\n%s", out)
+                }
         }
 }
