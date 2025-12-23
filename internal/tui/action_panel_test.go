@@ -286,6 +286,75 @@ func TestActionPanel_ItemFocus_ShowsGroupedSectionsWithHeaders(t *testing.T) {
         }
 }
 
+func TestActionPanel_DetailPane_X_ShowsFocusedItemGroupsAndItemActions(t *testing.T) {
+        dir := t.TempDir()
+        s := store.Store{Dir: dir}
+
+        actorID := "act-human"
+        now := time.Now().UTC()
+        db := &store.DB{
+                CurrentActorID: actorID,
+                Actors:         []model.Actor{{ID: actorID, Kind: model.ActorKindHuman, Name: "human"}},
+                Projects: []model.Project{{
+                        ID:        "proj-a",
+                        Name:      "Project A",
+                        CreatedBy: actorID,
+                        CreatedAt: now,
+                }},
+                Outlines: []model.Outline{{
+                        ID:         "out-a",
+                        ProjectID:  "proj-a",
+                        StatusDefs: store.DefaultOutlineStatusDefs(),
+                        CreatedBy:  actorID,
+                        CreatedAt:  now,
+                }},
+                Items: []model.Item{{
+                        ID:           "item-a",
+                        ProjectID:    "proj-a",
+                        OutlineID:    "out-a",
+                        Rank:         "h",
+                        Title:        "Title",
+                        StatusID:     "todo",
+                        OwnerActorID: actorID,
+                        CreatedBy:    actorID,
+                        CreatedAt:    now,
+                        UpdatedAt:    now,
+                }},
+        }
+        if err := s.Save(db); err != nil {
+                t.Fatalf("save db: %v", err)
+        }
+
+        m := newAppModel(dir, db)
+        m.width = 120
+        m.view = viewOutline
+        m.selectedProjectID = "proj-a"
+        m.selectedOutlineID = "out-a"
+        m.showPreview = true
+        m.pane = paneDetail
+        if o, ok := m.db.FindOutline("out-a"); ok && o != nil {
+                m.selectedOutline = o
+                m.refreshItems(*o)
+        }
+        selectListItemByID(&m.itemsList, "item-a")
+
+        m.openActionPanel(actionPanelContext)
+        out := m.renderActionPanel()
+
+        // Should use the same focused-item grouped layout as outline pane focus.
+        for _, h := range []string{"OUTLINE VIEW", "ITEM", "GLOBAL"} {
+                if !strings.Contains(out, h) {
+                        t.Fatalf("expected action panel to contain header %q; got:\n%s", h, out)
+                }
+        }
+        // And include key item actions.
+        for _, want := range []string{"Edit title", "Toggle priority", "Add comment"} {
+                if !strings.Contains(out, want) {
+                        t.Fatalf("expected action panel to contain %q; got:\n%s", want, out)
+                }
+        }
+}
+
 func TestActionPanel_ItemView_ShowsItemSectionAndItemActions(t *testing.T) {
         dir := t.TempDir()
         s := store.Store{Dir: dir}
@@ -334,13 +403,13 @@ func TestActionPanel_ItemView_ShowsItemSectionAndItemActions(t *testing.T) {
         m.openActionPanel(actionPanelContext)
 
         out := m.renderActionPanel()
-        for _, h := range []string{"GO TO", "OTHER"} {
+        for _, h := range []string{"ITEM", "GLOBAL"} {
                 if !strings.Contains(out, h) {
                         t.Fatalf("expected action panel to contain header %q; got:\n%s", h, out)
                 }
         }
         // Key actions should be discoverable from the item view action panel.
-        for _, want := range []string{"Copy item ref", "Copy CLI show command", "Move to outline", "Archive item"} {
+        for _, want := range []string{"Edit title", "Edit description", "Toggle priority", "Add comment", "Move to outline", "Archive item"} {
                 if !strings.Contains(out, want) {
                         t.Fatalf("expected action panel to contain %q; got:\n%s", want, out)
                 }
@@ -401,12 +470,12 @@ func TestActionPanel_DetailPane_FocusedItemGrouping(t *testing.T) {
         m.openActionPanel(actionPanelContext)
 
         out := m.renderActionPanel()
-        for _, h := range []string{"GO TO", "OTHER"} {
+        for _, h := range []string{"OUTLINE VIEW", "ITEM", "GLOBAL"} {
                 if !strings.Contains(out, h) {
                         t.Fatalf("expected action panel to contain header %q; got:\n%s", h, out)
                 }
         }
-        for _, want := range []string{"Toggle focus (outline/detail)", "Open item", "Toggle preview"} {
+        for _, want := range []string{"Toggle focus (outline/detail)", "Edit title", "Toggle priority", "Add comment"} {
                 if !strings.Contains(out, want) {
                         t.Fatalf("expected action panel to contain %q; got:\n%s", want, out)
                 }

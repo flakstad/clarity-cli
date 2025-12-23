@@ -605,6 +605,12 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         actions["r"] = actionPanelAction{label: "Archive outline", kind: actionPanelActionExec}
                         actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
                 case viewItem:
+                        actions["e"] = actionPanelAction{label: "Edit title", kind: actionPanelActionExec}
+                        actions["D"] = actionPanelAction{label: "Edit description", kind: actionPanelActionExec}
+                        actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
+                        actions[" "] = actionPanelAction{label: "Change status", kind: actionPanelActionExec}
+                        actions["C"] = actionPanelAction{label: "Add comment", kind: actionPanelActionExec}
+                        actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
                         actions["y"] = actionPanelAction{label: "Copy item ref (includes --workspace)", kind: actionPanelActionExec}
                         actions["Y"] = actionPanelAction{label: "Copy CLI show command (includes --workspace)", kind: actionPanelActionExec}
                         actions["m"] = actionPanelAction{label: "Move to outline…", kind: actionPanelActionExec}
@@ -2430,7 +2436,9 @@ func (m appModel) renderActionPanel() string {
         actions := m.actionPanelActions()
         seen := map[string]bool{}
 
-        isFocusedItemContext := m.curActionPanelKind() == actionPanelContext && m.view == viewOutline && m.pane == paneOutline
+        isFocusedItemContext := m.curActionPanelKind() == actionPanelContext &&
+                ((m.view == viewOutline && (m.pane == paneOutline || (m.pane == paneDetail && m.splitPreviewVisible()))) ||
+                        m.view == viewItem)
 
         renderCell := func(k string, a actionPanelAction) string {
                 return fmt.Sprintf("%-12s %s", actionPanelDisplayKey(k), a.label)
@@ -2516,37 +2524,56 @@ func (m appModel) renderActionPanel() string {
                 addSection("Go to", navKeys)
         }
 
-        // When focused on an item (outline pane), present clearer grouped actions.
+        // When focused on an item, present clearer grouped actions.
         if isFocusedItemContext {
-                // Regroup by "what you're operating on":
-                // - Outline View: view/navigation of the outline split view
-                // - Item: mutations + collaboration actions on the selected item
-                // - Global: app-level entrypoints (navigate / agenda / capture / quit)
+                switch m.view {
+                case viewItem:
+                        // Full-screen item page: show item work + global entrypoints.
+                        addSection("Item", []string{"e", "D", "p", " ", "C", "w", "m", "y", "Y", "r"})
 
-                addSection("Outline View", []string{"enter", "o", "v", "S", "tab", "z", "Z"})
-
-                // Item work: all changes + notes/comments, and related helpers.
-                addSection("Item", []string{
-                        "e", "n", "N", // title/new items
-                        " ", "shift+left", "shift+right", // status
-                        "m",      // move
-                        "C", "w", // comment/worklog
-                        "y", "Y", // copy helpers (still item-scoped)
-                        "r", // archive
-                })
-
-                // Global entrypoints.
-                globalKeys := []string{}
-                for _, k := range []string{"g", "a", "c"} {
-                        if a, ok := actions[k]; ok && a.kind == actionPanelActionNav {
-                                globalKeys = append(globalKeys, k)
+                        globalKeys := []string{}
+                        for _, k := range []string{"g", "a", "c"} {
+                                if a, ok := actions[k]; ok && a.kind == actionPanelActionNav {
+                                        globalKeys = append(globalKeys, k)
+                                }
                         }
+                        if _, ok := actions["q"]; ok {
+                                globalKeys = append(globalKeys, "q")
+                        }
+                        addSection("Global", globalKeys)
+
+                default:
+                        // Regroup by "what you're operating on":
+                        // - Outline View: view/navigation of the outline split view
+                        // - Item: mutations + collaboration actions on the selected item
+                        // - Global: app-level entrypoints (navigate / agenda / capture / quit)
+
+                        addSection("Outline View", []string{"enter", "o", "v", "S", "tab", "z", "Z"})
+
+                        // Item work: all changes + notes/comments, and related helpers.
+                        addSection("Item", []string{
+                                "e", "n", "N", // title/new items
+                                " ", "shift+left", "shift+right", // status
+                                "p", "D", // priority/description
+                                "m",      // move
+                                "C", "w", // comment/worklog
+                                "y", "Y", // copy helpers (still item-scoped)
+                                "r", // archive
+                        })
+
+                        // Global entrypoints.
+                        globalKeys := []string{}
+                        for _, k := range []string{"g", "a", "c"} {
+                                if a, ok := actions[k]; ok && a.kind == actionPanelActionNav {
+                                        globalKeys = append(globalKeys, k)
+                                }
+                        }
+                        // Quit is always global.
+                        if _, ok := actions["q"]; ok {
+                                globalKeys = append(globalKeys, "q")
+                        }
+                        addSection("Global", globalKeys)
                 }
-                // Quit is always global.
-                if _, ok := actions["q"]; ok {
-                        globalKeys = append(globalKeys, "q")
-                }
-                addSection("Global", globalKeys)
         } else {
                 // Default: show remaining actions in sorted order.
                 rest := make([]string, 0, len(entries))
