@@ -389,3 +389,87 @@ func (i agendaHeadingItem) Title() string {
         return lipgloss.NewStyle().Foreground(ac("240", "245")).Bold(true).Render(p + " / " + o)
 }
 func (i agendaHeadingItem) Description() string { return "" }
+
+// Archived list items (used by the Archived view).
+
+type archivedHeadingItem struct {
+        label string
+}
+
+func (i archivedHeadingItem) FilterValue() string { return strings.TrimSpace(i.label) }
+func (i archivedHeadingItem) Title() string {
+        lbl := strings.TrimSpace(i.label)
+        if lbl == "" {
+                lbl = "Archived"
+        }
+        return lipgloss.NewStyle().Foreground(ac("240", "245")).Bold(true).Render(lbl)
+}
+func (i archivedHeadingItem) Description() string { return "" }
+
+type archivedProjectItem struct {
+        projectName string
+        projectID   string
+}
+
+func (i archivedProjectItem) FilterValue() string {
+        return strings.TrimSpace(i.projectName + " " + i.projectID)
+}
+func (i archivedProjectItem) Title() string {
+        name := strings.TrimSpace(i.projectName)
+        if name == "" {
+                name = "(unnamed project)"
+        }
+        // Display-only row: keep it muted.
+        return lipgloss.NewStyle().Foreground(ac("241", "245")).Render(name)
+}
+func (i archivedProjectItem) Description() string { return strings.TrimSpace(i.projectID) }
+
+type archivedOutlineItem struct {
+        projectName string
+        outlineName string
+        outlineID   string
+}
+
+func (i archivedOutlineItem) FilterValue() string {
+        return strings.TrimSpace(i.projectName + " " + i.outlineName + " " + i.outlineID)
+}
+func (i archivedOutlineItem) Title() string {
+        p := strings.TrimSpace(i.projectName)
+        if p == "" {
+                p = "(project)"
+        }
+        o := strings.TrimSpace(i.outlineName)
+        if o == "" {
+                o = "(unnamed outline)"
+        }
+        // Display-only row: keep it muted and include context.
+        return lipgloss.NewStyle().Foreground(ac("241", "245")).Render(p + " / " + o)
+}
+func (i archivedOutlineItem) Description() string { return strings.TrimSpace(i.outlineID) }
+
+type archivedItemRowItem struct {
+        projectName string
+        outlineName string
+        title       string
+        itemID      string
+}
+
+func (i archivedItemRowItem) FilterValue() string {
+        return strings.TrimSpace(i.projectName + " " + i.outlineName + " " + i.title + " " + i.itemID)
+}
+func (i archivedItemRowItem) Title() string {
+        p := strings.TrimSpace(i.projectName)
+        if p == "" {
+                p = "(project)"
+        }
+        o := strings.TrimSpace(i.outlineName)
+        if o == "" {
+                o = "(outline)"
+        }
+        t := strings.TrimSpace(i.title)
+        if t == "" {
+                t = "(untitled)"
+        }
+        return fmt.Sprintf("%s / %s  %s", p, o, t)
+}
+func (i archivedItemRowItem) Description() string { return strings.TrimSpace(i.itemID) }

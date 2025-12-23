@@ -30,6 +30,7 @@ const (
         viewOutline
         viewItem
         viewAgenda
+        viewArchived
 )
 
 type reloadTickMsg struct{}
@@ -221,6 +222,7 @@ type appModel struct {
         outlinePickList list.Model
         workspaceList   list.Model
         agendaList      list.Model
+        archivedList    list.Model
         // outlineStatusDefsList is used in the outline statuses editor modal.
         outlineStatusDefsList list.Model
 
@@ -232,24 +234,27 @@ type appModel struct {
         showPreview bool
         openItemID  string
         // recentItemIDs stores most-recently-visited item ids (full item view only), newest first.
-        recentItemIDs       []string
-        returnView          view
-        hasReturnView       bool
-        agendaReturnView    view
-        hasAgendaReturnView bool
-        agendaCollapsed     map[string]bool
-        collapsed           map[string]bool
-        collapseInitialized bool
+        recentItemIDs         []string
+        returnView            view
+        hasReturnView         bool
+        agendaReturnView      view
+        hasAgendaReturnView   bool
+        archivedReturnView    view
+        hasArchivedReturnView bool
+        agendaCollapsed       map[string]bool
+        collapsed             map[string]bool
+        collapseInitialized   bool
         // itemFocus is used on the full-screen item view to allow Tab navigation across
         // editable fields (title/status/description/comment/worklog).
-        itemFocus      itemPageFocus
-        itemCommentIdx int
-        itemWorklogIdx int
-        itemHistoryIdx int
-        itemSideScroll int
-        itemChildIdx   int
-        itemChildOff   int
-        itemNavStack   []itemNavEntry
+        itemFocus            itemPageFocus
+        itemCommentIdx       int
+        itemWorklogIdx       int
+        itemHistoryIdx       int
+        itemSideScroll       int
+        itemChildIdx         int
+        itemChildOff         int
+        itemNavStack         []itemNavEntry
+        itemArchivedReadOnly bool
         // Per-outline display mode for the outline view (experimental).
         outlineViewMode map[string]outlineViewMode
 
@@ -501,8 +506,25 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                                 mm.view = viewProjects
                                 mm.showPreview = false
                                 mm.openItemID = ""
+                                mm.itemArchivedReadOnly = false
                                 mm.pane = paneOutline
                                 mm.refreshProjects()
+                                return mm, nil
+                        },
+                }
+                actions["A"] = actionPanelAction{
+                        label: "Archived",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                mm.hasArchivedReturnView = true
+                                mm.archivedReturnView = mm.view
+                                mm.view = viewArchived
+                                mm.showPreview = false
+                                mm.openItemID = ""
+                                mm.hasReturnView = false
+                                mm.itemArchivedReadOnly = false
+                                mm.pane = paneOutline
+                                mm.refreshArchived()
                                 return mm, nil
                         },
                 }
@@ -630,6 +652,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                                                 return mm, nil
                                         }
                                         mm.view = viewItem
+                                        mm.itemArchivedReadOnly = false
                                         mm.itemFocus = itemFocusTitle
                                         mm.itemCommentIdx = 0
                                         mm.itemWorklogIdx = 0
@@ -699,17 +722,32 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         actions["r"] = actionPanelAction{label: "Archive outline", kind: actionPanelActionExec}
                         actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
                 case viewItem:
-                        actions["e"] = actionPanelAction{label: "Edit title", kind: actionPanelActionExec}
-                        actions["D"] = actionPanelAction{label: "Edit description", kind: actionPanelActionExec}
-                        actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
-                        actions[" "] = actionPanelAction{label: "Change status", kind: actionPanelActionExec}
-                        actions["C"] = actionPanelAction{label: "Add comment", kind: actionPanelActionExec}
-                        actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
-                        actions["y"] = actionPanelAction{label: "Copy item ref (includes --workspace)", kind: actionPanelActionExec}
-                        actions["Y"] = actionPanelAction{label: "Copy CLI show command (includes --workspace)", kind: actionPanelActionExec}
-                        actions["m"] = actionPanelAction{label: "Move to outline…", kind: actionPanelActionExec}
-                        actions["r"] = actionPanelAction{label: "Archive item", kind: actionPanelActionExec}
-                        actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
+                        readOnly := false
+                        if m.db != nil {
+                                id := strings.TrimSpace(m.openItemID)
+                                if id != "" {
+                                        if it, ok := m.db.FindItem(id); ok && it != nil && (it.Archived || m.itemArchivedReadOnly) {
+                                                readOnly = true
+                                        }
+                                }
+                        }
+                        if readOnly {
+                                actions["y"] = actionPanelAction{label: "Copy item ref (includes --workspace)", kind: actionPanelActionExec}
+                                actions["Y"] = actionPanelAction{label: "Copy CLI show command (includes --workspace)", kind: actionPanelActionExec}
+                                actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
+                        } else {
+                                actions["e"] = actionPanelAction{label: "Edit title", kind: actionPanelActionExec}
+                                actions["D"] = actionPanelAction{label: "Edit description", kind: actionPanelActionExec}
+                                actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
+                                actions[" "] = actionPanelAction{label: "Change status", kind: actionPanelActionExec}
+                                actions["C"] = actionPanelAction{label: "Add comment", kind: actionPanelActionExec}
+                                actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
+                                actions["y"] = actionPanelAction{label: "Copy item ref (includes --workspace)", kind: actionPanelActionExec}
+                                actions["Y"] = actionPanelAction{label: "Copy CLI show command (includes --workspace)", kind: actionPanelActionExec}
+                                actions["m"] = actionPanelAction{label: "Move to outline…", kind: actionPanelActionExec}
+                                actions["r"] = actionPanelAction{label: "Archive item", kind: actionPanelActionExec}
+                                actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
+                        }
                 case viewOutline:
                         actions["enter"] = actionPanelAction{label: "Open item", kind: actionPanelActionExec}
                         actions["o"] = actionPanelAction{label: "Toggle preview", kind: actionPanelActionExec}
@@ -832,6 +870,9 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
         m.agendaList.SetDelegate(newCompactItemDelegate())
         m.agendaCollapsed = map[string]bool{}
 
+        m.archivedList = newList("Archived", "Archived content", []list.Item{})
+        m.archivedList.SetDelegate(newCompactItemDelegate())
+
         m.statusList = newList("Status", "Select a status", []list.Item{})
         m.statusList.SetDelegate(newCompactItemDelegate())
         m.statusList.SetFilteringEnabled(false)
@@ -926,6 +967,8 @@ func viewToString(v view) string {
                 return "item"
         case viewAgenda:
                 return "agenda"
+        case viewArchived:
+                return "archived"
         default:
                 return "projects"
         }
@@ -943,6 +986,8 @@ func viewFromString(s string) (view, bool) {
                 return viewItem, true
         case "agenda":
                 return viewAgenda, true
+        case "archived":
+                return viewArchived, true
         default:
                 return viewProjects, false
         }
@@ -1082,6 +1127,13 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
         }
 
         wantView, _ := viewFromString(st.View)
+
+        // Archived is a standalone view (doesn't require project/outline context).
+        if wantView == viewArchived {
+                m.view = viewArchived
+                m.refreshArchived()
+                return
+        }
 
         // If we were on an item view, prefer the item's project/outline to keep breadcrumbs consistent.
         openItemID := strings.TrimSpace(st.OpenItemID)
@@ -1520,14 +1572,19 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.view = m.returnView
                                         m.hasReturnView = false
                                         m.openItemID = ""
+                                        m.itemArchivedReadOnly = false
                                         m.showPreview = false
                                         m.pane = paneOutline
                                         if m.view == viewAgenda {
                                                 m.refreshAgenda()
                                         }
+                                        if m.view == viewArchived {
+                                                m.refreshArchived()
+                                        }
                                 } else {
                                         m.view = viewOutline
                                         m.openItemID = ""
+                                        m.itemArchivedReadOnly = false
                                         m.showPreview = false
                                         m.pane = paneOutline
                                         if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
@@ -1553,6 +1610,28 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                         case viewOutlines:
                                 m.view = viewProjects
                                 m.refreshProjects()
+                                return m, nil
+                        case viewArchived:
+                                if m.hasArchivedReturnView {
+                                        m.view = m.archivedReturnView
+                                        m.hasArchivedReturnView = false
+                                } else {
+                                        m.view = viewProjects
+                                }
+                                switch m.view {
+                                case viewProjects:
+                                        m.refreshProjects()
+                                case viewOutlines:
+                                        m.refreshOutlines(m.selectedProjectID)
+                                case viewAgenda:
+                                        m.refreshAgenda()
+                                case viewOutline:
+                                        if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
+                                                m.refreshItems(*o)
+                                        }
+                                case viewArchived:
+                                        m.refreshArchived()
+                                }
                                 return m, nil
                         }
                 case "esc":
@@ -1599,14 +1678,19 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.view = m.returnView
                                         m.hasReturnView = false
                                         m.openItemID = ""
+                                        m.itemArchivedReadOnly = false
                                         m.showPreview = false
                                         m.pane = paneOutline
                                         if m.view == viewAgenda {
                                                 m.refreshAgenda()
                                         }
+                                        if m.view == viewArchived {
+                                                m.refreshArchived()
+                                        }
                                 } else {
                                         m.view = viewOutline
                                         m.openItemID = ""
+                                        m.itemArchivedReadOnly = false
                                         m.showPreview = false
                                         m.pane = paneOutline
                                         if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
@@ -1636,6 +1720,28 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 m.view = viewProjects
                                 m.refreshProjects()
                                 return m, nil
+                        case viewArchived:
+                                if m.hasArchivedReturnView {
+                                        m.view = m.archivedReturnView
+                                        m.hasArchivedReturnView = false
+                                } else {
+                                        m.view = viewProjects
+                                }
+                                switch m.view {
+                                case viewProjects:
+                                        m.refreshProjects()
+                                case viewOutlines:
+                                        m.refreshOutlines(m.selectedProjectID)
+                                case viewAgenda:
+                                        m.refreshAgenda()
+                                case viewOutline:
+                                        if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
+                                                m.refreshItems(*o)
+                                        }
+                                case viewArchived:
+                                        m.refreshArchived()
+                                }
+                                return m, nil
                         }
                 case "enter":
                         switch m.view {
@@ -1661,6 +1767,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.pane = paneOutline
                                         m.showPreview = false
                                         m.openItemID = ""
+                                        m.itemArchivedReadOnly = false
                                         m.collapsed = map[string]bool{}
                                         m.collapseInitialized = false
                                         m.refreshItems(it.outline)
@@ -1679,6 +1786,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.openItemID = it.row.item.ID
                                         (&m).recordRecentItemVisit(m.openItemID)
                                         m.view = viewItem
+                                        m.itemArchivedReadOnly = false
                                         m.itemFocus = itemFocusTitle
                                         m.itemCommentIdx = 0
                                         m.itemWorklogIdx = 0
@@ -1686,6 +1794,33 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.itemSideScroll = 0
                                         m.hasReturnView = true
                                         m.returnView = viewAgenda
+                                        m.showPreview = false
+                                        m.pane = paneOutline
+                                        return m, nil
+                                }
+                        case viewArchived:
+                                if it, ok := m.archivedList.SelectedItem().(archivedItemRowItem); ok {
+                                        id := strings.TrimSpace(it.itemID)
+                                        if id == "" {
+                                                return m, nil
+                                        }
+                                        if item, ok := m.db.FindItem(id); ok && item != nil {
+                                                m.selectedProjectID = item.ProjectID
+                                                m.selectedOutlineID = item.OutlineID
+                                                if o, ok := m.db.FindOutline(item.OutlineID); ok && o != nil {
+                                                        m.selectedOutline = o
+                                                }
+                                        }
+                                        m.openItemID = id
+                                        m.view = viewItem
+                                        m.itemArchivedReadOnly = true
+                                        m.itemFocus = itemFocusTitle
+                                        m.itemCommentIdx = 0
+                                        m.itemWorklogIdx = 0
+                                        m.itemHistoryIdx = 0
+                                        m.itemSideScroll = 0
+                                        m.hasReturnView = true
+                                        m.returnView = viewArchived
                                         m.showPreview = false
                                         m.pane = paneOutline
                                         return m, nil
@@ -1783,6 +1918,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                         var cmd tea.Cmd
                         m.agendaList, cmd = m.agendaList.Update(msg)
                         return m, cmd
+                case viewArchived:
+                        var cmd tea.Cmd
+                        m.archivedList, cmd = m.archivedList.Update(msg)
+                        return m, cmd
                 case viewOutline:
                         return m.updateOutline(msg)
                 case viewItem:
@@ -1847,6 +1986,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                 if !ok {
                         return m, nil
                 }
+                readOnly := m.itemArchivedReadOnly || it.Archived
 
                 comments := m.db.CommentsForItem(it.ID)
                 worklog := m.db.WorklogForItem(it.ID)
@@ -2015,6 +2155,14 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.itemFocus = m.itemFocus.prev()
                         return m, nil
                 case "enter":
+                        // Archived view is read-only: allow opening children, but block mutations.
+                        if readOnly {
+                                switch m.itemFocus {
+                                case itemFocusTitle, itemFocusStatus, itemFocusPriority, itemFocusDescription:
+                                        m.showMinibuffer("Archived item: read-only")
+                                        return m, nil
+                                }
+                        }
                         switch m.itemFocus {
                         case itemFocusTitle:
                                 m.openInputModal(modalEditTitle, activeID, "Title", active.Title)
@@ -2061,6 +2209,10 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, nil
                         }
                 case "e":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
                         if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
                                 m.itemNavStack = append(m.itemNavStack, itemNavEntry{itemID: strings.TrimSpace(it.ID), childID: strings.TrimSpace(activeID)})
                                 if len(m.itemNavStack) > 64 {
@@ -2076,6 +2228,10 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.openInputModal(modalEditTitle, activeID, "Title", active.Title)
                         return m, nil
                 case "D":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
                         if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
                                 m.itemNavStack = append(m.itemNavStack, itemNavEntry{itemID: strings.TrimSpace(it.ID), childID: strings.TrimSpace(activeID)})
                                 if len(m.itemNavStack) > 64 {
@@ -2091,12 +2247,20 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.openTextModal(modalEditDescription, activeID, "Markdown description…", active.Description)
                         return m, nil
                 case "p":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
                         // Toggle priority.
                         if err := m.togglePriority(activeID); err != nil {
                                 return m, m.reportError(activeID, err)
                         }
                         return m, nil
                 case "C":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
                         if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
                                 m.itemNavStack = append(m.itemNavStack, itemNavEntry{itemID: strings.TrimSpace(it.ID), childID: strings.TrimSpace(activeID)})
                                 if len(m.itemNavStack) > 64 {
@@ -2121,6 +2285,10 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.openTextModal(modalAddComment, it.ID, "Write a comment…", "")
                         return m, nil
                 case "R":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
                         // Reply to selected comment (comments side panel).
                         if m.itemFocus != itemFocusComments || len(commentRows) == 0 {
                                 return m, nil
@@ -2148,6 +2316,10 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.textarea.Focus()
                         return m, nil
                 case "w":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
                         if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
                                 m.itemNavStack = append(m.itemNavStack, itemNavEntry{itemID: strings.TrimSpace(it.ID), childID: strings.TrimSpace(activeID)})
                                 if len(m.itemNavStack) > 64 {
@@ -2166,6 +2338,10 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.openTextModal(modalAddWorklog, it.ID, "Log work…", "")
                         return m, nil
                 case " ":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
                         m.itemFocus = itemFocusStatus
                         if o, ok := m.db.FindOutline(active.OutlineID); ok {
                                 m.openStatusPicker(*o, activeID, active.StatusID)
@@ -2174,9 +2350,17 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                         return m, nil
                 case "m":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
                         m.openMoveOutlinePicker(activeID)
                         return m, nil
                 case "r":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
                         m.modal = modalConfirmArchive
                         m.modalForID = activeID
                         m.archiveFor = archiveTargetItem
@@ -2220,6 +2404,8 @@ func (m appModel) View() string {
                 body = m.viewOutlines()
         case viewAgenda:
                 body = m.viewAgenda()
+        case viewArchived:
+                body = m.viewArchived()
         case viewOutline:
                 body = m.viewOutline()
         case viewItem:
@@ -2263,6 +2449,9 @@ func (m *appModel) breadcrumbText() string {
         parts := []string{m.workspaceLabel()}
         if m.view == viewAgenda {
                 return strings.Join(append(parts, "agenda"), " > ")
+        }
+        if m.view == viewArchived {
+                return strings.Join(append(parts, "archived"), " > ")
         }
         if m.view == viewProjects {
                 return strings.Join(parts, " > ")
@@ -2411,6 +2600,38 @@ func (m *appModel) viewAgenda() string {
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
         main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.agendaList.View()
+        main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
+        if m.modal == modalNone {
+                return main
+        }
+        bg := dimBackground(main)
+        fg := m.renderModal()
+        return overlayCenter(bg, fg, w, frameH)
+}
+
+func (m *appModel) viewArchived() string {
+        frameH := m.height - 6
+        if frameH < 8 {
+                frameH = 8
+        }
+        bodyHeight := frameH - (topPadLines + breadcrumbGap + 2)
+        if bodyHeight < 6 {
+                bodyHeight = 6
+        }
+
+        w := m.width
+        if w < 10 {
+                w = 10
+        }
+
+        contentW := w - 2*splitOuterMargin
+        if contentW < 10 {
+                contentW = w
+        }
+        m.archivedList.SetSize(contentW, bodyHeight)
+
+        crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.archivedList.View()
         main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
         if m.modal == modalNone {
                 return main
@@ -2605,7 +2826,7 @@ func (m appModel) renderActionPanel() string {
         //   (We don't want to "steal" exec actions like "o" Toggle preview from the View section.)
         // - In the Go to panel, show destinations explicitly.
         if m.curActionPanelKind() == actionPanelNav {
-                addSection("Destinations", []string{"p", "o", "l", "i"})
+                addSection("Destinations", []string{"p", "A", "o", "l", "i"})
                 // Note: "Recent items" are rendered as a special full-width block at the bottom.
                 // Mark them as seen so they don't fall into "Other".
                 for _, k := range []string{"1", "2", "3", "4", "5"} {
@@ -3418,6 +3639,180 @@ func (m *appModel) refreshAgenda() {
         }
 }
 
+func (m *appModel) refreshArchived() {
+        if m == nil || m.db == nil {
+                return
+        }
+
+        // Preserve selection (best-effort).
+        curItemID := ""
+        if it, ok := m.archivedList.SelectedItem().(archivedItemRowItem); ok {
+                curItemID = strings.TrimSpace(it.itemID)
+        }
+
+        projectNameByID := map[string]string{}
+        for _, p := range m.db.Projects {
+                projectNameByID[p.ID] = strings.TrimSpace(p.Name)
+        }
+        outlineNameByID := map[string]string{}
+        for _, o := range m.db.Outlines {
+                outlineNameByID[o.ID] = outlineDisplayName(o)
+        }
+
+        // Archived projects.
+        projects := make([]model.Project, 0, len(m.db.Projects))
+        for _, p := range m.db.Projects {
+                if p.Archived {
+                        projects = append(projects, p)
+                }
+        }
+        sort.Slice(projects, func(i, j int) bool {
+                ni := strings.ToLower(strings.TrimSpace(projects[i].Name))
+                nj := strings.ToLower(strings.TrimSpace(projects[j].Name))
+                if ni == nj {
+                        return projects[i].ID < projects[j].ID
+                }
+                if ni == "" {
+                        return false
+                }
+                if nj == "" {
+                        return true
+                }
+                return ni < nj
+        })
+
+        // Archived outlines.
+        outlines := make([]model.Outline, 0, len(m.db.Outlines))
+        for _, o := range m.db.Outlines {
+                if o.Archived {
+                        outlines = append(outlines, o)
+                }
+        }
+        sort.Slice(outlines, func(i, j int) bool {
+                pi := strings.ToLower(strings.TrimSpace(projectNameByID[outlines[i].ProjectID]))
+                pj := strings.ToLower(strings.TrimSpace(projectNameByID[outlines[j].ProjectID]))
+                if pi != pj {
+                        if pi == "" {
+                                return false
+                        }
+                        if pj == "" {
+                                return true
+                        }
+                        return pi < pj
+                }
+                oi := strings.ToLower(strings.TrimSpace(outlineDisplayName(outlines[i])))
+                oj := strings.ToLower(strings.TrimSpace(outlineDisplayName(outlines[j])))
+                if oi == oj {
+                        return outlines[i].ID < outlines[j].ID
+                }
+                if oi == "" {
+                        return false
+                }
+                if oj == "" {
+                        return true
+                }
+                return oi < oj
+        })
+
+        // Archived items.
+        itemsOnly := make([]model.Item, 0, len(m.db.Items))
+        for _, it := range m.db.Items {
+                if it.Archived {
+                        itemsOnly = append(itemsOnly, it)
+                }
+        }
+        sort.Slice(itemsOnly, func(i, j int) bool {
+                pi := strings.ToLower(strings.TrimSpace(projectNameByID[itemsOnly[i].ProjectID]))
+                pj := strings.ToLower(strings.TrimSpace(projectNameByID[itemsOnly[j].ProjectID]))
+                if pi != pj {
+                        if pi == "" {
+                                return false
+                        }
+                        if pj == "" {
+                                return true
+                        }
+                        return pi < pj
+                }
+                oi := strings.ToLower(strings.TrimSpace(outlineNameByID[itemsOnly[i].OutlineID]))
+                oj := strings.ToLower(strings.TrimSpace(outlineNameByID[itemsOnly[j].OutlineID]))
+                if oi != oj {
+                        if oi == "" {
+                                return false
+                        }
+                        if oj == "" {
+                                return true
+                        }
+                        return oi < oj
+                }
+                ti := strings.ToLower(strings.TrimSpace(itemsOnly[i].Title))
+                tj := strings.ToLower(strings.TrimSpace(itemsOnly[j].Title))
+                if ti == tj {
+                        return itemsOnly[i].ID < itemsOnly[j].ID
+                }
+                if ti == "" {
+                        return false
+                }
+                if tj == "" {
+                        return true
+                }
+                return ti < tj
+        })
+
+        // Render list rows.
+        rows := make([]list.Item, 0, 8+len(projects)+len(outlines)+len(itemsOnly))
+        if len(projects) == 0 && len(outlines) == 0 && len(itemsOnly) == 0 {
+                rows = append(rows, archivedHeadingItem{label: "No archived content"})
+                m.archivedList.SetItems(rows)
+                m.archivedList.Select(0)
+                return
+        }
+
+        rows = append(rows, archivedHeadingItem{label: "Archived projects"})
+        for _, p := range projects {
+                rows = append(rows, archivedProjectItem{
+                        projectName: p.Name,
+                        projectID:   p.ID,
+                })
+        }
+
+        rows = append(rows, archivedHeadingItem{label: "Archived outlines"})
+        for _, o := range outlines {
+                rows = append(rows, archivedOutlineItem{
+                        projectName: projectNameByID[o.ProjectID],
+                        outlineName: outlineDisplayName(o),
+                        outlineID:   o.ID,
+                })
+        }
+
+        rows = append(rows, archivedHeadingItem{label: "Archived items"})
+        for _, it := range itemsOnly {
+                rows = append(rows, archivedItemRowItem{
+                        projectName: projectNameByID[it.ProjectID],
+                        outlineName: outlineNameByID[it.OutlineID],
+                        title:       it.Title,
+                        itemID:      it.ID,
+                })
+        }
+
+        m.archivedList.SetItems(rows)
+
+        // Restore selection: prefer the previously-selected item; otherwise select the first real item row.
+        if curItemID != "" {
+                for i := 0; i < len(rows); i++ {
+                        if r, ok := rows[i].(archivedItemRowItem); ok && strings.TrimSpace(r.itemID) == curItemID {
+                                m.archivedList.Select(i)
+                                return
+                        }
+                }
+        }
+        for i := 0; i < len(rows); i++ {
+                if _, ok := rows[i].(archivedItemRowItem); ok {
+                        m.archivedList.Select(i)
+                        break
+                }
+        }
+}
+
 func (m *appModel) viewOutline() string {
         frameH, bodyHeight, contentW := m.outlineLayout()
         w := m.width
@@ -3859,6 +4254,8 @@ func (m *appModel) reloadFromDisk() error {
                 m.refreshOutlines(m.selectedProjectID)
         case viewAgenda:
                 m.refreshAgenda()
+        case viewArchived:
+                m.refreshArchived()
         case viewOutline:
                 if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
                         m.refreshItems(*o)
@@ -4775,6 +5172,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
                                         m.view = viewItem
                                         m.openItemID = it.row.item.ID
+                                        m.itemArchivedReadOnly = false
                                         (&m).recordRecentItemVisit(m.openItemID)
                                         m.itemFocus = itemFocusTitle
                                         m.itemCommentIdx = 0
@@ -4971,6 +5369,7 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                         m.openItemID = it.row.item.ID
                         m.view = viewItem
+                        m.itemArchivedReadOnly = false
                         (&m).recordRecentItemVisit(m.openItemID)
                         m.itemFocus = itemFocusTitle
                         m.itemCommentIdx = 0
@@ -7622,6 +8021,7 @@ func (m *appModel) jumpToItemByID(itemID string) error {
 
         m.view = viewItem
         m.openItemID = itemID
+        m.itemArchivedReadOnly = false
         m.recordRecentItemVisit(m.openItemID)
         m.itemFocus = itemFocusTitle
         m.itemCommentIdx = 0

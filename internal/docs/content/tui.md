@@ -26,6 +26,7 @@ Key bindings:
 - `w`: add a worklog entry (selected item)
 - `g`: open the Go to menu (shows available destinations, including `j` jump-to-item)
   - `j`: jump to an item by id (accepts `item-vth` or just `vth`)
+  - `A`: archived (browse archived content; items open read-only)
 - `q` or `ctrl+c`: quit
 - `tab`: toggle focus (outline/preview) (optional; only when preview is visible)
 

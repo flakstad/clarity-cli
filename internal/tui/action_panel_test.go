@@ -189,6 +189,29 @@ func TestActionPanel_GlobalKeys_OpenPanels(t *testing.T) {
         }
 }
 
+func TestActionPanel_GoTo_IncludesArchivedDestination(t *testing.T) {
+        dir := t.TempDir()
+        s := store.Store{Dir: dir}
+
+        actorID := "act-human"
+        db := &store.DB{
+                CurrentActorID: actorID,
+                Actors:         []model.Actor{{ID: actorID, Kind: model.ActorKindHuman, Name: "human"}},
+        }
+        if err := s.Save(db); err != nil {
+                t.Fatalf("save db: %v", err)
+        }
+
+        m := newAppModel(dir, db)
+        m.openActionPanel(actionPanelNav)
+
+        out := m.renderActionPanel()
+        // Labels may be truncated to fit the action panel layout (e.g. "Archiv…").
+        if !strings.Contains(out, "A") || !strings.Contains(out, "Archiv") {
+                t.Fatalf("expected Go to panel to include Archived destination key/label; got:\n%s", out)
+        }
+}
+
 func TestActionPanel_ItemFocus_ShowsGroupedSectionsWithHeaders(t *testing.T) {
         dir := t.TempDir()
         s := store.Store{Dir: dir}
