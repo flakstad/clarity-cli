@@ -334,7 +334,7 @@ func TestActionPanel_ItemView_ShowsItemSectionAndItemActions(t *testing.T) {
         m.openActionPanel(actionPanelContext)
 
         out := m.renderActionPanel()
-        for _, h := range []string{"NAVIGATE", "OTHER"} {
+        for _, h := range []string{"GO TO", "OTHER"} {
                 if !strings.Contains(out, h) {
                         t.Fatalf("expected action panel to contain header %q; got:\n%s", h, out)
                 }
@@ -401,7 +401,7 @@ func TestActionPanel_DetailPane_FocusedItemGrouping(t *testing.T) {
         m.openActionPanel(actionPanelContext)
 
         out := m.renderActionPanel()
-        for _, h := range []string{"NAVIGATE", "OTHER"} {
+        for _, h := range []string{"GO TO", "OTHER"} {
                 if !strings.Contains(out, h) {
                         t.Fatalf("expected action panel to contain header %q; got:\n%s", h, out)
                 }

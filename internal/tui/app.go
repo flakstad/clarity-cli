@@ -411,7 +411,7 @@ func actionPanelDisplayKey(k string) string {
 func (m appModel) actionPanelTitle() string {
         switch m.curActionPanelKind() {
         case actionPanelNav:
-                return "Navigate"
+                return "Go to"
         case actionPanelAgenda:
                 return "Agenda Commands"
         case actionPanelCapture:
@@ -560,7 +560,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                 }}
 
         case actionPanelCapture:
-                actions["g"] = actionPanelAction{label: "Navigate…", kind: actionPanelActionNav, next: actionPanelNav}
+                actions["g"] = actionPanelAction{label: "Go to…", kind: actionPanelActionNav, next: actionPanelNav}
                 actions["q"] = actionPanelAction{
                         label: "Quick capture (coming soon)",
                         kind:  actionPanelActionExec,
@@ -580,7 +580,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 
         default:
                 // Contextual (depends on current view/pane).
-                actions["g"] = actionPanelAction{label: "Navigate…", kind: actionPanelActionNav, next: actionPanelNav}
+                actions["g"] = actionPanelAction{label: "Go to…", kind: actionPanelActionNav, next: actionPanelNav}
                 actions["W"] = actionPanelAction{
                         label: "Workspaces…",
                         kind:  actionPanelActionExec,
@@ -722,7 +722,7 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
         m.projectsList.SetDelegate(newCompactItemDelegate())
         m.outlinesList = newList("Outlines", "Select an outline", []list.Item{})
         m.outlinesList.SetDelegate(newCompactItemDelegate())
-        m.itemsList = newList("Outline", "Navigate items (split view)", []list.Item{})
+        m.itemsList = newList("Outline", "Go to items (split view)", []list.Item{})
         m.itemsList.SetDelegate(newOutlineItemDelegate())
         // Enable "/" filtering to quickly scope down large outlines.
         m.itemsList.SetFilteringEnabled(true)
@@ -2489,7 +2489,7 @@ func (m appModel) renderActionPanel() string {
         // Navigation group:
         // - In the context panel, only include actions that actually navigate to a subpanel.
         //   (We don't want to "steal" exec actions like "o" Toggle preview from the View section.)
-        // - In the Navigate panel, show destinations explicitly.
+        // - In the Go to panel, show destinations explicitly.
         if m.curActionPanelKind() == actionPanelNav {
                 addSection("Destinations", []string{"p", "o", "l", "i"})
         } else if !isFocusedItemContext {
@@ -2513,7 +2513,7 @@ func (m appModel) renderActionPanel() string {
                 }
                 sort.Strings(other)
                 navKeys = append(navKeys, other...)
-                addSection("Navigate", navKeys)
+                addSection("Go to", navKeys)
         }
 
         // When focused on an item (outline pane), present clearer grouped actions.
