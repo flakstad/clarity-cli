@@ -2291,15 +2291,15 @@ func (m *appModel) viewAgenda() string {
                 w = 10
         }
 
-        contentW := w
-        if contentW > maxContentW {
-                contentW = maxContentW
+        contentW := w - 2*splitOuterMargin
+        if contentW < 10 {
+                contentW = w
         }
         m.agendaList.SetSize(contentW, bodyHeight)
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
         main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.agendaList.View()
-        main = lipgloss.PlaceHorizontal(w, lipgloss.Center, main)
+        main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
         if m.modal == modalNone {
                 return main
         }

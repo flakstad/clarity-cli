@@ -8,7 +8,10 @@ import (
         "clarity-cli/internal/model"
         "clarity-cli/internal/store"
 
+        "github.com/muesli/termenv"
+
         tea "github.com/charmbracelet/bubbletea"
+        "github.com/charmbracelet/lipgloss"
 )
 
 func ptr(s string) *string { return &s }
@@ -158,6 +161,10 @@ func TestAgendaView_EnterOpensItem_BackReturnsToAgenda_AndAgendaBackReturnsPrevi
 }
 
 func TestAgendaView_IsLeftAlignedLikeOtherPages(t *testing.T) {
+        oldProfile := lipgloss.ColorProfile()
+        lipgloss.SetColorProfile(termenv.ANSI256)
+        t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
         dir := t.TempDir()
         s := store.Store{Dir: dir}
 
@@ -185,10 +192,11 @@ func TestAgendaView_IsLeftAlignedLikeOtherPages(t *testing.T) {
         lines := strings.Split(out, "\n")
         first := ""
         for _, ln := range lines {
-                if strings.TrimSpace(ln) == "" {
+                plain := stripANSIEscapes(ln)
+                if strings.TrimSpace(plain) == "" {
                         continue
                 }
-                first = ln
+                first = plain
                 break
         }
         if first == "" {
