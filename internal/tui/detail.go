@@ -247,9 +247,13 @@ func renderChildrenOutline(db *store.DB, outline model.Outline, children []model
                 maxRows = 1
         }
         // Some terminals/fonts treat a few glyphs as "ambiguous width" and may wrap lines
-        // even when our width calculations say they fit. Leave a 1-col safety margin.
+        // even when our width calculations say they fit (especially when the whole pane is
+        // re-wrapped by lipgloss). Leave a small safety margin.
         if width > 0 {
-                width--
+                width -= 2
+                if width < 0 {
+                        width = 0
+                }
         }
         if selIdx < 0 {
                 selIdx = 0
