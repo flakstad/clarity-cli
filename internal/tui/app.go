@@ -483,12 +483,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         label: "Jump to item by id…",
                         kind:  actionPanelActionExec,
                         handler: func(mm appModel) (appModel, tea.Cmd) {
-                                mm.modal = modalJumpToItem
-                                mm.modalForID = ""
                                 mm.modalForKey = ""
-                                mm.input.Placeholder = "item-…"
-                                mm.input.SetValue("")
-                                mm.input.Focus()
+                                (&mm).openInputModal(modalJumpToItem, "", "item-…", "")
                                 return mm, nil
                         },
                 }
@@ -1546,11 +1542,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 }
                                 if _, ok := m.projectsList.SelectedItem().(addProjectRow); ok {
                                         // "+ Add" (same as pressing "n")
-                                        m.modal = modalNewProject
-                                        m.modalForID = ""
-                                        m.input.Placeholder = "Project name"
-                                        m.input.SetValue("")
-                                        m.input.Focus()
+                                        m.openInputModal(modalNewProject, "", "Project name", "")
                                         return m, nil
                                 }
                         case viewOutlines:
@@ -1567,11 +1559,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 }
                                 if _, ok := m.outlinesList.SelectedItem().(addOutlineRow); ok {
                                         // "+ Add" (same as pressing "n")
-                                        m.modal = modalNewOutline
-                                        m.modalForID = ""
-                                        m.input.Placeholder = "Outline name (optional)"
-                                        m.input.SetValue("")
-                                        m.input.Focus()
+                                        m.openInputModal(modalNewOutline, "", "Outline name (optional)", "")
                                         return m, nil
                                 }
                         case viewAgenda:
@@ -1643,46 +1631,30 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                         if m.view == viewProjects {
                                 // Rename project.
                                 if it, ok := m.projectsList.SelectedItem().(projectItem); ok {
-                                        m.modal = modalRenameProject
-                                        m.modalForID = it.project.ID
-                                        m.input.Placeholder = "Project name"
-                                        m.input.SetValue(strings.TrimSpace(it.project.Name))
-                                        m.input.Focus()
+                                        m.openInputModal(modalRenameProject, it.project.ID, "Project name", strings.TrimSpace(it.project.Name))
                                         return m, nil
                                 }
                         }
                         if m.view == viewOutlines {
                                 // Rename outline.
                                 if it, ok := m.outlinesList.SelectedItem().(outlineItem); ok {
-                                        m.modal = modalEditOutlineName
-                                        m.modalForID = it.outline.ID
                                         name := ""
                                         if it.outline.Name != nil {
                                                 name = strings.TrimSpace(*it.outline.Name)
                                         }
-                                        m.input.Placeholder = "Outline name (optional)"
-                                        m.input.SetValue(name)
-                                        m.input.Focus()
+                                        m.openInputModal(modalEditOutlineName, it.outline.ID, "Outline name (optional)", name)
                                         return m, nil
                                 }
                         }
                 case "n":
                         if m.view == viewProjects {
                                 // New project.
-                                m.modal = modalNewProject
-                                m.modalForID = ""
-                                m.input.Placeholder = "Project name"
-                                m.input.SetValue("")
-                                m.input.Focus()
+                                m.openInputModal(modalNewProject, "", "Project name", "")
                                 return m, nil
                         }
                         if m.view == viewOutlines {
                                 // New outline (name optional).
-                                m.modal = modalNewOutline
-                                m.modalForID = ""
-                                m.input.Placeholder = "Outline name (optional)"
-                                m.input.SetValue("")
-                                m.input.Focus()
+                                m.openInputModal(modalNewOutline, "", "Outline name (optional)", "")
                                 return m, nil
                         }
                 }
@@ -1935,10 +1907,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "enter":
                         switch m.itemFocus {
                         case itemFocusTitle:
-                                m.modal = modalEditTitle
-                                m.modalForID = activeID
-                                m.input.SetValue(active.Title)
-                                m.input.Focus()
+                                m.openInputModal(modalEditTitle, activeID, "Title", active.Title)
                                 return m, nil
                         case itemFocusStatus:
                                 if o, ok := m.db.FindOutline(active.OutlineID); ok {
@@ -1992,10 +1961,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 m.itemChildOff = 0
                         }
                         m.itemFocus = itemFocusTitle
-                        m.modal = modalEditTitle
-                        m.modalForID = activeID
-                        m.input.SetValue(active.Title)
-                        m.input.Focus()
+                        m.openInputModal(modalEditTitle, activeID, "Title", active.Title)
                         return m, nil
                 case "D":
                         if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
@@ -3546,8 +3512,27 @@ func (m *appModel) renderInputModal(title string) string {
 
         sep := lipgloss.NewStyle().Background(colorControlBg).Render(" ")
         controls := lipgloss.JoinHorizontal(lipgloss.Top, save, sep, cancel)
+
+        // Keep the input visually distinct from the modal surface, and match the full modal width.
+        //
+        // Important: terminal background colors can "bleed" across newlines if not reset.
+        // Using PlaceHorizontal with a whitespace background keeps this to a single line
+        // and avoids the field looking taller than intended.
+        bodyW := modalBodyWidth(m.width)
+        inputW := bodyW - 2 // one space padding on each side
+        if inputW < 10 {
+                inputW = 10
+        }
+        m.input.Width = inputW
+        inputLine := lipgloss.PlaceHorizontal(
+                bodyW,
+                lipgloss.Left,
+                " "+m.input.View()+" ",
+                lipgloss.WithWhitespaceChars(" "),
+                lipgloss.WithWhitespaceBackground(colorInputBg),
+        )
         body := strings.Join([]string{
-                m.input.View(),
+                inputLine,
                 "",
                 controls,
                 "",
@@ -3705,19 +3690,13 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.modalForKey = ""
                                         return m, nil
                                 case "a":
-                                        m.modal = modalAddOutlineStatus
                                         m.modalForKey = ""
-                                        m.input.Placeholder = "Status label"
-                                        m.input.SetValue("")
-                                        m.input.Focus()
+                                        m.openInputModal(modalAddOutlineStatus, strings.TrimSpace(m.modalForID), "Status label", "")
                                         return m, nil
                                 case "r":
                                         if it, ok := m.outlineStatusDefsList.SelectedItem().(outlineStatusDefItem); ok {
-                                                m.modal = modalRenameOutlineStatus
                                                 m.modalForKey = strings.TrimSpace(it.def.ID)
-                                                m.input.Placeholder = "Status label"
-                                                m.input.SetValue(strings.TrimSpace(it.def.Label))
-                                                m.input.Focus()
+                                                m.openInputModal(modalRenameOutlineStatus, strings.TrimSpace(m.modalForID), "Status label", strings.TrimSpace(it.def.Label))
                                                 return m, nil
                                         }
                                 case "e":
@@ -4156,11 +4135,8 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         (&nm).showMinibuffer("Workspace: " + name)
                                         return nm, nil
                                 case "n":
-                                        m.modal = modalNewWorkspace
                                         m.modalForKey = ""
-                                        m.input.Placeholder = "Workspace name"
-                                        m.input.SetValue("")
-                                        m.input.Focus()
+                                        m.openInputModal(modalNewWorkspace, "", "Workspace name", "")
                                         return m, nil
                                 case "r":
                                         old := strings.TrimSpace(m.workspace)
@@ -4173,11 +4149,8 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                 m.showMinibuffer("Workspace: no current workspace")
                                                 return m, nil
                                         }
-                                        m.modal = modalRenameWorkspace
                                         m.modalForKey = old
-                                        m.input.Placeholder = "New workspace name"
-                                        m.input.SetValue(old)
-                                        m.input.Focus()
+                                        m.openInputModal(modalRenameWorkspace, "", "New workspace name", old)
                                         return m, nil
                                 }
                         }
@@ -4537,10 +4510,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 }
                                 return m, nil
                         case addItemRow:
-                                m.modal = modalNewSibling
-                                m.modalForID = ""
-                                m.input.SetValue("")
-                                m.input.Focus()
+                                m.openInputModal(modalNewSibling, "", "Title", "")
                                 return m, nil
                         }
                 case "o":
@@ -4572,35 +4542,26 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "e":
                         // Edit title for selected item.
                         if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-                                m.modal = modalEditTitle
-                                m.modalForID = it.row.item.ID
-                                m.input.SetValue(it.row.item.Title)
-                                m.input.Focus()
+                                m.openInputModal(modalEditTitle, it.row.item.ID, "Title", it.row.item.Title)
                                 return m, nil
                         }
                 case "n":
                         // New sibling (after selected) in outline pane.
                         if m.pane == paneOutline {
-                                m.modal = modalNewSibling
-                                m.modalForID = ""
+                                forID := ""
                                 if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-                                        m.modalForID = it.row.item.ID
+                                        forID = it.row.item.ID
                                 }
-                                m.input.SetValue("")
-                                m.input.Focus()
+                                m.openInputModal(modalNewSibling, forID, "Title", "")
                                 return m, nil
                         }
                 case "N":
                         // New child (under selected) in either pane. If "+ Add item" selected, fall back to root.
                         if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-                                m.modal = modalNewChild
-                                m.modalForID = it.row.item.ID
+                                m.openInputModal(modalNewChild, it.row.item.ID, "Title", "")
                         } else {
-                                m.modal = modalNewSibling
-                                m.modalForID = ""
+                                m.openInputModal(modalNewSibling, "", "Title", "")
                         }
-                        m.input.SetValue("")
-                        m.input.Focus()
                         return m, nil
                 case "r":
                         // Archive/remove selected item (with confirmation).
@@ -4765,10 +4726,7 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.openTextModal(modalAddWorklog, it.row.item.ID, "Log work…", "")
                         return m, nil
                 case "e":
-                        m.modal = modalEditTitle
-                        m.modalForID = it.row.item.ID
-                        m.input.SetValue(it.row.item.Title)
-                        m.input.Focus()
+                        m.openInputModal(modalEditTitle, it.row.item.ID, "Title", it.row.item.Title)
                         return m, nil
                 case "D":
                         m.openTextModal(modalEditDescription, it.row.item.ID, "Markdown description…", it.row.item.Description)
@@ -5306,16 +5264,7 @@ func dimBackground(s string) string {
 }
 
 func renderModalBox(screenWidth int, title, body string) string {
-        w := screenWidth - 12
-        if w > screenWidth-4 {
-                w = screenWidth - 4
-        }
-        if w < 20 {
-                w = 20
-        }
-        if w > 96 {
-                w = 96
-        }
+        w := modalBoxWidth(screenWidth)
 
         header := lipgloss.NewStyle().Bold(true).Render(title)
         content := header + "\n\n" + body
@@ -5328,6 +5277,29 @@ func renderModalBox(screenWidth int, title, body string) string {
                 Foreground(colorSurfaceFg).
                 Background(colorSurfaceBg)
         return box.Render(content)
+}
+
+func modalBoxWidth(screenWidth int) int {
+        w := screenWidth - 12
+        if w > screenWidth-4 {
+                w = screenWidth - 4
+        }
+        if w < 20 {
+                w = 20
+        }
+        if w > 96 {
+                w = 96
+        }
+        return w
+}
+
+func modalBodyWidth(screenWidth int) int {
+        w := modalBoxWidth(screenWidth)
+        bodyW := w - 6 // renderModalBox has padding 1,2 and a border.
+        if bodyW < 10 {
+                bodyW = 10
+        }
+        return bodyW
 }
 
 func splitLinesN(s string, n int) []string {
@@ -7248,21 +7220,7 @@ func (m *appModel) openTextModal(kind modalKind, itemID, placeholder, initial st
         m.modal = kind
         m.modalForID = itemID
         m.textFocus = textFocusBody
-
-        w := m.width - 12
-        if w > m.width-4 {
-                w = m.width - 4
-        }
-        if w < 20 {
-                w = 20
-        }
-        if w > 96 {
-                w = 96
-        }
-        bodyW := w - 6 // renderModalBox has padding 1,2
-        if bodyW < 10 {
-                bodyW = 10
-        }
+        bodyW := modalBodyWidth(m.width)
 
         h := m.height - 12
         if h < 6 {
@@ -7277,6 +7235,32 @@ func (m *appModel) openTextModal(kind modalKind, itemID, placeholder, initial st
         m.textarea.SetHeight(h)
         m.textarea.SetValue(initial)
         m.textarea.Focus()
+}
+
+func (m *appModel) openInputModal(kind modalKind, forID, placeholder, initial string) {
+        m.modal = kind
+        m.modalForID = strings.TrimSpace(forID)
+        m.textFocus = textFocusBody
+
+        // Size to modal body width so the input fills the dialog.
+        bodyW := modalBodyWidth(m.width)
+        inputW := bodyW - 2 // input "surface" has horizontal padding
+        if inputW < 10 {
+                inputW = 10
+        }
+        m.input.Width = inputW
+
+        // Make the input visually distinct from the modal background.
+        st := lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorInputBg)
+        m.input.Prompt = ""
+        m.input.PromptStyle = st
+        m.input.TextStyle = st
+        m.input.PlaceholderStyle = styleMuted().Background(colorInputBg)
+        m.input.CursorStyle = lipgloss.NewStyle().Foreground(colorSelectedFg).Background(colorAccent)
+
+        m.input.Placeholder = placeholder
+        m.input.SetValue(initial)
+        m.input.Focus()
 }
 
 func (m *appModel) jumpToItemByID(itemID string) error {

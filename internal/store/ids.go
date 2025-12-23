@@ -2,25 +2,31 @@ package store
 
 import (
         "crypto/rand"
-        "encoding/base32"
+        "math/big"
         "strings"
 )
 
-// newRandomID returns prefix-<suffix> where suffix is base32 (lowercase, no padding).
+// newRandomID returns prefix-<suffix> where suffix is base36 (lowercase).
 // The suffix length is intentionally short for better ergonomics in a terminal UI.
 func newRandomID(prefix string) (string, error) {
-        suffixLen := idSuffixLen(prefix)
+        return newRandomIDWithLen(prefix, idSuffixLen(prefix))
+}
 
-        // Generate 8 chars of base32 (~40 bits) and truncate if needed.
-        // 8 chars base32 ~= 40 bits (~1 trillion) of space.
-        var b [5]byte // 40 bits -> 8 base32 chars
-        if _, err := rand.Read(b[:]); err != nil {
+func newRandomIDWithLen(prefix string, suffixLen int) (string, error) {
+        if suffixLen <= 0 {
+                suffixLen = 8
+        }
+
+        // Base36 gives 36^3 = 46,656 variants for 3-char suffixes, which is plenty for a single workspace.
+        // Use crypto/rand + rejection sampling via math/big for a uniform distribution.
+        max := new(big.Int).Exp(big.NewInt(36), big.NewInt(int64(suffixLen)), nil)
+        n, err := rand.Int(rand.Reader, max)
+        if err != nil {
                 return "", err
         }
-        enc := base32.StdEncoding.WithPadding(base32.NoPadding)
-        suffix := strings.ToLower(enc.EncodeToString(b[:]))
-        if suffixLen > 0 && suffixLen < len(suffix) {
-                suffix = suffix[:suffixLen]
+        suffix := strings.ToLower(n.Text(36))
+        if len(suffix) < suffixLen {
+                suffix = strings.Repeat("0", suffixLen-len(suffix)) + suffix
         }
         return prefix + "-" + suffix, nil
 }
@@ -29,8 +35,10 @@ func idSuffixLen(prefix string) int {
         switch prefix {
         case "item":
                 // Items are referenced constantly; keep these extra short.
-                // 6 chars base32 ~= 30 bits (~1 billion) of space; NextID retries on collision.
-                return 6
+                return 3
+        case "act", "proj", "out":
+                // These are user-facing too (clipboard, scriptable commands).
+                return 3
         default:
                 return 8
         }

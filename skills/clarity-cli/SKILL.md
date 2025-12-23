@@ -75,6 +75,18 @@ clarity worklog add <item-id> --body "Implemented X; next: Y"
 clarity comments add <item-id> --body "FYI: shipped X; open question: Y"
 ```
 
+## Capturing unrelated issues (hard requirement for autonomous agents)
+When you discover an issue or follow-up that is **not necessary to complete the current item**, you must:
+- **Create a new item immediately**
+- **Include where it came from** (the current item id, plus any relevant file/command/trace)
+- **Return to the current item** (do not expand scope)
+
+Use `--filed-from` to standardize the “where it came from” metadata:
+
+```bash
+clarity items create --title "..." --description "..." --filed-from <current-item-id>
+```
+
 Environment variables (optional conveniences):
 - `CLARITY_AGENT_SESSION`: stable identity within a session; omit for new identity per run
 - `CLARITY_AGENT_NAME`: display name used when creating agent identities

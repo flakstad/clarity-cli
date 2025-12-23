@@ -47,6 +47,7 @@ func newItemsCreateCmd(app *App) *cobra.Command {
         var parentID string
         var title string
         var description string
+        var filedFrom string
         var ownerID string
         var assignID string
 
@@ -140,6 +141,19 @@ func newItemsCreateCmd(app *App) *cobra.Command {
                                 p = &parentID
                         }
 
+                        desc := description
+                        if ff := strings.TrimSpace(filedFrom); ff != "" {
+                                origin := "Filed from: " + ff
+                                // Avoid duplicating a manually-provided origin line.
+                                if !strings.Contains(desc, "Filed from:") {
+                                        if strings.TrimSpace(desc) == "" {
+                                                desc = origin
+                                        } else {
+                                                desc = origin + "\n\n" + desc
+                                        }
+                                }
+                        }
+
                         now := time.Now().UTC()
                         t := model.Item{
                                 ID:                 s.NextID(db, "item"),
@@ -148,7 +162,7 @@ func newItemsCreateCmd(app *App) *cobra.Command {
                                 ParentID:           p,
                                 Rank:               nextSiblingRank(db, oid, p),
                                 Title:              strings.TrimSpace(title),
-                                Description:        description,
+                                Description:        desc,
                                 StatusID:           "todo",
                                 Priority:           false,
                                 OnHold:             false,
@@ -180,6 +194,7 @@ func newItemsCreateCmd(app *App) *cobra.Command {
         cmd.Flags().StringVar(&parentID, "parent", "", "Parent item id (for outline nesting)")
         cmd.Flags().StringVar(&title, "title", "", "Item title")
         cmd.Flags().StringVar(&description, "description", "", "Markdown description (optional)")
+        cmd.Flags().StringVar(&filedFrom, "filed-from", "", "Origin reference to include at top of description (e.g. item id; optional)")
         cmd.Flags().StringVar(&ownerID, "owner", "", "Owner actor id (default: current actor)")
         cmd.Flags().StringVar(&assignID, "assign", "", "Assigned actor id (optional; default: agent assigns to itself, human leaves unassigned)")
         _ = cmd.MarkFlagRequired("title")
@@ -382,10 +397,10 @@ func showItem(app *App, cmd *cobra.Command, id string) error {
 
         // Children (direct subitems).
         type childSummary struct {
-                ID       string `json:"id"`
-                Title    string `json:"title"`
-                StatusID string `json:"status"`
-                Archived bool   `json:"archived"`
+                ID        string `json:"id"`
+                Title     string `json:"title"`
+                StatusID  string `json:"status"`
+                Archived  bool   `json:"archived"`
                 OutlineID string `json:"outlineId"`
                 ProjectID string `json:"projectId"`
         }
@@ -419,13 +434,13 @@ func showItem(app *App, cmd *cobra.Command, id string) error {
 
         // Dependencies (include edges so clients can show blockers without extra calls).
         type depEdge struct {
-                Type        string `json:"type"` // blocks|related
-                Direction   string `json:"direction"` // in|out
-                OtherItemID string `json:"otherItemId"`
-                OtherTitle  string `json:"otherTitle,omitempty"`
-                OtherStatus string `json:"otherStatus,omitempty"`
-                OtherDone   bool   `json:"otherDone"`
-                OtherArchived bool `json:"otherArchived"`
+                Type          string `json:"type"`      // blocks|related
+                Direction     string `json:"direction"` // in|out
+                OtherItemID   string `json:"otherItemId"`
+                OtherTitle    string `json:"otherTitle,omitempty"`
+                OtherStatus   string `json:"otherStatus,omitempty"`
+                OtherDone     bool   `json:"otherDone"`
+                OtherArchived bool   `json:"otherArchived"`
         }
         depsBlocksOut := make([]depEdge, 0)
         depsBlocksIn := make([]depEdge, 0)

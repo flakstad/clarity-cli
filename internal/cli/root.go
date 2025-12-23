@@ -39,7 +39,7 @@ func NewRootCmd() *cobra.Command {
   clarity items ready
 
   # Direct item lookup (shortcut for: clarity items show <item-id>)
-  clarity item-abc123
+  clarity item-vth
 `),
                 RunE: func(cmd *cobra.Command, args []string) error {
                         // No subcommand => interactive TUI.

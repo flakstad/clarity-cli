@@ -52,5 +52,14 @@ Communication conventions:
 - **Worklog** is for private execution notes / tracking work on a task: `clarity worklog add <item-id> --body "..."`
 - **Comments** are for communicating with others (questions, clarification, decisions): `clarity comments add <item-id> --body "..."`
 
+## Capturing unrelated issues (default for agents)
+If you discover an issue or follow-up that is **unrelated** to the current task you’re working on, do **not** expand scope.
+
+Instead, immediately file a new item and include where it came from:
+
+```bash
+clarity items create --title "..." --description "..." --filed-from <current-item-id>
+```
+
 ## Docs Updates
 If you add or change user-visible CLI behavior, update the embedded docs under `internal/docs/content/` (and ensure `clarity docs <topic>` stays accurate).

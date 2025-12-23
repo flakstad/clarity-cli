@@ -315,22 +315,39 @@ func (s Store) Save(db *DB) error {
 
 func (s Store) NextID(db *DB, prefix string) string {
         // Hash-based IDs (stable-ish length) instead of sequential integers.
-        // Prefixes remain for readability: item-xxxxxx, proj-xxxxxxxx, out-xxxxxxxx, etc.
+        // Prefixes remain for readability: item-xxx, proj-xxx, out-xxx, etc.
         //
         // NOTE: NextIDs is kept for backwards compatibility with old db.json files,
         // but is no longer used as the source of IDs.
-        for i := 0; i < 10; i++ {
-                id, err := newRandomID(prefix)
-                if err != nil {
-                        // fallback: keep old behavior if crypto/rand fails
-                        if db.NextIDs == nil {
-                                db.NextIDs = map[string]int{}
-                        }
-                        db.NextIDs[prefix]++
-                        return fmt.Sprintf("%s-%d", prefix, db.NextIDs[prefix])
+        baseLen := idSuffixLen(prefix)
+        tryLens := []int{baseLen}
+        // For the short, user-facing ids (3 chars), gracefully expand if we collide repeatedly.
+        // This keeps the "usually 3 chars" UX but avoids falling back to integer ids.
+        if baseLen == 3 {
+                tryLens = append(tryLens, 4, 5, 6, 8)
+        }
+
+        for _, ln := range tryLens {
+                maxAttempts := 10
+                switch ln {
+                case 3:
+                        maxAttempts = 200
+                case 4:
+                        maxAttempts = 50
                 }
-                if !idExists(db, id) {
-                        return id
+                for i := 0; i < maxAttempts; i++ {
+                        id, err := newRandomIDWithLen(prefix, ln)
+                        if err != nil {
+                                // fallback: keep old behavior if crypto/rand fails
+                                if db.NextIDs == nil {
+                                        db.NextIDs = map[string]int{}
+                                }
+                                db.NextIDs[prefix]++
+                                return fmt.Sprintf("%s-%d", prefix, db.NextIDs[prefix])
+                        }
+                        if !idExists(db, id) {
+                                return id
+                        }
                 }
         }
         // Extremely unlikely fallback

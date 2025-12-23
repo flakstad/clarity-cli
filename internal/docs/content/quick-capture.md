@@ -30,6 +30,13 @@ If cold-start performance still matters, consider a future `clarity daemon` so `
 - Create the item on submit and print a stable JSON envelope to stdout (for scripting).
 - Exit `0` on success, non-zero on cancel/error.
 
+### Capturing while doing other work (agent-friendly)
+If you’re in the middle of working on an item and notice an unrelated issue, capture it as a new item and include where it came from:
+
+```bash
+clarity items create --title "..." --description "..." --filed-from <current-item-id>
+```
+
 ## Example: macOS + iTerm2
 
 iTerm2 has a built-in "Hotkey Window" that can toggle a dropdown terminal instantly. A common setup is:

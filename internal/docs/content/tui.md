@@ -25,7 +25,7 @@ Key bindings:
 - `c`: add a comment (selected item)
 - `w`: add a worklog entry (selected item)
 - `g`: open the Go to menu (shows available destinations, including `j` jump-to-item)
-  - `j`: jump to an item by id (accepts `item-55vdob` or just `55vdob`)
+  - `j`: jump to an item by id (accepts `item-vth` or just `vth`)
 - `q` or `ctrl+c`: quit
 - `tab`: toggle focus (outline/preview) (optional; only when preview is visible)
 
