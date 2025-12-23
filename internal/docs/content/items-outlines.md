@@ -96,6 +96,8 @@ clarity items set-parent <item-id> --parent <new-parent-id>
 clarity items set-parent <item-id> --parent none
 ```
 
+Note: Ordering is stored as per-sibling-set ranks. If ranks collide, these operations may locally rebalance ranks for a few nearby siblings to ensure the requested placement is always possible and stable.
+
 ## Assign an item
 
 ```bash

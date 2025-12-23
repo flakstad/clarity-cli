@@ -1,6 +1,8 @@
 package tui
 
 import (
+        "sort"
+        "strings"
         "testing"
         "time"
 
@@ -20,7 +22,7 @@ func TestReorderItem_DuplicateRanks_OnlyUpdatesMovedItem(t *testing.T) {
                 Items: []model.Item{
                         {ID: "a", ProjectID: "proj-a", OutlineID: "out-a", Rank: "h", Title: "A", OwnerActorID: "act-a", CreatedBy: "act-a", CreatedAt: now, UpdatedAt: now},
                         {ID: "b", ProjectID: "proj-a", OutlineID: "out-a", Rank: "h", Title: "B", OwnerActorID: "act-a", CreatedBy: "act-a", CreatedAt: now, UpdatedAt: now},
-                        {ID: "c", ProjectID: "proj-a", OutlineID: "out-a", Rank: "t", Title: "C", OwnerActorID: "act-a", CreatedBy: "act-a", CreatedAt: now, UpdatedAt: now},
+                        {ID: "c", ProjectID: "proj-a", OutlineID: "out-a", Rank: "h", Title: "C", OwnerActorID: "act-a", CreatedBy: "act-a", CreatedAt: now, UpdatedAt: now},
                 },
         }
         s := store.Store{Dir: dir}
@@ -36,23 +38,40 @@ func TestReorderItem_DuplicateRanks_OnlyUpdatesMovedItem(t *testing.T) {
         c0, _ := m.db.FindItem("c")
         aRank0, bRank0, cRank0 := a0.Rank, b0.Rank, c0.Rank
 
-        // Move B down (after A): this used to sometimes hit RankBetween requires a < b when ranks collide.
-        if err := m.reorderItem(b0, "a", ""); err != nil {
+        // Move C up one slot (before B) inside a duplicate-rank block. This must always be possible
+        // and must swap exactly one position in the current rendered order.
+        if err := m.reorderItem(c0, "", "b"); err != nil {
                 t.Fatalf("expected reorder to succeed; got err: %v", err)
         }
 
-        a1, _ := m.db.FindItem("a")
-        b1, _ := m.db.FindItem("b")
-        c1, _ := m.db.FindItem("c")
-
-        if a1.Rank != aRank0 {
-                t.Fatalf("expected non-moved sibling rank unchanged; a: %q -> %q", aRank0, a1.Rank)
+        db2, err := s.Load()
+        if err != nil {
+                t.Fatalf("load db: %v", err)
         }
-        if c1.Rank != cRank0 {
-                t.Fatalf("expected non-moved sibling rank unchanged; c: %q -> %q", cRank0, c1.Rank)
+        a1, _ := db2.FindItem("a")
+        b1, _ := db2.FindItem("b")
+        c1, _ := db2.FindItem("c")
+
+        // A should remain at the top of the block, and C/B should swap.
+        sibs := []model.Item{*a1, *b1, *c1}
+        sort.Slice(sibs, func(i, j int) bool { return compareOutlineItems(sibs[i], sibs[j]) < 0 })
+        got := []string{sibs[0].ID, sibs[1].ID, sibs[2].ID}
+        want := []string{"a", "c", "b"}
+        if strings.Join(got, ",") != strings.Join(want, ",") {
+                t.Fatalf("expected sibling order %v; got %v (ranks: a=%q b=%q c=%q)", want, got, a1.Rank, b1.Rank, c1.Rank)
+        }
+
+        // A is outside the minimal rebalance window, so its rank should remain unchanged.
+        if a1.Rank != aRank0 {
+                t.Fatalf("expected a rank unchanged; a: %q -> %q", aRank0, a1.Rank)
+        }
+        // We must change at least the moved item's rank; inside a duplicate block we typically
+        // also need to adjust the swapped neighbor.
+        if c1.Rank == cRank0 {
+                t.Fatalf("expected moved item rank to change; c still %q", c1.Rank)
         }
         if b1.Rank == bRank0 {
-                t.Fatalf("expected moved item rank to change; b still %q", b1.Rank)
+                t.Fatalf("expected swapped neighbor rank to change in fallback; b still %q", b1.Rank)
         }
 }
 

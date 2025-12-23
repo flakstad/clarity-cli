@@ -138,7 +138,7 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
                 MaxWidth(innerW)
         btnActive := btnBase.
                 Foreground(colorSelectedFg).
-                Background(colorAccent).
+                Background(colorSelectedBg).
                 Bold(true)
         btn := func(active bool) lipgloss.Style {
                 if active {

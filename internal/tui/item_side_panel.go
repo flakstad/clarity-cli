@@ -52,8 +52,11 @@ func renderItemSidePanelWithEvents(db *store.DB, it model.Item, width, height in
         box := lipgloss.NewStyle().Width(innerW).Height(height).Padding(0, padX)
 
         headerStyle := styleMuted()
-        // Subtle focus highlight that reads on both dark/light. We keep the text the same; just add bg.
-        focusRowStyle := lipgloss.NewStyle().Background(colorControlBg)
+        // Match list selection highlight (outline + other lists): consistent fg/bg and a bit of weight.
+        focusRowStyle := lipgloss.NewStyle().
+                Foreground(colorSelectedFg).
+                Background(colorSelectedBg).
+                Bold(true)
         moreStyle := styleMuted()
 
         lines := []string{}

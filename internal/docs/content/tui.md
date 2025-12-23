@@ -47,6 +47,8 @@ Outline movement (hold Alt):
 - `alt+→` (or `alt+l/f`): indent (become child of previous sibling)
 - `alt+←` (or `alt+h/b`): outdent (become sibling after parent)
 
+Note: Reordering always moves exactly one slot. If sibling ranks collide, Clarity may locally rebalance ranks for a few adjacent items to keep ordering stable (no janky jumps).
+
 Editing:
 - `e`: edit title of the selected item (Enter or Ctrl+S saves, Esc or Ctrl+G cancels)
 - `e` (on outlines screen): rename selected outline (Enter or Ctrl+S saves, Esc or Ctrl+G cancels)

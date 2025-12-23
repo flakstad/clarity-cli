@@ -3418,7 +3418,7 @@ func (m *appModel) renderTextAreaModal(title string) string {
                 Background(colorControlBg)
         btnActive := btnBase.
                 Foreground(colorSelectedFg).
-                Background(colorAccent).
+                Background(colorSelectedBg).
                 Bold(true)
 
         save := btnBase.Render("Save")
@@ -3451,7 +3451,7 @@ func (m *appModel) renderReplyCommentModal() string {
                 Background(colorControlBg)
         btnActive := btnBase.
                 Foreground(colorSelectedFg).
-                Background(colorAccent).
+                Background(colorSelectedBg).
                 Bold(true)
 
         save := btnBase.Render("Save")
@@ -3498,7 +3498,7 @@ func (m *appModel) renderInputModal(title string) string {
                 Background(colorControlBg)
         btnActive := btnBase.
                 Foreground(colorSelectedFg).
-                Background(colorAccent).
+                Background(colorSelectedBg).
                 Bold(true)
 
         save := btnBase.Render("Save")
@@ -6933,33 +6933,76 @@ func (m *appModel) moveSelected(dir string) error {
 }
 
 func (m *appModel) reorderItem(t *model.Item, afterID, beforeID string) error {
-        // Compute rank in sibling set excluding t.
-        sibs := siblingItems(m.db, t.OutlineID, t.ParentID)
-        sibs = filterItems(sibs, func(x *model.Item) bool { return x.ID != t.ID && !x.Archived })
-
-        lower, upper, ok := rankBoundsForInsert(sibs, afterID, beforeID)
-        if !ok {
+        afterID = strings.TrimSpace(afterID)
+        beforeID = strings.TrimSpace(beforeID)
+        if (afterID == "" && beforeID == "") || (afterID != "" && beforeID != "") {
                 return nil
         }
 
-        existing := map[string]bool{}
-        for _, s := range sibs {
-                rn := strings.ToLower(strings.TrimSpace(s.Rank))
-                if rn != "" {
-                        existing[rn] = true
-                }
+        // Build the current sibling order (includes t). This ordering must match the rendered order.
+        full := siblingItems(m.db, t.OutlineID, t.ParentID)
+        full = filterItems(full, func(x *model.Item) bool { return !x.Archived })
+
+        // Compute insert position in the "after removing t" coordinate system.
+        rest := filterItems(full, func(x *model.Item) bool { return x.ID != t.ID })
+        refID := beforeID
+        mode := "before"
+        if afterID != "" {
+                refID = afterID
+                mode = "after"
         }
-        r, err := store.RankBetweenUnique(existing, lower, upper)
+        refIdx := indexOfItem(rest, refID)
+        if refIdx < 0 {
+                return nil
+        }
+        insertAt := refIdx
+        if mode == "after" {
+                insertAt = refIdx + 1
+        }
+
+        res, err := store.PlanReorderRanks(full, t.ID, insertAt)
         if err != nil {
                 return err
         }
-        t.Rank = r
-        t.UpdatedAt = time.Now().UTC()
+        if len(res.RankByID) == 0 {
+                return nil
+        }
+
+        now := time.Now().UTC()
+        for id, r := range res.RankByID {
+                it, ok := m.db.FindItem(id)
+                if !ok {
+                        continue
+                }
+                if strings.TrimSpace(it.Rank) == strings.TrimSpace(r) {
+                        continue
+                }
+                it.Rank = r
+                it.UpdatedAt = now
+        }
+
         if err := m.store.Save(m.db); err != nil {
                 return err
         }
+
+        // Single event, even if we had to rebalance a local window.
         actorID := m.currentWriteActorID()
-        _ = m.store.AppendEvent(actorID, "item.move", t.ID, map[string]any{"before": beforeID, "after": afterID, "rank": t.Rank})
+        payload := map[string]any{"before": beforeID, "after": afterID, "rank": strings.TrimSpace(t.Rank)}
+        if res.UsedFallback && len(res.RankByID) > 1 {
+                rebalance := map[string]string{}
+                for id, r := range res.RankByID {
+                        if id == t.ID {
+                                continue
+                        }
+                        rebalance[id] = r
+                }
+                if len(rebalance) > 0 {
+                        payload["rebalance"] = rebalance
+                        payload["rebalanceCount"] = len(rebalance)
+                }
+        }
+        _ = m.store.AppendEvent(actorID, "item.move", t.ID, payload)
+
         m.refreshEventsTail()
         m.captureStoreModTimes()
         m.showMinibuffer("Moved " + t.ID)

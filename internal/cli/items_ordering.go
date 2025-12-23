@@ -2,7 +2,6 @@ package cli
 
 import (
         "errors"
-        "sort"
         "strings"
         "time"
 
@@ -64,46 +63,61 @@ func newItemsMoveCmd(app *App) *cobra.Command {
                         sibs := siblingItems(db, t.OutlineID, t.ParentID)
                         // Remove the moved item.
                         sibs = filterItems(sibs, func(x *model.Item) bool { return x.ID != id })
-                        existing := map[string]bool{}
-                        for _, s := range sibs {
-                                rn := strings.ToLower(strings.TrimSpace(s.Rank))
-                                if rn != "" {
-                                        existing[rn] = true
-                                }
-                        }
 
                         refIdx := indexOfItem(sibs, refID)
                         if refIdx < 0 {
                                 return writeErr(cmd, errors.New("reference item not found among siblings"))
                         }
 
-                        var lower string
-                        var upper string
-
-                        switch mode {
-                        case "before":
-                                upper = sibs[refIdx].Rank
-                                if refIdx > 0 {
-                                        lower = sibs[refIdx-1].Rank
-                                }
-                        case "after":
-                                lower = sibs[refIdx].Rank
-                                if refIdx+1 < len(sibs) {
-                                        upper = sibs[refIdx+1].Rank
-                                }
+                        // Compute desired insert index (in the "after removing t" coordinate system).
+                        insertAt := refIdx
+                        if mode == "after" {
+                                insertAt = refIdx + 1
                         }
 
-                        r, err := store.RankBetweenUnique(existing, lower, upper)
+                        // Build the full sibling set including t, then plan rank updates.
+                        full := siblingItems(db, t.OutlineID, t.ParentID)
+                        full = filterItems(full, func(x *model.Item) bool { return x.ID == t.ID || !x.Archived })
+                        res, err := store.PlanReorderRanks(full, t.ID, insertAt)
                         if err != nil {
                                 return writeErr(cmd, err)
                         }
-                        t.Rank = r
-                        t.UpdatedAt = time.Now().UTC()
+                        if len(res.RankByID) == 0 {
+                                return writeOut(cmd, app, map[string]any{"data": t})
+                        }
+
+                        now := time.Now().UTC()
+                        for id, r := range res.RankByID {
+                                it, ok := db.FindItem(id)
+                                if !ok {
+                                        continue
+                                }
+                                if strings.TrimSpace(it.Rank) == strings.TrimSpace(r) {
+                                        continue
+                                }
+                                it.Rank = r
+                                it.UpdatedAt = now
+                        }
 
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.move", t.ID, map[string]any{"before": before, "after": after, "rank": t.Rank})
+
+                        payload := map[string]any{"before": before, "after": after, "rank": strings.TrimSpace(t.Rank)}
+                        if res.UsedFallback && len(res.RankByID) > 1 {
+                                rebalance := map[string]string{}
+                                for id, r := range res.RankByID {
+                                        if id == t.ID {
+                                                continue
+                                        }
+                                        rebalance[id] = r
+                                }
+                                if len(rebalance) > 0 {
+                                        payload["rebalance"] = rebalance
+                                        payload["rebalanceCount"] = len(rebalance)
+                                }
+                        }
+                        _ = s.AppendEvent(actorID, "item.move", t.ID, payload)
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }
@@ -164,21 +178,12 @@ func newItemsSetParentCmd(app *App) *cobra.Command {
                                 newParentID = &pid
                         }
 
-                        // Determine new rank in the destination sibling set.
-                        var sibs []*model.Item
-                        sibs = siblingItems(db, t.OutlineID, newParentID)
-                        sibs = filterItems(sibs, func(x *model.Item) bool { return x.ID != t.ID })
-                        existing := map[string]bool{}
-                        for _, s := range sibs {
-                                rn := strings.ToLower(strings.TrimSpace(s.Rank))
-                                if rn != "" {
-                                        existing[rn] = true
-                                }
-                        }
+                        // Destination siblings (exclude moved item, ignore archived siblings).
+                        sibs := siblingItems(db, t.OutlineID, newParentID)
+                        sibs = filterItems(sibs, func(x *model.Item) bool { return x.ID != t.ID && !x.Archived })
 
-                        var lower string
-                        var upper string
-
+                        // Determine insert index in destination siblings.
+                        insertAt := len(sibs) // default: append
                         if before != "" || after != "" {
                                 refID := before
                                 mode := "before"
@@ -190,38 +195,52 @@ func newItemsSetParentCmd(app *App) *cobra.Command {
                                 if refIdx < 0 {
                                         return writeErr(cmd, errors.New("reference item not found among destination siblings"))
                                 }
-                                switch mode {
-                                case "before":
-                                        upper = sibs[refIdx].Rank
-                                        if refIdx > 0 {
-                                                lower = sibs[refIdx-1].Rank
-                                        }
-                                case "after":
-                                        lower = sibs[refIdx].Rank
-                                        if refIdx+1 < len(sibs) {
-                                                upper = sibs[refIdx+1].Rank
-                                        }
-                                }
-                        } else {
-                                // Default: append to end.
-                                if len(sibs) > 0 {
-                                        lower = sibs[len(sibs)-1].Rank
+                                insertAt = refIdx
+                                if mode == "after" {
+                                        insertAt = refIdx + 1
                                 }
                         }
 
-                        r, err := store.RankBetweenUnique(existing, lower, upper)
+                        destFull := append([]*model.Item{}, sibs...)
+                        destFull = append(destFull, t)
+                        res, err := store.PlanReorderRanks(destFull, t.ID, insertAt)
                         if err != nil {
                                 return writeErr(cmd, err)
                         }
+                        now := time.Now().UTC()
+                        for id, r := range res.RankByID {
+                                it, ok := db.FindItem(id)
+                                if !ok {
+                                        continue
+                                }
+                                if strings.TrimSpace(it.Rank) == strings.TrimSpace(r) {
+                                        continue
+                                }
+                                it.Rank = r
+                                it.UpdatedAt = now
+                        }
 
                         t.ParentID = newParentID
-                        t.Rank = r
-                        t.UpdatedAt = time.Now().UTC()
+                        t.UpdatedAt = now
 
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.set_parent", t.ID, map[string]any{"parent": parent, "before": before, "after": after, "rank": t.Rank})
+                        payload := map[string]any{"parent": parent, "before": before, "after": after, "rank": strings.TrimSpace(t.Rank)}
+                        if res.UsedFallback && len(res.RankByID) > 1 {
+                                rebalance := map[string]string{}
+                                for id, r := range res.RankByID {
+                                        if id == t.ID {
+                                                continue
+                                        }
+                                        rebalance[id] = r
+                                }
+                                if len(rebalance) > 0 {
+                                        payload["rebalance"] = rebalance
+                                        payload["rebalanceCount"] = len(rebalance)
+                                }
+                        }
+                        _ = s.AppendEvent(actorID, "item.set_parent", t.ID, payload)
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }
@@ -254,35 +273,8 @@ func siblingItems(db *store.DB, outlineID string, parentID *string) []*model.Ite
                 }
                 out = append(out, it)
         }
-        sort.Slice(out, func(i, j int) bool { return compareItemsByRank(*out[i], *out[j]) < 0 })
+        store.SortItemsByRankOrder(out)
         return out
-}
-
-func compareItemsByRank(a, b model.Item) int {
-        ra := strings.TrimSpace(a.Rank)
-        rb := strings.TrimSpace(b.Rank)
-        switch {
-        case ra == "" && rb == "":
-                if a.CreatedAt.Before(b.CreatedAt) {
-                        return -1
-                }
-                if a.CreatedAt.After(b.CreatedAt) {
-                        return 1
-                }
-                return 0
-        case ra == "":
-                return -1
-        case rb == "":
-                return 1
-        default:
-                if ra < rb {
-                        return -1
-                }
-                if ra > rb {
-                        return 1
-                }
-                return 0
-        }
 }
 
 func filterItems(xs []*model.Item, keep func(*model.Item) bool) []*model.Item {
