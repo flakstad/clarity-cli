@@ -286,6 +286,104 @@ func TestActionPanel_ItemFocus_ShowsGroupedSectionsWithHeaders(t *testing.T) {
         }
 }
 
+func TestActionPanel_GoTo_ShowsRecentItemsWithDigitShortcuts(t *testing.T) {
+        dir := t.TempDir()
+        s := store.Store{Dir: dir}
+
+        actorID := "act-human"
+        now := time.Now().UTC()
+        db := &store.DB{
+                CurrentActorID: actorID,
+                Actors:         []model.Actor{{ID: actorID, Kind: model.ActorKindHuman, Name: "human"}},
+                Projects: []model.Project{{
+                        ID:        "proj-a",
+                        Name:      "Project A",
+                        CreatedBy: actorID,
+                        CreatedAt: now,
+                }},
+                Outlines: []model.Outline{{
+                        ID:         "out-a",
+                        ProjectID:  "proj-a",
+                        StatusDefs: store.DefaultOutlineStatusDefs(),
+                        CreatedBy:  actorID,
+                        CreatedAt:  now,
+                }},
+                Items: []model.Item{
+                        {
+                                ID:           "item-a",
+                                ProjectID:    "proj-a",
+                                OutlineID:    "out-a",
+                                Rank:         "a",
+                                Title:        "A",
+                                StatusID:     "todo",
+                                OwnerActorID: actorID,
+                                CreatedBy:    actorID,
+                                CreatedAt:    now,
+                                UpdatedAt:    now,
+                        },
+                        {
+                                ID:           "item-b",
+                                ProjectID:    "proj-a",
+                                OutlineID:    "out-a",
+                                Rank:         "b",
+                                Title:        "B",
+                                StatusID:     "todo",
+                                OwnerActorID: actorID,
+                                CreatedBy:    actorID,
+                                CreatedAt:    now,
+                                UpdatedAt:    now,
+                        },
+                        {
+                                ID:           "item-c",
+                                ProjectID:    "proj-a",
+                                OutlineID:    "out-a",
+                                Rank:         "c",
+                                Title:        "C",
+                                StatusID:     "todo",
+                                OwnerActorID: actorID,
+                                CreatedBy:    actorID,
+                                CreatedAt:    now,
+                                UpdatedAt:    now,
+                        },
+                },
+        }
+        if err := s.Save(db); err != nil {
+                t.Fatalf("save db: %v", err)
+        }
+
+        m := newAppModel(dir, db)
+
+        // Visit items in order: A, B, C (C should be most recent).
+        if err := (&m).jumpToItemByID("item-a"); err != nil {
+                t.Fatalf("jump a: %v", err)
+        }
+        if err := (&m).jumpToItemByID("item-b"); err != nil {
+                t.Fatalf("jump b: %v", err)
+        }
+        if err := (&m).jumpToItemByID("item-c"); err != nil {
+                t.Fatalf("jump c: %v", err)
+        }
+
+        m.openActionPanel(actionPanelNav)
+        out := m.renderActionPanel()
+        if !strings.Contains(out, "RECENT ITEMS") {
+                t.Fatalf("expected Recent items section to render; got:\n%s", out)
+        }
+
+        // Pressing '1' should navigate to the most recent item and close the panel.
+        mAny, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+        m2 := mAny.(appModel)
+        if m2.modal != modalNone {
+                t.Fatalf("expected modalNone after selecting recent item; got %v", m2.modal)
+        }
+        if m2.view != viewItem {
+                t.Fatalf("expected viewItem after selecting recent item; got %v", m2.view)
+        }
+        if got := strings.TrimSpace(m2.openItemID); got != "item-c" {
+                t.Fatalf("expected openItemID=item-c; got %q", got)
+        }
+}
+
 func TestActionPanel_DetailPane_X_ShowsFocusedItemGroupsAndItemActions(t *testing.T) {
         dir := t.TempDir()
         s := store.Store{Dir: dir}

@@ -228,9 +228,11 @@ type appModel struct {
         selectedOutlineID string
         selectedOutline   *model.Outline
 
-        pane                pane
-        showPreview         bool
-        openItemID          string
+        pane        pane
+        showPreview bool
+        openItemID  string
+        // recentItemIDs stores most-recently-visited item ids (full item view only), newest first.
+        recentItemIDs       []string
         returnView          view
         hasReturnView       bool
         agendaReturnView    view
@@ -316,6 +318,39 @@ func (m *appModel) currentWriteActorID() string {
                 }
         }
         return cur
+}
+
+const maxRecentItems = 5
+
+func (m *appModel) recordRecentItemVisit(itemID string) {
+        if m == nil {
+                return
+        }
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" {
+                return
+        }
+        // Best-effort validation: skip missing/archived items.
+        if m.db != nil {
+                if it, ok := m.db.FindItem(itemID); !ok || it == nil || it.Archived {
+                        return
+                }
+        }
+
+        // De-dupe (preserve existing relative order) and cap.
+        next := make([]string, 0, maxRecentItems)
+        next = append(next, itemID)
+        for _, id := range m.recentItemIDs {
+                id = strings.TrimSpace(id)
+                if id == "" || id == itemID {
+                        continue
+                }
+                next = append(next, id)
+                if len(next) >= maxRecentItems {
+                        break
+                }
+        }
+        m.recentItemIDs = next
 }
 
 type outlineViewMode int
@@ -487,6 +522,44 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                                 (&mm).openInputModal(modalJumpToItem, "", "item-…", "")
                                 return mm, nil
                         },
+                }
+
+                // Recent items (full item view visits), with digit shortcuts.
+                // 1 = most recent, 5 = least recent (within the shown set).
+                if m.db != nil {
+                        for i := 0; i < len(m.recentItemIDs) && i < maxRecentItems; i++ {
+                                id := strings.TrimSpace(m.recentItemIDs[i])
+                                if id == "" {
+                                        continue
+                                }
+                                it, ok := m.db.FindItem(id)
+                                if !ok || it == nil || it.Archived {
+                                        continue
+                                }
+
+                                key := strconv.Itoa(i + 1)
+                                itemID := id
+
+                                // Label is best-effort and mainly used for "entries" bookkeeping; rendering
+                                // is handled by the special full-width Recent items section.
+                                title := strings.TrimSpace(it.Title)
+                                if title == "" {
+                                        title = "(untitled)"
+                                }
+                                label := title
+
+                                actions[key] = actionPanelAction{
+                                        label: label,
+                                        kind:  actionPanelActionExec,
+                                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                                if err := (&mm).jumpToItemByID(itemID); err != nil {
+                                                        mm.showMinibuffer("Jump: " + err.Error())
+                                                        return mm, nil
+                                                }
+                                                return mm, nil
+                                        },
+                                }
+                        }
                 }
 
                 // Outlines (requires a project context).
@@ -929,6 +1002,10 @@ func (m appModel) snapshotTUIState() *store.TUIState {
                 ShowPreview:       m.showPreview,
         }
 
+        if len(m.recentItemIDs) > 0 {
+                st.RecentItemIDs = append([]string(nil), m.recentItemIDs...)
+        }
+
         if m.hasReturnView {
                 st.ReturnView = viewToString(m.returnView)
         }
@@ -973,6 +1050,36 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
                 m.pane = p
         }
         m.showPreview = st.ShowPreview
+
+        // Restore recent item visits (best-effort; drop missing/archived ids).
+        if len(st.RecentItemIDs) > 0 {
+                m.recentItemIDs = nil
+                for _, id := range st.RecentItemIDs {
+                        id = strings.TrimSpace(id)
+                        if id == "" {
+                                continue
+                        }
+                        it, ok := m.db.FindItem(id)
+                        if !ok || it == nil || it.Archived {
+                                continue
+                        }
+                        // Preserve stored order while de-duping/capping.
+                        already := false
+                        for _, cur := range m.recentItemIDs {
+                                if cur == id {
+                                        already = true
+                                        break
+                                }
+                        }
+                        if already {
+                                continue
+                        }
+                        m.recentItemIDs = append(m.recentItemIDs, id)
+                        if len(m.recentItemIDs) >= maxRecentItems {
+                                break
+                        }
+                }
+        }
 
         wantView, _ := viewFromString(st.View)
 
@@ -1097,6 +1204,7 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
                 if it, ok := m.db.FindItem(openItemID); ok && it != nil && !it.Archived {
                         m.openItemID = it.ID
                         m.view = viewItem
+                        m.recordRecentItemVisit(m.openItemID)
                         m.itemFocus = itemFocusTitle
                         m.itemCommentIdx = 0
                         m.itemWorklogIdx = 0
@@ -1381,6 +1489,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         prevID := strings.TrimSpace(ent.itemID)
                                         if prevID != "" {
                                                 m.openItemID = prevID
+                                                (&m).recordRecentItemVisit(m.openItemID)
                                                 m.view = viewItem
                                                 m.itemFocus = itemFocusChildren
                                                 m.itemCommentIdx = 0
@@ -1568,6 +1677,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.selectedOutlineID = it.row.item.OutlineID
                                         m.selectedOutline = &it.outline
                                         m.openItemID = it.row.item.ID
+                                        (&m).recordRecentItemVisit(m.openItemID)
                                         m.view = viewItem
                                         m.itemFocus = itemFocusTitle
                                         m.itemCommentIdx = 0
@@ -1938,6 +2048,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 }
                                 // Navigate to the selected child.
                                 m.openItemID = strings.TrimSpace(activeID)
+                                (&m).recordRecentItemVisit(m.openItemID)
                                 m.itemFocus = itemFocusTitle
                                 m.itemCommentIdx = 0
                                 m.itemWorklogIdx = 0
@@ -1956,6 +2067,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
                                 }
                                 m.openItemID = strings.TrimSpace(activeID)
+                                (&m).recordRecentItemVisit(m.openItemID)
                                 it = active
                                 m.itemChildIdx = 0
                                 m.itemChildOff = 0
@@ -1970,6 +2082,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
                                 }
                                 m.openItemID = strings.TrimSpace(activeID)
+                                (&m).recordRecentItemVisit(m.openItemID)
                                 it = active
                                 m.itemChildIdx = 0
                                 m.itemChildOff = 0
@@ -1990,6 +2103,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
                                 }
                                 m.openItemID = strings.TrimSpace(activeID)
+                                (&m).recordRecentItemVisit(m.openItemID)
                                 it = active
                                 comments = m.db.CommentsForItem(it.ID)
                                 commentRows = buildCommentThreadRows(comments)
@@ -2040,6 +2154,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
                                 }
                                 m.openItemID = strings.TrimSpace(activeID)
+                                (&m).recordRecentItemVisit(m.openItemID)
                                 it = active
                                 m.itemChildIdx = 0
                                 m.itemChildOff = 0
@@ -2491,6 +2606,11 @@ func (m appModel) renderActionPanel() string {
         // - In the Go to panel, show destinations explicitly.
         if m.curActionPanelKind() == actionPanelNav {
                 addSection("Destinations", []string{"p", "o", "l", "i"})
+                // Note: "Recent items" are rendered as a special full-width block at the bottom.
+                // Mark them as seen so they don't fall into "Other".
+                for _, k := range []string{"1", "2", "3", "4", "5"} {
+                        seen[k] = true
+                }
         } else if !isFocusedItemContext {
                 navKeys := []string{}
                 // Stable "nice" order first.
@@ -2678,6 +2798,163 @@ func (m appModel) renderActionPanel() string {
         // Trim trailing blank lines.
         for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
                 lines = lines[:len(lines)-1]
+        }
+
+        // Special full-width section at the bottom: recent items (Go to panel only).
+        if m.curActionPanelKind() == actionPanelNav {
+                // Build recent item rows in an outline-like layout. Important: the modal uses a
+                // background style wrapper (renderModalBox), but any nested lipgloss rendering
+                // emits ANSI resets. To prevent "holes" where the terminal background shows
+                // through, we explicitly render most segments with the modal's surface bg.
+                rec := make([]string, 0, maxRecentItems+1)
+                if m.db != nil {
+                        const keyColW = 3
+                        rowW := contentW - keyColW
+                        if rowW < 8 {
+                                rowW = 8
+                        }
+
+                        renderRecentRow := func(outline model.Outline, it model.Item, doneChildren, totalChildren int, width int) string {
+                                // Base style: force modal surface background.
+                                base := lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorSurfaceBg)
+
+                                twisty := " "
+                                if totalChildren > 0 {
+                                        twisty = "▸"
+                                }
+                                leadSeg := base.Render(twisty + " ")
+
+                                // Status (styled like outline, but ensure surface bg).
+                                statusID := strings.TrimSpace(it.StatusID)
+                                statusTxt := strings.ToUpper(strings.TrimSpace(statusLabel(outline, statusID)))
+                                statusSeg := ""
+                                statusRaw := ""
+                                if statusTxt != "" {
+                                        style := statusOtherStyle
+                                        for _, def := range outline.StatusDefs {
+                                                if def.ID == statusID && def.IsEndState {
+                                                        style = statusDoneStyle
+                                                        break
+                                                }
+                                        }
+                                        switch strings.ToLower(statusID) {
+                                        case "todo":
+                                                style = statusTodoStyle
+                                        case "doing":
+                                                style = statusDoingStyle
+                                        case "done":
+                                                style = statusDoneStyle
+                                        }
+                                        style = style.Copy().Background(colorSurfaceBg)
+                                        statusSeg = style.Render(statusTxt) + base.Render(" ")
+                                        statusRaw = statusTxt + " "
+                                }
+
+                                // Progress cookie: keep the colored "pill", but ensure the leading space
+                                // uses the modal surface background (renderProgressCookie starts with a raw space).
+                                progressCookie := ""
+                                if totalChildren > 0 {
+                                        raw := renderProgressCookie(doneChildren, totalChildren)
+                                        if strings.HasPrefix(raw, " ") {
+                                                progressCookie = base.Render(" ") + strings.TrimPrefix(raw, " ")
+                                        } else {
+                                                progressCookie = base.Render(" ") + raw
+                                        }
+                                }
+                                progressW := xansi.StringWidth(progressCookie)
+
+                                // Inline metadata (priority / on hold), matching outline semantics.
+                                metaParts := make([]string, 0, 2)
+                                if it.Priority {
+                                        st := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true).Background(colorSurfaceBg)
+                                        metaParts = append(metaParts, st.Render("priority"))
+                                }
+                                if it.OnHold {
+                                        st := lipgloss.NewStyle().Foreground(ac("240", "245")).Background(colorSurfaceBg)
+                                        metaParts = append(metaParts, st.Render("on hold"))
+                                }
+                                inlineMetaSeg := strings.Join(metaParts, base.Render(" "))
+                                inlineMetaW := xansi.StringWidth(inlineMetaSeg)
+
+                                title := strings.TrimSpace(it.Title)
+                                if title == "" {
+                                        title = "(untitled)"
+                                }
+
+                                leadW := xansi.StringWidth(twisty + " ")
+                                statusW := xansi.StringWidth(statusRaw)
+                                availTitle := width - leadW - statusW
+                                if progressCookie != "" {
+                                        availTitle -= progressW
+                                }
+                                if inlineMetaSeg != "" {
+                                        availTitle -= (1 + inlineMetaW) // space + inline metadata
+                                }
+                                if availTitle < 0 {
+                                        availTitle = 0
+                                }
+
+                                titleTrunc := truncateText(title, availTitle)
+                                titleStyle := base
+                                if isEndState(outline, statusID) {
+                                        titleStyle = faintIfDark(base.Copy()).
+                                                Foreground(colorMuted).
+                                                Strikethrough(true)
+                                }
+                                titleSeg := titleStyle.Render(titleTrunc)
+
+                                metaSpacer := ""
+                                if inlineMetaSeg != "" {
+                                        metaSpacer = base.Render(" ")
+                                }
+
+                                out := leadSeg + statusSeg + titleSeg + progressCookie + metaSpacer + inlineMetaSeg
+                                // Ensure full-width fill uses surface bg.
+                                curW := xansi.StringWidth(out)
+                                if curW < width {
+                                        out += base.Render(strings.Repeat(" ", width-curW))
+                                } else if curW > width {
+                                        out = xansi.Cut(out, 0, width) + "\x1b[0m"
+                                }
+                                return out
+                        }
+
+                        for i := 0; i < len(m.recentItemIDs) && i < maxRecentItems; i++ {
+                                id := strings.TrimSpace(m.recentItemIDs[i])
+                                if id == "" {
+                                        continue
+                                }
+                                it, ok := m.db.FindItem(id)
+                                if !ok || it == nil || it.Archived {
+                                        continue
+                                }
+                                ol, ok := m.db.FindOutline(strings.TrimSpace(it.OutlineID))
+                                if !ok || ol == nil || ol.Archived {
+                                        continue
+                                }
+
+                                children := m.db.ChildrenOf(it.ID)
+                                doneChildren := 0
+                                totalChildren := len(children)
+                                for _, ch := range children {
+                                        if isEndState(*ol, ch.StatusID) {
+                                                doneChildren++
+                                        }
+                                }
+
+                                rendered := renderRecentRow(*ol, *it, doneChildren, totalChildren, rowW)
+                                key := strconv.Itoa(i + 1)
+                                line := fmt.Sprintf("%-3s%s", actionPanelDisplayKey(key), rendered)
+                                rec = append(rec, cutToWidth(line, contentW))
+                        }
+                }
+                if len(rec) > 0 {
+                        if len(lines) > 0 {
+                                lines = append(lines, "")
+                        }
+                        lines = append(lines, "RECENT ITEMS")
+                        lines = append(lines, rec...)
+                }
         }
 
         body := strings.Join(lines, "\n")
@@ -4498,6 +4775,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
                                         m.view = viewItem
                                         m.openItemID = it.row.item.ID
+                                        (&m).recordRecentItemVisit(m.openItemID)
                                         m.itemFocus = itemFocusTitle
                                         m.itemCommentIdx = 0
                                         m.itemWorklogIdx = 0
@@ -4693,6 +4971,7 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                         m.openItemID = it.row.item.ID
                         m.view = viewItem
+                        (&m).recordRecentItemVisit(m.openItemID)
                         m.itemFocus = itemFocusTitle
                         m.itemCommentIdx = 0
                         m.itemWorklogIdx = 0
@@ -7343,6 +7622,7 @@ func (m *appModel) jumpToItemByID(itemID string) error {
 
         m.view = viewItem
         m.openItemID = itemID
+        m.recordRecentItemVisit(m.openItemID)
         m.itemFocus = itemFocusTitle
         m.itemCommentIdx = 0
         m.itemWorklogIdx = 0

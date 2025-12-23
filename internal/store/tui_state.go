@@ -42,6 +42,10 @@ type TUIState struct {
         // Per-outline display mode (experimental).
         // Values: list|columns
         OutlineViewMode map[string]string `json:"outlineViewMode,omitempty"`
+
+        // RecentItemIDs stores most-recently-visited item ids (full item view only), newest first.
+        // This powers the Go to panel "Recent items" shortcuts.
+        RecentItemIDs []string `json:"recentItemIds,omitempty"`
 }
 
 func (s Store) tuiStatePath() string {
