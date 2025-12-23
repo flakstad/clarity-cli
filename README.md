@@ -2,6 +2,17 @@
 
 This is a Go CLI + Bubble Tea TUI for Clarity V1: items + dependencies + projects, with strict attribution (actors) and lightweight communication.
 
+## Model: projects + outlines (one flexible container)
+
+In Clarity V1 we keep the grouping entity named **Projects**.
+
+Within a project, **Outlines** are the primary container you add and name freely:
+- Task outlines (with statuses like TODO/DOING/DONE)
+- Announcement / message outlines (often with no statuses)
+- Docs / notes outlines (often with no statuses)
+
+We may later introduce explicit settings on projects/outlines to change semantics (notifications, default sorting, etc), but the **data model stays centered on outlines + items**.
+
 ## Install / build
 
 ```bash

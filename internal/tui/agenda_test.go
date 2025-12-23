@@ -1,6 +1,7 @@
 package tui
 
 import (
+        "strings"
         "testing"
         "time"
 
@@ -153,5 +154,54 @@ func TestAgendaView_EnterOpensItem_BackReturnsToAgenda_AndAgendaBackReturnsPrevi
         m5 := mAny.(appModel)
         if m5.view != viewProjects {
                 t.Fatalf("expected viewProjects after back from agenda, got %v", m5.view)
+        }
+}
+
+func TestAgendaView_IsLeftAlignedLikeOtherPages(t *testing.T) {
+        dir := t.TempDir()
+        s := store.Store{Dir: dir}
+
+        actorID := "act-human"
+        now := time.Now().UTC()
+
+        db := &store.DB{
+                CurrentActorID: actorID,
+                Actors:         []model.Actor{{ID: actorID, Kind: model.ActorKindHuman, Name: "human"}},
+                Projects:       []model.Project{{ID: "proj-a", Name: "Alpha", CreatedBy: actorID, CreatedAt: now}},
+                Outlines:       []model.Outline{{ID: "out-a", ProjectID: "proj-a", StatusDefs: store.DefaultOutlineStatusDefs(), CreatedBy: actorID, CreatedAt: now}},
+                Items:          []model.Item{{ID: "item-todo", ProjectID: "proj-a", OutlineID: "out-a", Rank: "h", Title: "Keep me", StatusID: "todo", OwnerActorID: actorID, CreatedBy: actorID, CreatedAt: now, UpdatedAt: now}},
+        }
+        if err := s.Save(db); err != nil {
+                t.Fatalf("save db: %v", err)
+        }
+
+        m := newAppModel(dir, db)
+        m.width = 100
+        m.height = 30
+        m.view = viewAgenda
+        m.refreshAgenda()
+
+        out := m.viewAgenda()
+        lines := strings.Split(out, "\n")
+        first := ""
+        for _, ln := range lines {
+                if strings.TrimSpace(ln) == "" {
+                        continue
+                }
+                first = ln
+                break
+        }
+        if first == "" {
+                t.Fatalf("expected non-empty agenda output")
+        }
+
+        // We expect the first content line (breadcrumb) to start at the standard outer margin,
+        // not be horizontally centered.
+        want := strings.Repeat(" ", splitOuterMargin)
+        if !strings.HasPrefix(first, want) {
+                t.Fatalf("expected first agenda content line to be left-aligned with %d-space margin; got %q", splitOuterMargin, first)
+        }
+        if strings.HasPrefix(first, strings.Repeat(" ", splitOuterMargin+6)) {
+                t.Fatalf("expected agenda content to not be centered/over-indented; got %q", first)
         }
 }

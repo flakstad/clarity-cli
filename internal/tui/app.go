@@ -124,6 +124,7 @@ const (
         modalEditOutlineStatuses
         modalAddOutlineStatus
         modalRenameOutlineStatus
+        modalJumpToItem
         modalActionPanel
 )
 
@@ -219,6 +220,9 @@ type appModel struct {
         itemWorklogIdx int
         itemHistoryIdx int
         itemSideScroll int
+        itemChildIdx   int
+        itemChildOff   int
+        itemNavStack   []itemNavEntry
         // Per-outline display mode for the outline view (experimental).
         outlineViewMode map[string]outlineViewMode
 
@@ -262,6 +266,13 @@ type appModel struct {
         lastEventsModTime time.Time
 
         minibufferText string
+}
+
+type itemNavEntry struct {
+        // itemID is the item we navigated *from* (the "back" target).
+        itemID string
+        // childID is the item we navigated *to* (used to restore selection when returning).
+        childID string
 }
 
 func (m *appModel) currentWriteActorID() string {
@@ -443,6 +454,19 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                                 return mm, nil
                         },
                 }
+                actions["j"] = actionPanelAction{
+                        label: "Jump to item by id…",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                mm.modal = modalJumpToItem
+                                mm.modalForID = ""
+                                mm.modalForKey = ""
+                                mm.input.Placeholder = "item-…"
+                                mm.input.SetValue("")
+                                mm.input.Focus()
+                                return mm, nil
+                        },
+                }
 
                 // Outlines (requires a project context).
                 projID := strings.TrimSpace(m.selectedProjectID)
@@ -600,11 +624,13 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         actions["Y"] = actionPanelAction{label: "Copy CLI show command (includes --workspace)", kind: actionPanelActionExec}
                         actions["C"] = actionPanelAction{label: "Add comment", kind: actionPanelActionExec}
                         actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
+                        actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
+                        actions["D"] = actionPanelAction{label: "Edit description", kind: actionPanelActionExec}
                         actions["r"] = actionPanelAction{label: "Archive item", kind: actionPanelActionExec}
                         actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
 
-                        // Mutations are outline-pane only today.
-                        if m.pane == paneOutline {
+                        // Item mutations should be discoverable from both panes when preview is visible.
+                        if m.pane == paneOutline || (m.pane == paneDetail && m.splitPreviewVisible()) {
                                 actions["e"] = actionPanelAction{label: "Edit title", kind: actionPanelActionExec}
                                 actions["n"] = actionPanelAction{label: "New sibling", kind: actionPanelActionExec}
                                 actions["N"] = actionPanelAction{label: "New child", kind: actionPanelActionExec}
@@ -1321,6 +1347,39 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 break
                         }
                         if m.view == viewItem {
+                                // If we navigated within the item view (parent -> child), pop back to the parent item.
+                                if n := len(m.itemNavStack); n > 0 {
+                                        ent := m.itemNavStack[n-1]
+                                        m.itemNavStack = m.itemNavStack[:n-1]
+                                        prevID := strings.TrimSpace(ent.itemID)
+                                        if prevID != "" {
+                                                m.openItemID = prevID
+                                                m.view = viewItem
+                                                m.itemFocus = itemFocusChildren
+                                                m.itemCommentIdx = 0
+                                                m.itemWorklogIdx = 0
+                                                m.itemHistoryIdx = 0
+                                                m.itemSideScroll = 0
+
+                                                // Restore selection to the child we came from (best-effort).
+                                                childID := strings.TrimSpace(ent.childID)
+                                                children := m.db.ChildrenOf(prevID)
+                                                sort.Slice(children, func(i, j int) bool { return compareOutlineItems(children[i], children[j]) < 0 })
+                                                m.itemChildIdx = 0
+                                                for i := range children {
+                                                        if strings.TrimSpace(children[i].ID) == childID {
+                                                                m.itemChildIdx = i
+                                                                break
+                                                        }
+                                                }
+                                                const maxRows = 8
+                                                m.itemChildOff = 0
+                                                if m.itemChildIdx >= maxRows {
+                                                        m.itemChildOff = m.itemChildIdx - maxRows + 1
+                                                }
+                                        }
+                                        return m, nil
+                                }
                                 if m.hasReturnView {
                                         m.view = m.returnView
                                         m.hasReturnView = false
@@ -1367,6 +1426,39 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 break
                         }
                         if m.view == viewItem {
+                                // If we navigated within the item view (parent -> child), pop back to the parent item.
+                                if n := len(m.itemNavStack); n > 0 {
+                                        ent := m.itemNavStack[n-1]
+                                        m.itemNavStack = m.itemNavStack[:n-1]
+                                        prevID := strings.TrimSpace(ent.itemID)
+                                        if prevID != "" {
+                                                m.openItemID = prevID
+                                                m.view = viewItem
+                                                m.itemFocus = itemFocusChildren
+                                                m.itemCommentIdx = 0
+                                                m.itemWorklogIdx = 0
+                                                m.itemHistoryIdx = 0
+                                                m.itemSideScroll = 0
+
+                                                // Restore selection to the child we came from (best-effort).
+                                                childID := strings.TrimSpace(ent.childID)
+                                                children := m.db.ChildrenOf(prevID)
+                                                sort.Slice(children, func(i, j int) bool { return compareOutlineItems(children[i], children[j]) < 0 })
+                                                m.itemChildIdx = 0
+                                                for i := range children {
+                                                        if strings.TrimSpace(children[i].ID) == childID {
+                                                                m.itemChildIdx = i
+                                                                break
+                                                        }
+                                                }
+                                                const maxRows = 8
+                                                m.itemChildOff = 0
+                                                if m.itemChildIdx >= maxRows {
+                                                        m.itemChildOff = m.itemChildIdx - maxRows + 1
+                                                }
+                                        }
+                                        return m, nil
+                                }
                                 if m.hasReturnView {
                                         m.view = m.returnView
                                         m.hasReturnView = false
@@ -1647,10 +1739,49 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                 worklog := m.db.WorklogForItem(it.ID)
                 history := filterEventsForItem(m.db, m.eventsTail, it.ID)
                 commentRows := buildCommentThreadRows(comments)
+                children := m.db.ChildrenOf(it.ID)
+                sort.Slice(children, func(i, j int) bool { return compareOutlineItems(children[i], children[j]) < 0 })
+                if m.itemChildIdx < 0 {
+                        m.itemChildIdx = 0
+                }
+                if len(children) == 0 {
+                        m.itemChildIdx = 0
+                        m.itemChildOff = 0
+                } else if m.itemChildIdx >= len(children) {
+                        m.itemChildIdx = len(children) - 1
+                }
+
+                active := it
+                activeID := strings.TrimSpace(it.ID)
+                if m.itemFocus == itemFocusChildren && len(children) > 0 {
+                        activeID = strings.TrimSpace(children[m.itemChildIdx].ID)
+                        if it2, ok := m.db.FindItem(activeID); ok && it2 != nil {
+                                active = it2
+                        }
+                }
 
                 switch km.String() {
                 case "up", "k":
                         switch m.itemFocus {
+                        case itemFocusChildren:
+                                if len(children) > 0 && m.itemChildIdx > 0 {
+                                        m.itemChildIdx--
+                                        const maxRows = 8
+                                        if m.itemChildOff < 0 {
+                                                m.itemChildOff = 0
+                                        }
+                                        if m.itemChildIdx < m.itemChildOff {
+                                                m.itemChildOff = m.itemChildIdx
+                                        }
+                                        maxOff := len(children) - maxRows
+                                        if maxOff < 0 {
+                                                maxOff = 0
+                                        }
+                                        if m.itemChildOff > maxOff {
+                                                m.itemChildOff = maxOff
+                                        }
+                                }
+                                return m, nil
                         case itemFocusComments:
                                 if len(commentRows) > 0 && m.itemCommentIdx > 0 {
                                         m.itemCommentIdx--
@@ -1672,6 +1803,25 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                 case "down", "j":
                         switch m.itemFocus {
+                        case itemFocusChildren:
+                                if n := len(children); n > 0 && m.itemChildIdx < n-1 {
+                                        m.itemChildIdx++
+                                        const maxRows = 8
+                                        if m.itemChildOff < 0 {
+                                                m.itemChildOff = 0
+                                        }
+                                        if m.itemChildIdx >= m.itemChildOff+maxRows {
+                                                m.itemChildOff = m.itemChildIdx - maxRows + 1
+                                        }
+                                        maxOff := len(children) - maxRows
+                                        if maxOff < 0 {
+                                                maxOff = 0
+                                        }
+                                        if m.itemChildOff > maxOff {
+                                                m.itemChildOff = maxOff
+                                        }
+                                }
+                                return m, nil
                         case itemFocusComments:
                                 if n := len(commentRows); n > 0 && m.itemCommentIdx < n-1 {
                                         m.itemCommentIdx++
@@ -1755,47 +1905,100 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         switch m.itemFocus {
                         case itemFocusTitle:
                                 m.modal = modalEditTitle
-                                m.modalForID = it.ID
-                                m.input.SetValue(it.Title)
+                                m.modalForID = activeID
+                                m.input.SetValue(active.Title)
                                 m.input.Focus()
                                 return m, nil
                         case itemFocusStatus:
-                                if o, ok := m.db.FindOutline(it.OutlineID); ok {
-                                        m.openStatusPicker(*o, it.ID, it.StatusID)
+                                if o, ok := m.db.FindOutline(active.OutlineID); ok {
+                                        m.openStatusPicker(*o, activeID, active.StatusID)
                                         m.modal = modalPickStatus
-                                        m.modalForID = it.ID
+                                        m.modalForID = activeID
                                 }
                                 return m, nil
                         case itemFocusPriority:
                                 // Toggle priority.
-                                if err := m.togglePriority(it.ID); err != nil {
-                                        return m, m.reportError(it.ID, err)
+                                if err := m.togglePriority(activeID); err != nil {
+                                        return m, m.reportError(activeID, err)
                                 }
                                 return m, nil
                         case itemFocusDescription:
-                                m.openTextModal(modalEditDescription, it.ID, "Markdown description…", it.Description)
+                                m.openTextModal(modalEditDescription, activeID, "Markdown description…", active.Description)
+                                return m, nil
+                        case itemFocusChildren:
+                                if len(children) == 0 || strings.TrimSpace(activeID) == "" {
+                                        return m, nil
+                                }
+                                // Record navigation so esc/backspace can return to the parent item.
+                                if cur := strings.TrimSpace(it.ID); cur != "" && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != cur {
+                                        m.itemNavStack = append(m.itemNavStack, itemNavEntry{itemID: cur, childID: strings.TrimSpace(activeID)})
+                                        if len(m.itemNavStack) > 64 {
+                                                m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
+                                        }
+                                }
+                                // Navigate to the selected child.
+                                m.openItemID = strings.TrimSpace(activeID)
+                                m.itemFocus = itemFocusTitle
+                                m.itemCommentIdx = 0
+                                m.itemWorklogIdx = 0
+                                m.itemHistoryIdx = 0
+                                m.itemSideScroll = 0
+                                m.itemChildIdx = 0
+                                m.itemChildOff = 0
                                 return m, nil
                         default:
                                 return m, nil
                         }
                 case "e":
+                        if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
+                                m.itemNavStack = append(m.itemNavStack, itemNavEntry{itemID: strings.TrimSpace(it.ID), childID: strings.TrimSpace(activeID)})
+                                if len(m.itemNavStack) > 64 {
+                                        m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
+                                }
+                                m.openItemID = strings.TrimSpace(activeID)
+                                it = active
+                                m.itemChildIdx = 0
+                                m.itemChildOff = 0
+                        }
                         m.itemFocus = itemFocusTitle
                         m.modal = modalEditTitle
-                        m.modalForID = it.ID
-                        m.input.SetValue(it.Title)
+                        m.modalForID = activeID
+                        m.input.SetValue(active.Title)
                         m.input.Focus()
                         return m, nil
                 case "D":
+                        if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
+                                m.itemNavStack = append(m.itemNavStack, itemNavEntry{itemID: strings.TrimSpace(it.ID), childID: strings.TrimSpace(activeID)})
+                                if len(m.itemNavStack) > 64 {
+                                        m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
+                                }
+                                m.openItemID = strings.TrimSpace(activeID)
+                                it = active
+                                m.itemChildIdx = 0
+                                m.itemChildOff = 0
+                        }
                         m.itemFocus = itemFocusDescription
-                        m.openTextModal(modalEditDescription, it.ID, "Markdown description…", it.Description)
+                        m.openTextModal(modalEditDescription, activeID, "Markdown description…", active.Description)
                         return m, nil
                 case "p":
                         // Toggle priority.
-                        if err := m.togglePriority(it.ID); err != nil {
-                                return m, m.reportError(it.ID, err)
+                        if err := m.togglePriority(activeID); err != nil {
+                                return m, m.reportError(activeID, err)
                         }
                         return m, nil
                 case "C":
+                        if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
+                                m.itemNavStack = append(m.itemNavStack, itemNavEntry{itemID: strings.TrimSpace(it.ID), childID: strings.TrimSpace(activeID)})
+                                if len(m.itemNavStack) > 64 {
+                                        m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
+                                }
+                                m.openItemID = strings.TrimSpace(activeID)
+                                it = active
+                                comments = m.db.CommentsForItem(it.ID)
+                                commentRows = buildCommentThreadRows(comments)
+                                m.itemChildIdx = 0
+                                m.itemChildOff = 0
+                        }
                         // Add comment (keep the side panel open by focusing Comments).
                         m.itemFocus = itemFocusComments
                         if n := len(commentRows); n > 0 {
@@ -1834,6 +2037,16 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.textarea.Focus()
                         return m, nil
                 case "w":
+                        if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
+                                m.itemNavStack = append(m.itemNavStack, itemNavEntry{itemID: strings.TrimSpace(it.ID), childID: strings.TrimSpace(activeID)})
+                                if len(m.itemNavStack) > 64 {
+                                        m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
+                                }
+                                m.openItemID = strings.TrimSpace(activeID)
+                                it = active
+                                m.itemChildIdx = 0
+                                m.itemChildOff = 0
+                        }
                         // Add worklog entry (keep the side panel open by focusing Worklog).
                         m.itemFocus = itemFocusWorklog
                         m.itemWorklogIdx = 0
@@ -1842,18 +2055,18 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, nil
                 case " ":
                         m.itemFocus = itemFocusStatus
-                        if o, ok := m.db.FindOutline(it.OutlineID); ok {
-                                m.openStatusPicker(*o, it.ID, it.StatusID)
+                        if o, ok := m.db.FindOutline(active.OutlineID); ok {
+                                m.openStatusPicker(*o, activeID, active.StatusID)
                                 m.modal = modalPickStatus
-                                m.modalForID = it.ID
+                                m.modalForID = activeID
                         }
                         return m, nil
                 case "m":
-                        m.openMoveOutlinePicker(it.ID)
+                        m.openMoveOutlinePicker(activeID)
                         return m, nil
                 case "r":
                         m.modal = modalConfirmArchive
-                        m.modalForID = it.ID
+                        m.modalForID = activeID
                         m.archiveFor = archiveTargetItem
                         m.input.Blur()
                         return m, nil
@@ -3059,7 +3272,7 @@ func (m *appModel) viewItem() string {
         // Split view when focusing a section that has a side panel.
         if sidePanelKindForFocus(m.itemFocus) != itemSideNone {
                 leftW, rightW := splitPaneWidths(contentW)
-                left := renderItemDetailInteractive(m.db, *outline, *it, leftW, bodyHeight, m.itemFocus, m.eventsTail)
+                left := renderItemDetailInteractive(m.db, *outline, *it, leftW, bodyHeight, m.itemFocus, m.eventsTail, m.itemChildIdx, m.itemChildOff)
                 right := renderItemSidePanelWithEvents(m.db, *it, rightW, bodyHeight, sidePanelKindForFocus(m.itemFocus), m.itemCommentIdx, m.itemWorklogIdx, m.itemHistoryIdx, m.itemSideScroll, m.eventsTail)
                 main := renderSplitWithLeftBreadcrumb(contentW, frameH, bodyHeight, leftW, rightW, m.breadcrumbText(), left, right)
                 // Item view uses the standard (full-width) breadcrumb in non-split mode; in split mode
@@ -3067,7 +3280,7 @@ func (m *appModel) viewItem() string {
                 return wrap(main)
         }
 
-        card := renderItemDetailInteractive(m.db, *outline, *it, contentW, bodyHeight, m.itemFocus, m.eventsTail)
+        card := renderItemDetailInteractive(m.db, *outline, *it, contentW, bodyHeight, m.itemFocus, m.eventsTail, m.itemChildIdx, m.itemChildOff)
         block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + card
         return wrap(block)
 }
@@ -3110,6 +3323,8 @@ func (m *appModel) renderModal() string {
                 return renderModalBox(m.width, "Add status", m.input.View()+"\n\nenter: add   esc: cancel")
         case modalRenameOutlineStatus:
                 return renderModalBox(m.width, "Rename status", m.input.View()+"\n\nenter: save   esc: cancel")
+        case modalJumpToItem:
+                return renderModalBox(m.width, "Jump to item", m.input.View()+"\n\nenter: jump   esc: cancel")
         case modalAddComment:
                 return m.renderTextAreaModal("Add comment")
         case modalReplyComment:
@@ -3609,7 +3824,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         switch km := msg.(type) {
                         case tea.KeyMsg:
                                 switch km.String() {
-                                case "esc":
+                                case "esc", "ctrl+g":
                                         m.modal = modalNone
                                         m.modalForID = ""
                                         m.modalForKey = ""
@@ -3762,10 +3977,6 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                 m.showMinibuffer("Error: outline not found")
                                                 return m, nil
                                         }
-                                        if strings.TrimSpace(o.ProjectID) != strings.TrimSpace(curItem.ProjectID) {
-                                                m.showMinibuffer("Error: target outline must be in the same project")
-                                                return m, nil
-                                        }
 
                                         // If any status in the subtree isn't valid in the target outline, prompt for one.
                                         if subtreeHasInvalidStatusInOutline(m.db, curItem.ID, o.ID) {
@@ -3886,14 +4097,26 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                 switch km := msg.(type) {
                 case tea.KeyMsg:
                         switch km.String() {
-                        case "esc":
+                        case "esc", "ctrl+g":
                                 m.modal = modalNone
                                 m.modalForID = ""
+                                m.modalForKey = ""
+                                m.input.Placeholder = "Title"
+                                m.input.SetValue("")
                                 m.input.Blur()
                                 return m, nil
-                        case "enter":
+                        case "enter", "ctrl+s":
                                 val := strings.TrimSpace(m.input.Value())
                                 switch m.modal {
+                                case modalJumpToItem:
+                                        val = normalizeJumpItemID(val)
+                                        if val == "" {
+                                                return m, nil
+                                        }
+                                        if err := (&m).jumpToItemByID(val); err != nil {
+                                                m.showMinibuffer("Jump: " + err.Error())
+                                                return m, nil
+                                        }
                                 case modalNewProject:
                                         if val == "" {
                                                 return m, nil
@@ -6230,23 +6453,15 @@ func (m *appModel) openMoveOutlinePicker(itemID string) {
         if !ok {
                 return
         }
-        projectID := strings.TrimSpace(it.ProjectID)
-        if projectID == "" {
-                return
-        }
-
         opts := []list.Item{}
         for _, o := range m.db.Outlines {
-                if strings.TrimSpace(o.ProjectID) != projectID {
-                        continue
-                }
                 if o.Archived {
                         continue
                 }
                 opts = append(opts, outlineItem{outline: o})
         }
         if len(opts) <= 1 {
-                m.showMinibuffer("No other outlines in this project")
+                m.showMinibuffer("No other outlines")
                 return
         }
 
@@ -6300,9 +6515,6 @@ func (m *appModel) moveItemToOutline(itemID, toOutlineID, statusOverride string,
                 o, ok := db.FindOutline(toOutlineID)
                 if !ok {
                         return false, itemMutationResult{}, errors.New("outline not found")
-                }
-                if strings.TrimSpace(o.ProjectID) != strings.TrimSpace(it.ProjectID) {
-                        return false, itemMutationResult{}, errors.New("target outline must belong to the same project")
                 }
 
                 actorID := m.editActorID()
@@ -6364,6 +6576,10 @@ func (m *appModel) moveItemToOutline(itemID, toOutlineID, statusOverride string,
 
                         if strings.TrimSpace(x.OutlineID) != strings.TrimSpace(o.ID) {
                                 x.OutlineID = o.ID
+                                changed = true
+                        }
+                        if strings.TrimSpace(x.ProjectID) != strings.TrimSpace(o.ProjectID) {
+                                x.ProjectID = o.ProjectID
                                 changed = true
                         }
                         if strings.TrimSpace(x.StatusID) != strings.TrimSpace(nextStatus) {
@@ -6922,6 +7138,68 @@ func (m *appModel) openTextModal(kind modalKind, itemID, placeholder, initial st
         m.textarea.SetHeight(h)
         m.textarea.SetValue(initial)
         m.textarea.Focus()
+}
+
+func (m *appModel) jumpToItemByID(itemID string) error {
+        itemID = normalizeJumpItemID(itemID)
+        if m == nil || m.db == nil || itemID == "" {
+                return nil
+        }
+        it, ok := m.db.FindItem(itemID)
+        if !ok || it == nil || it.Archived {
+                return fmt.Errorf("item not found")
+        }
+
+        // Preserve a return path when jumping from agenda.
+        if m.view == viewAgenda {
+                m.hasReturnView = true
+                m.returnView = viewAgenda
+        }
+
+        m.selectedProjectID = strings.TrimSpace(it.ProjectID)
+        m.selectedOutlineID = strings.TrimSpace(it.OutlineID)
+
+        // Refresh lists so selection exists.
+        if m.selectedProjectID != "" {
+                m.refreshOutlines(m.selectedProjectID)
+                selectListItemByID(&m.outlinesList, m.selectedOutlineID)
+        }
+
+        if ol, ok := m.db.FindOutline(m.selectedOutlineID); ok && ol != nil {
+                m.selectedOutline = ol
+                m.refreshItems(*ol)
+                // Clear any active outline filter so selection is predictable.
+                if m.itemsList.SettingFilter() || m.itemsList.IsFiltered() {
+                        m.itemsList.ResetFilter()
+                }
+                selectListItemByID(&m.itemsList, itemID)
+        }
+
+        m.view = viewItem
+        m.openItemID = itemID
+        m.itemFocus = itemFocusTitle
+        m.itemCommentIdx = 0
+        m.itemWorklogIdx = 0
+        m.itemHistoryIdx = 0
+        m.itemSideScroll = 0
+        m.itemChildIdx = 0
+        m.itemChildOff = 0
+        return nil
+}
+
+func normalizeJumpItemID(s string) string {
+        s = strings.TrimSpace(s)
+        if s == "" {
+                return ""
+        }
+        if strings.HasPrefix(s, "item-") {
+                return s
+        }
+        // If it already looks like an id with a prefix, keep it as-is.
+        if strings.Contains(s, "-") {
+                return s
+        }
+        return "item-" + s
 }
 
 func (m *appModel) addComment(itemID, body string, replyToCommentID *string) (string, error) {

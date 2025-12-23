@@ -5,7 +5,7 @@ Run `clarity` with no subcommands to start the interactive TUI.
 Current scope (early):
 - Centered layout by default (projects/outlines/outline/item views)
 - Breadcrumb at the top showing where you are (projects > project > outline > item)
-- Navigate projects → outlines → items
+- Go to projects → outlines → items
 - Optional preview pane for item details (outline on the left, preview on the right)
 - Full-screen item view (single pane)
 - Auto-refresh when the local store changes (polls file mtimes)
@@ -17,18 +17,28 @@ Key bindings:
 - `enter`: open selected item (single-pane item view)
 - `o`: toggle preview pane (split view)
 - `backspace` or `esc`: go back (from item view → outline; from outline → previous screen)
+- `x` (or `?`): open the actions menu (context-aware; includes item actions from outline focus, details pane, and item view)
 - `r`: archive selected item (with confirm)
+- `m`: move selected/open item to another outline (can be in a different project)
 - `y`: copy selected item ID to clipboard
 - `Y`: copy `clarity items show <id>` to clipboard
 - `c`: add a comment (selected item)
 - `w`: add a worklog entry (selected item)
+- `g`: open the Go to menu (shows available destinations, including `j` jump-to-item)
+  - `j`: jump to an item by id (accepts `item-55vdob` or just `55vdob`)
 - `q` or `ctrl+c`: quit
 - `tab`: toggle focus (outline/preview) (optional; only when preview is visible)
+
+Item view:
+- `tab` / `shift+tab`: cycle focus across fields (title/status/priority/description/children/…)
+- When **Children** is focused: `↑/↓` selects a child; `enter` opens the selected child
 
 Outline navigation (outline.js-style):
 - `↑/↓`, `j/k`, `ctrl+n/ctrl+p`: previous/next visible item
 - `→`, `l`, `ctrl+f`: go into first child (expands if collapsed)
 - `←`, `h`, `ctrl+b`: go to parent
+- `g`, `home`, `<`: go to start
+- `G`, `end`, `>`: go to end
 - `z`: toggle collapse for selected item
 - `Shift+Z`: collapse all ↔ expand all
 
@@ -38,8 +48,8 @@ Outline movement (hold Alt):
 - `alt+←` (or `alt+h/b`): outdent (become sibling after parent)
 
 Editing:
-- `e`: edit title of the selected item (Enter saves, Esc cancels)
-- `e` (on outlines screen): rename selected outline (Enter saves, Esc cancels)
+- `e`: edit title of the selected item (Enter or Ctrl+S saves, Esc or Ctrl+G cancels)
+- `e` (on outlines screen): rename selected outline (Enter or Ctrl+S saves, Esc or Ctrl+G cancels)
 
 Status:
 - `space`: open status picker for selected item (includes `(no status)`)
@@ -56,4 +66,5 @@ Notes:
 
 Comment/worklog editor:
 - `ctrl+s`: save
+- `ctrl+g`: close (cancel)
 - `tab` / `shift+tab`: focus body/save/cancel, `enter` activates buttons

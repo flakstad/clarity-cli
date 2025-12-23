@@ -4,6 +4,19 @@ Core model:
 - `workspace -> projects -> outlines -> items`
 - Items are hierarchical within an outline (indent/outdent).
 
+## Outlines are a flexible container (tasks, announcements, docs)
+
+In Clarity V1 we intentionally keep the model small and consistent:
+- Projects are the top-level grouping (and can represent a project or a team).
+- Within a project you can create **multiple outlines**, named freely.
+- An outline can represent tasks *or* other structured content (announcements, docs, notes), using the same `items` primitive.
+
+Status is optional:
+- Task-like outlines typically define `statusDefs` and use status cycling.
+- Announcement/doc-like outlines often use **no status** on items (`--status none`).
+
+We may later add explicit settings on projects/outlines that change semantics (notifications, default sorting/view, etc), while keeping the underlying entities stable.
+
 ## Ordering
 Items have:
 - `parentId` (hierarchy)

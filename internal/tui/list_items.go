@@ -29,6 +29,13 @@ type outlineItem struct {
         outline model.Outline
 }
 
+func outlineDisplayName(o model.Outline) string {
+        if o.Name != nil && strings.TrimSpace(*o.Name) != "" {
+                return strings.TrimSpace(*o.Name)
+        }
+        return "(unnamed outline)"
+}
+
 func (i outlineItem) FilterValue() string {
         if i.outline.Name != nil {
                 return *i.outline.Name
@@ -36,12 +43,42 @@ func (i outlineItem) FilterValue() string {
         return ""
 }
 func (i outlineItem) Title() string {
-        if i.outline.Name != nil && strings.TrimSpace(*i.outline.Name) != "" {
-                return *i.outline.Name
-        }
-        return "(unnamed outline)"
+        return outlineDisplayName(i.outline)
 }
 func (i outlineItem) Description() string { return i.outline.ID }
+
+// outlineMoveOptionItem is used by the "Move to outline" picker.
+// Unlike outlineItem, it includes the project name in the display to disambiguate
+// outlines across projects.
+type outlineMoveOptionItem struct {
+        outline     model.Outline
+        projectName string
+}
+
+func (i outlineMoveOptionItem) FilterValue() string {
+        return strings.TrimSpace(i.projectName) + " " + outlineDisplayName(i.outline)
+}
+
+func (i outlineMoveOptionItem) Title() string {
+        p := strings.TrimSpace(i.projectName)
+        if p == "" {
+                p = "(unknown project)"
+        }
+        return fmt.Sprintf("%s / %s", p, outlineDisplayName(i.outline))
+}
+
+func (i outlineMoveOptionItem) Description() string {
+        // Keep it compact but useful in debug/help.
+        oid := strings.TrimSpace(i.outline.ID)
+        pid := strings.TrimSpace(i.outline.ProjectID)
+        if oid == "" {
+                oid = "(unknown outline)"
+        }
+        if pid == "" {
+                pid = "(unknown project)"
+        }
+        return fmt.Sprintf("%s  (%s)", oid, pid)
+}
 
 type workspaceItem struct {
         name    string
@@ -252,6 +289,15 @@ func newList(title, help string, items []list.Item) list.Model {
         l.SetStatusBarItemName("item", "items")
         // Bubble list defaults to quitting on ESC; in Clarity ESC is "back/cancel".
         l.KeyMap.Quit.SetKeys("q")
+        // Add extra aliases for go-to-start/end to better support non-US keyboard muscle memory.
+        // This complements existing defaults: GoToStart = home/g, GoToEnd = end/G.
+        goToStartKeys := append([]string{}, l.KeyMap.GoToStart.Keys()...)
+        goToStartKeys = append(goToStartKeys, "<")
+        l.KeyMap.GoToStart.SetKeys(goToStartKeys...)
+
+        goToEndKeys := append([]string{}, l.KeyMap.GoToEnd.Keys()...)
+        goToEndKeys = append(goToEndKeys, ">")
+        l.KeyMap.GoToEnd.SetKeys(goToEndKeys...)
         return l
 }
 

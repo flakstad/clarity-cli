@@ -211,7 +211,10 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
         if curW < width {
                 out += base.Render(strings.Repeat(" ", width-curW))
         } else if curW > width {
-                out = xansi.Cut(out, 0, width)
+                // IMPORTANT: when cutting ANSI-styled strings, ensure we always terminate styling.
+                // Otherwise some terminals will "bleed" background/bold into the next line, which
+                // can look like an extra blank highlighted row.
+                out = xansi.Cut(out, 0, width) + "\x1b[0m"
         }
         return out
 }

@@ -93,24 +93,12 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
                 desc,
                 "",
                 labelStyle.Render("Children"),
-                renderChildren(children, 8),
+                renderChildrenOutline(db, outline, children, innerW, false, 0, 0, 8),
                 "",
                 labelStyle.Render("Related"),
                 fmt.Sprintf("Comments: %d (last %s)", commentsCount, lastComment),
                 fmt.Sprintf("Worklog:   %d (last %s)", len(worklog), lastWorklog),
                 fmt.Sprintf("History:   %d (last %s)", len(history), lastHistory),
-                "",
-                labelStyle.Render("Hints"),
-                "- tab toggles focus between outline/detail",
-                "- n creates a new sibling (outline pane)",
-                "- N creates a new subitem",
-                "- e edits title; Shift+D edits description",
-                "- p toggles priority",
-                "- C adds a comment; w adds a worklog entry",
-                "- z toggles collapse; Shift+Z toggles collapse all/expand all",
-                "- More via CLI:",
-                "  clarity comments list " + it.ID,
-                "  clarity worklog list " + it.ID,
         }
 
         if strings.TrimSpace(status) != "" {
@@ -122,7 +110,7 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
         return normalizePane(box.Render(strings.Join(lines, "\n")), width, height)
 }
 
-func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.Item, width, height int, focus itemPageFocus, events []model.Event) string {
+func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.Item, width, height int, focus itemPageFocus, events []model.Event, childIdx int, childOff int) string {
         titleStyle := lipgloss.NewStyle().Bold(true)
         if isEndState(outline, it.StatusID) {
                 titleStyle = faintIfDark(lipgloss.NewStyle()).
@@ -207,6 +195,7 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
         }
 
         titleBtn := btn(focus == itemFocusTitle).Render(titleStyle.Render(it.Title))
+        childrenBtn := btn(focus == itemFocusChildren).Render("Children")
 
         lines := []string{
                 titleBtn,
@@ -220,25 +209,13 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
                 btn(focus == itemFocusDescription).Render("Description (edit)"),
                 desc,
                 "",
+                childrenBtn,
+                renderChildrenOutline(db, outline, children, innerW, focus == itemFocusChildren, childIdx, childOff, 8),
+                "",
                 labelStyle.Render("Related"),
                 btn(focus == itemFocusComments).Render(fmt.Sprintf("Comments: %d (last %s)", commentsCount, lastComment)),
                 btn(focus == itemFocusWorklog).Render(fmt.Sprintf("Worklog:   %d (last %s)", len(worklog), lastWorklog)),
                 btn(focus == itemFocusHistory).Render(fmt.Sprintf("History:   %d (last %s)", len(history), lastHistory)),
-                "",
-                labelStyle.Render("Children"),
-                renderChildren(children, 8),
-                "",
-                labelStyle.Render("Hints"),
-                "- tab / shift+tab: move focus",
-                "- enter: edit focused field",
-                "- e edits title; Shift+D edits description",
-                "- p toggles priority",
-                "- C adds a comment; w adds a worklog entry",
-                "- space sets status",
-                "- Comments/Worklog/History: up/down selects entry (in right panel); pgup/pgdown scrolls expanded entry",
-                "- More via CLI:",
-                "  clarity comments list " + it.ID,
-                "  clarity worklog list " + it.ID,
         }
 
         if strings.TrimSpace(status) != "" {
@@ -262,23 +239,78 @@ func truncateLines(s string, maxLines int) string {
         return strings.Join(lines[:maxLines], "\n") + "\n…"
 }
 
-func renderChildren(children []model.Item, max int) string {
+func renderChildrenOutline(db *store.DB, outline model.Outline, children []model.Item, width int, focused bool, selIdx int, off int, maxRows int) string {
         if len(children) == 0 {
                 return "(no children)"
         }
-        if max <= 0 {
-                max = 1
+        if maxRows <= 0 {
+                maxRows = 1
         }
-        n := len(children)
-        if n > max {
-                n = max
+        // Some terminals/fonts treat a few glyphs as "ambiguous width" and may wrap lines
+        // even when our width calculations say they fit. Leave a 1-col safety margin.
+        if width > 0 {
+                width--
         }
-        lines := make([]string, 0, n+1)
-        for i := 0; i < n; i++ {
-                lines = append(lines, fmt.Sprintf("- %s", children[i].Title))
+        if selIdx < 0 {
+                selIdx = 0
         }
-        if len(children) > max {
-                lines = append(lines, fmt.Sprintf("… and %d more", len(children)-max))
+        if selIdx >= len(children) {
+                selIdx = len(children) - 1
+        }
+        if off < 0 {
+                off = 0
+        }
+        if off > selIdx {
+                off = selIdx
+        }
+        maxOff := len(children) - maxRows
+        if maxOff < 0 {
+                maxOff = 0
+        }
+        if off > maxOff {
+                off = maxOff
+        }
+        end := off + maxRows
+        if end > len(children) {
+                end = len(children)
+        }
+
+        // Compute direct-child progress for each child (so progress cookies match outline behavior).
+        childChildren := map[string][]model.Item{}
+        for _, ch := range children {
+                id := strings.TrimSpace(ch.ID)
+                if id == "" {
+                        continue
+                }
+                childChildren[id] = db.ChildrenOf(id)
+        }
+        progress := computeChildProgress(outline, childChildren)
+
+        d := newOutlineItemDelegate()
+        lines := make([]string, 0, (end-off)+1)
+        for i := off; i < end; i++ {
+                ch := children[i]
+                id := strings.TrimSpace(ch.ID)
+                kids := childChildren[id]
+                hasKids := len(kids) > 0
+                doneChildren, totalChildren := 0, 0
+                if p, ok := progress[id]; ok {
+                        doneChildren, totalChildren = p[0], p[1]
+                }
+                row := outlineRow{
+                        item:          ch,
+                        depth:         0,
+                        hasChildren:   hasKids,
+                        collapsed:     hasKids, // show ▸ to indicate subtree exists
+                        doneChildren:  doneChildren,
+                        totalChildren: totalChildren,
+                }
+                item := outlineRowItem{row: row, outline: outline}
+                lines = append(lines, d.renderOutlineRow(width, "", item, focused && i == selIdx))
+        }
+        if end < len(children) {
+                more := fmt.Sprintf("… and %d more", len(children)-end)
+                lines = append(lines, styleMuted().Render(truncateText(more, width)))
         }
         return strings.Join(lines, "\n")
 }

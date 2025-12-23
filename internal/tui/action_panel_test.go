@@ -158,7 +158,7 @@ func TestActionPanel_GlobalKeys_OpenPanels(t *testing.T) {
 
         m := newAppModel(dir, db)
 
-        // Global g opens Navigate.
+        // Global g opens Go to.
         mAny, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
         m2 := mAny.(appModel)
         if m2.modal != modalActionPanel {
@@ -282,6 +282,133 @@ func TestActionPanel_ItemFocus_ShowsGroupedSectionsWithHeaders(t *testing.T) {
         for _, ln := range strings.Split(out, "\n") {
                 if strings.Contains(ln, "Open item") && strings.Contains(ln, "Toggle preview") {
                         t.Fatalf("expected group actions not to be packed into a single line; got:\n%s", out)
+                }
+        }
+}
+
+func TestActionPanel_ItemView_ShowsItemSectionAndItemActions(t *testing.T) {
+        dir := t.TempDir()
+        s := store.Store{Dir: dir}
+
+        actorID := "act-human"
+        now := time.Now().UTC()
+        db := &store.DB{
+                CurrentActorID: actorID,
+                Actors:         []model.Actor{{ID: actorID, Kind: model.ActorKindHuman, Name: "human"}},
+                Projects: []model.Project{{
+                        ID:        "proj-a",
+                        Name:      "Project A",
+                        CreatedBy: actorID,
+                        CreatedAt: now,
+                }},
+                Outlines: []model.Outline{{
+                        ID:         "out-a",
+                        ProjectID:  "proj-a",
+                        StatusDefs: store.DefaultOutlineStatusDefs(),
+                        CreatedBy:  actorID,
+                        CreatedAt:  now,
+                }},
+                Items: []model.Item{{
+                        ID:           "item-a",
+                        ProjectID:    "proj-a",
+                        OutlineID:    "out-a",
+                        Rank:         "h",
+                        Title:        "Title",
+                        StatusID:     "todo",
+                        OwnerActorID: actorID,
+                        CreatedBy:    actorID,
+                        CreatedAt:    now,
+                        UpdatedAt:    now,
+                }},
+        }
+        if err := s.Save(db); err != nil {
+                t.Fatalf("save db: %v", err)
+        }
+
+        m := newAppModel(dir, db)
+        m.width = 120
+        m.view = viewItem
+        m.openItemID = "item-a"
+        m.selectedProjectID = "proj-a"
+        m.selectedOutlineID = "out-a"
+        m.openActionPanel(actionPanelContext)
+
+        out := m.renderActionPanel()
+        for _, h := range []string{"NAVIGATE", "OTHER"} {
+                if !strings.Contains(out, h) {
+                        t.Fatalf("expected action panel to contain header %q; got:\n%s", h, out)
+                }
+        }
+        // Key actions should be discoverable from the item view action panel.
+        for _, want := range []string{"Copy item ref", "Copy CLI show command", "Move to outline", "Archive item"} {
+                if !strings.Contains(out, want) {
+                        t.Fatalf("expected action panel to contain %q; got:\n%s", want, out)
+                }
+        }
+}
+
+func TestActionPanel_DetailPane_FocusedItemGrouping(t *testing.T) {
+        dir := t.TempDir()
+        s := store.Store{Dir: dir}
+
+        actorID := "act-human"
+        now := time.Now().UTC()
+        db := &store.DB{
+                CurrentActorID: actorID,
+                Actors:         []model.Actor{{ID: actorID, Kind: model.ActorKindHuman, Name: "human"}},
+                Projects: []model.Project{{
+                        ID:        "proj-a",
+                        Name:      "Project A",
+                        CreatedBy: actorID,
+                        CreatedAt: now,
+                }},
+                Outlines: []model.Outline{{
+                        ID:         "out-a",
+                        ProjectID:  "proj-a",
+                        StatusDefs: store.DefaultOutlineStatusDefs(),
+                        CreatedBy:  actorID,
+                        CreatedAt:  now,
+                }},
+                Items: []model.Item{{
+                        ID:           "item-a",
+                        ProjectID:    "proj-a",
+                        OutlineID:    "out-a",
+                        Rank:         "h",
+                        Title:        "Title",
+                        StatusID:     "todo",
+                        OwnerActorID: actorID,
+                        CreatedBy:    actorID,
+                        CreatedAt:    now,
+                        UpdatedAt:    now,
+                }},
+        }
+        if err := s.Save(db); err != nil {
+                t.Fatalf("save db: %v", err)
+        }
+
+        m := newAppModel(dir, db)
+        m.width = 120
+        m.view = viewOutline
+        m.showPreview = true
+        m.pane = paneDetail
+        m.selectedProjectID = "proj-a"
+        m.selectedOutlineID = "out-a"
+        if o, ok := m.db.FindOutline("out-a"); ok && o != nil {
+                m.selectedOutline = o
+                m.refreshItems(*o)
+        }
+        selectListItemByID(&m.itemsList, "item-a")
+        m.openActionPanel(actionPanelContext)
+
+        out := m.renderActionPanel()
+        for _, h := range []string{"NAVIGATE", "OTHER"} {
+                if !strings.Contains(out, h) {
+                        t.Fatalf("expected action panel to contain header %q; got:\n%s", h, out)
+                }
+        }
+        for _, want := range []string{"Toggle focus (outline/detail)", "Open item", "Toggle preview"} {
+                if !strings.Contains(out, want) {
+                        t.Fatalf("expected action panel to contain %q; got:\n%s", want, out)
                 }
         }
 }
