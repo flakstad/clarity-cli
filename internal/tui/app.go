@@ -172,6 +172,31 @@ const (
         textFocusCancel
 )
 
+func (m *appModel) closeAllModals() {
+        if m == nil {
+                return
+        }
+        // Close action panel if open (it has its own stack state).
+        if m.modal == modalActionPanel {
+                m.closeActionPanel()
+        }
+        m.modal = modalNone
+        m.modalForID = ""
+        m.modalForKey = ""
+        m.replyQuoteMD = ""
+        m.pendingMoveOutlineTo = ""
+
+        m.textFocus = textFocusBody
+
+        // Reset inputs (safe even if not currently used).
+        m.input.Placeholder = "Title"
+        m.input.SetValue("")
+        m.input.Blur()
+
+        m.textarea.SetValue("")
+        m.textarea.Blur()
+}
+
 type appModel struct {
         dir       string
         workspace string
@@ -2347,30 +2372,30 @@ func (m appModel) footerText() string {
                         return "archive: y/enter: confirm  n/esc: cancel"
                 }
                 if m.modal == modalPickStatus {
-                        return "status: enter: set  esc: cancel"
+                        return "status: enter: set  esc/ctrl+g: cancel"
                 }
                 if m.modal == modalPickOutline {
-                        return "move outline: enter: move  esc: cancel"
+                        return "move outline: enter: move  esc/ctrl+g: cancel"
                 }
                 if m.modal == modalEditTitle {
-                        return "edit title: type, enter: save, esc: cancel"
+                        return "edit title: type, enter/ctrl+s: save, esc/ctrl+g: cancel"
                 }
                 if m.modal == modalEditOutlineName {
-                        return "rename outline: type, enter: save, esc: cancel"
+                        return "rename outline: type, enter/ctrl+s: save, esc/ctrl+g: cancel"
                 }
                 if m.modal == modalAddComment {
-                        return "comment: tab: focus  ctrl+s: save  esc: cancel"
+                        return "comment: tab: focus  ctrl+s: save  esc/ctrl+g: cancel"
                 }
                 if m.modal == modalReplyComment {
-                        return "reply: tab: focus  ctrl+s: save  esc: cancel"
+                        return "reply: tab: focus  ctrl+s: save  esc/ctrl+g: cancel"
                 }
                 if m.modal == modalAddWorklog {
-                        return "worklog: tab: focus  ctrl+s: save  esc: cancel"
+                        return "worklog: tab: focus  ctrl+s: save  esc/ctrl+g: cancel"
                 }
                 if m.modal == modalEditDescription {
-                        return "description: tab: focus  ctrl+s: save  esc: cancel"
+                        return "description: tab: focus  ctrl+s: save  esc/ctrl+g: cancel"
                 }
-                return "new item: type title, enter: save, esc: cancel"
+                return "new item: type title, enter/ctrl+s: save, esc/ctrl+g: cancel"
         }
         return base
 }
@@ -2952,6 +2977,9 @@ func (m *appModel) refreshItems(outline model.Outline) {
                 }
         }
         m.itemsList.Title = title
+        if m.collapsed == nil {
+                m.collapsed = map[string]bool{}
+        }
         curID := ""
         switch it := m.itemsList.SelectedItem().(type) {
         case outlineRowItem:
@@ -3321,37 +3349,37 @@ func (m *appModel) renderModal() string {
                 if m.modal == modalNewChild {
                         title = "New subitem"
                 }
-                return renderModalBox(m.width, title, m.input.View()+"\n\nenter: save   esc: cancel")
+                return m.renderInputModal(title)
         case modalNewProject:
-                return renderModalBox(m.width, "New project", m.input.View()+"\n\nenter: save   esc: cancel")
+                return m.renderInputModal("New project")
         case modalRenameProject:
-                return renderModalBox(m.width, "Rename project", m.input.View()+"\n\nenter: save   esc: cancel")
+                return m.renderInputModal("Rename project")
         case modalNewOutline:
-                return renderModalBox(m.width, "New outline", m.input.View()+"\n\nenter: save   esc: cancel")
+                return m.renderInputModal("New outline")
         case modalEditTitle:
-                return renderModalBox(m.width, "Edit title", m.input.View()+"\n\nenter: save   esc: cancel")
+                return m.renderInputModal("Edit title")
         case modalEditDescription:
                 return m.renderTextAreaModal("Edit description")
         case modalEditOutlineName:
-                return renderModalBox(m.width, "Rename outline", m.input.View()+"\n\nenter: save   esc: cancel")
+                return m.renderInputModal("Rename outline")
         case modalPickStatus:
-                return renderModalBox(m.width, "Set status", m.statusList.View()+"\n\nenter: set   esc: cancel")
+                return renderModalBox(m.width, "Set status", m.statusList.View()+"\n\nenter: set   esc/ctrl+g: cancel")
         case modalPickOutline:
-                return renderModalBox(m.width, "Move to outline", m.outlinePickList.View()+"\n\nenter: move   esc: cancel")
+                return renderModalBox(m.width, "Move to outline", m.outlinePickList.View()+"\n\nenter: move   esc/ctrl+g: cancel")
         case modalPickWorkspace:
-                return renderModalBox(m.width, "Workspaces", m.workspaceList.View()+"\n\nenter: switch   n:new   r:rename   esc: close")
+                return renderModalBox(m.width, "Workspaces", m.workspaceList.View()+"\n\nenter: switch   n:new   r:rename   esc/ctrl+g: close")
         case modalNewWorkspace:
-                return renderModalBox(m.width, "New workspace", m.input.View()+"\n\nenter: create+switch   esc: cancel")
+                return m.renderInputModal("New workspace")
         case modalRenameWorkspace:
-                return renderModalBox(m.width, "Rename workspace", m.input.View()+"\n\nenter: rename   esc: cancel")
+                return m.renderInputModal("Rename workspace")
         case modalEditOutlineStatuses:
-                return renderModalBox(m.width, "Outline statuses", m.outlineStatusDefsList.View()+"\n\na:add  r:rename  e:toggle end  d:delete  ctrl+k/j:move  esc:close")
+                return renderModalBox(m.width, "Outline statuses", m.outlineStatusDefsList.View()+"\n\na:add  r:rename  e:toggle end  d:delete  ctrl+k/j:move  esc/ctrl+g: close")
         case modalAddOutlineStatus:
-                return renderModalBox(m.width, "Add status", m.input.View()+"\n\nenter: add   esc: cancel")
+                return m.renderInputModal("Add status")
         case modalRenameOutlineStatus:
-                return renderModalBox(m.width, "Rename status", m.input.View()+"\n\nenter: save   esc: cancel")
+                return m.renderInputModal("Rename status")
         case modalJumpToItem:
-                return renderModalBox(m.width, "Jump to item", m.input.View()+"\n\nenter: jump   esc: cancel")
+                return m.renderInputModal("Jump to item")
         case modalAddComment:
                 return m.renderTextAreaModal("Add comment")
         case modalReplyComment:
@@ -3409,7 +3437,7 @@ func (m *appModel) renderModal() string {
                         cascade,
                         "You can unarchive later via the CLI.",
                 }, "\n")
-                return renderModalBox(m.width, "Confirm", body+"\n\nenter/y: archive   esc/n: cancel")
+                return renderModalBox(m.width, "Confirm", body+"\n\nenter/y: archive   esc/n: cancel   ctrl+g: close")
         default:
                 return ""
         }
@@ -3443,7 +3471,7 @@ func (m *appModel) renderTextAreaModal(title string) string {
                 "",
                 controls,
                 "",
-                "ctrl+s: save    tab: focus    esc: cancel",
+                "ctrl+s: save    tab: focus    esc/ctrl+g: cancel",
         }, "\n")
         return renderModalBox(m.width, title, body)
 }
@@ -3492,9 +3520,40 @@ func (m *appModel) renderReplyCommentModal() string {
                 "",
                 controls,
                 "",
-                "tab: focus   ctrl+s: save   esc: cancel",
+                "tab: focus   ctrl+s: save   esc/ctrl+g: cancel",
         }, "\n")
         return renderModalBox(m.width, "Reply", body)
+}
+
+func (m *appModel) renderInputModal(title string) string {
+        btnBase := lipgloss.NewStyle().
+                Padding(0, 1).
+                Foreground(colorSurfaceFg).
+                Background(colorControlBg)
+        btnActive := btnBase.
+                Foreground(colorSelectedFg).
+                Background(colorAccent).
+                Bold(true)
+
+        save := btnBase.Render("Save")
+        cancel := btnBase.Render("Cancel")
+        if m.textFocus == textFocusSave {
+                save = btnActive.Render("Save")
+        }
+        if m.textFocus == textFocusCancel {
+                cancel = btnActive.Render("Cancel")
+        }
+
+        sep := lipgloss.NewStyle().Background(colorControlBg).Render(" ")
+        controls := lipgloss.JoinHorizontal(lipgloss.Top, save, sep, cancel)
+        body := strings.Join([]string{
+                m.input.View(),
+                "",
+                controls,
+                "",
+                "ctrl+s: save    tab: focus    esc: cancel    ctrl+g: close",
+        }, "\n")
+        return renderModalBox(m.width, title, body)
 }
 
 func tickReload() tea.Cmd {
@@ -3590,6 +3649,12 @@ func selectListItemByID(l *list.Model, id string) {
 func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
         // Modal input takes over all keys.
         if m.modal != modalNone {
+                // Ctrl+G should always close any modal (Esc may mean "back" in some flows).
+                if km, ok := msg.(tea.KeyMsg); ok && km.String() == "ctrl+g" {
+                        (&m).closeAllModals()
+                        return m, nil
+                }
+
                 if m.modal == modalActionPanel {
                         if km, ok := msg.(tea.KeyMsg); ok {
                                 switch km.String() {
@@ -3713,7 +3778,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.input.SetValue("")
                                         m.input.Blur()
                                         return m, nil
-                                case "enter":
+                                case "enter", "ctrl+s":
                                         val := strings.TrimSpace(m.input.Value())
                                         if val == "" {
                                                 return m, nil
@@ -4128,11 +4193,54 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 m.modal = modalNone
                                 m.modalForID = ""
                                 m.modalForKey = ""
+                                m.textFocus = textFocusBody
                                 m.input.Placeholder = "Title"
                                 m.input.SetValue("")
                                 m.input.Blur()
                                 return m, nil
-                        case "enter", "ctrl+s":
+                        case "tab":
+                                switch m.textFocus {
+                                case textFocusBody:
+                                        m.textFocus = textFocusSave
+                                case textFocusSave:
+                                        m.textFocus = textFocusCancel
+                                default:
+                                        m.textFocus = textFocusBody
+                                }
+                                if m.textFocus == textFocusBody {
+                                        m.input.Focus()
+                                } else {
+                                        m.input.Blur()
+                                }
+                                return m, nil
+                        case "shift+tab", "backtab":
+                                switch m.textFocus {
+                                case textFocusBody:
+                                        m.textFocus = textFocusCancel
+                                case textFocusCancel:
+                                        m.textFocus = textFocusSave
+                                default:
+                                        m.textFocus = textFocusBody
+                                }
+                                if m.textFocus == textFocusBody {
+                                        m.input.Focus()
+                                } else {
+                                        m.input.Blur()
+                                }
+                                return m, nil
+                        case "enter":
+                                if m.textFocus == textFocusCancel {
+                                        m.modal = modalNone
+                                        m.modalForID = ""
+                                        m.modalForKey = ""
+                                        m.textFocus = textFocusBody
+                                        m.input.Placeholder = "Title"
+                                        m.input.SetValue("")
+                                        m.input.Blur()
+                                        return m, nil
+                                }
+                                fallthrough
+                        case "ctrl+s":
                                 val := strings.TrimSpace(m.input.Value())
                                 switch m.modal {
                                 case modalJumpToItem:
@@ -4218,12 +4326,16 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 m.input.Placeholder = "Title"
                                 m.input.SetValue("")
                                 m.input.Blur()
+                                m.textFocus = textFocusBody
                                 return m, nil
                         }
                 }
                 var cmd tea.Cmd
-                m.input, cmd = m.input.Update(msg)
-                return m, cmd
+                if m.textFocus == textFocusBody {
+                        m.input, cmd = m.input.Update(msg)
+                        return m, cmd
+                }
+                return m, nil
         }
 
         switch msg := msg.(type) {
