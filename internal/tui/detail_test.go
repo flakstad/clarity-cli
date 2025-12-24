@@ -253,3 +253,60 @@ func TestRenderItemDetail_ShowsHistoryForItem(t *testing.T) {
                 t.Fatalf("expected history last timestamp to match newest event; want=%q got=%q", want, s)
         }
 }
+
+func TestRenderItemDetailInteractive_ShowsParentForChild(t *testing.T) {
+        now := time.Now().UTC()
+        parentID := "item-parent"
+        childID := "item-child"
+        ptr := func(s string) *string { return &s }
+
+        db := &store.DB{
+                CurrentActorID: "act-test",
+                Actors:         []model.Actor{{ID: "act-test", Kind: model.ActorKindHuman, Name: "tester"}},
+                Items: []model.Item{
+                        {
+                                ID:           parentID,
+                                ProjectID:    "proj-a",
+                                OutlineID:    "out-a",
+                                Rank:         "h0",
+                                Title:        "Top",
+                                Description:  "",
+                                StatusID:     "todo",
+                                OwnerActorID: "act-test",
+                                CreatedBy:    "act-test",
+                                CreatedAt:    now,
+                                UpdatedAt:    now,
+                        },
+                        {
+                                ID:           childID,
+                                ProjectID:    "proj-a",
+                                OutlineID:    "out-a",
+                                ParentID:     ptr(parentID),
+                                Rank:         "h1",
+                                Title:        "Child",
+                                Description:  "",
+                                StatusID:     "todo",
+                                OwnerActorID: "act-test",
+                                CreatedBy:    "act-test",
+                                CreatedAt:    now,
+                                UpdatedAt:    now,
+                        },
+                },
+        }
+        outline := model.Outline{
+                ID:        "out-a",
+                ProjectID: "proj-a",
+                StatusDefs: []model.OutlineStatusDef{
+                        {ID: "todo", Label: "TODO", IsEndState: false},
+                },
+        }
+
+        s := renderItemDetailInteractive(db, outline, db.Items[1], 80, 25, itemFocusTitle, nil, 0, 0, 0)
+        plain := stripSGR(s)
+        if !strings.Contains(plain, "Parent") {
+                t.Fatalf("expected detail to contain Parent section; got:\n%s", plain)
+        }
+        if !strings.Contains(plain, "Top") {
+                t.Fatalf("expected detail to contain parent title; got:\n%s", plain)
+        }
+}

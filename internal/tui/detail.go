@@ -39,6 +39,14 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
                 assigned = *it.AssignedActorID
         }
 
+        // Direct parent (shown when viewing a child).
+        var parent *model.Item
+        if it.ParentID != nil && strings.TrimSpace(*it.ParentID) != "" {
+                if p, ok := db.FindItem(strings.TrimSpace(*it.ParentID)); ok {
+                        parent = p
+                }
+        }
+
         // Direct children (shown to support outline-style nesting).
         children := db.ChildrenOf(it.ID)
         sort.Slice(children, func(i, j int) bool { return compareOutlineItems(children[i], children[j]) < 0 })
@@ -92,6 +100,15 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
                 labelStyle.Render("Description"),
                 desc,
                 "",
+        }
+        if parent != nil {
+                lines = append(lines,
+                        labelStyle.Render("Parent"),
+                        renderParentOutline(db, outline, *parent, innerW, false),
+                        "",
+                )
+        }
+        lines = append(lines,
                 labelStyle.Render("Children"),
                 renderChildrenOutline(db, outline, children, innerW, false, 0, 0, 8),
                 "",
@@ -99,7 +116,7 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
                 fmt.Sprintf("Comments: %d (last %s)", commentsCount, lastComment),
                 fmt.Sprintf("Worklog:   %d (last %s)", len(worklog), lastWorklog),
                 fmt.Sprintf("History:   %d (last %s)", len(history), lastHistory),
-        }
+        )
 
         if strings.TrimSpace(status) != "" {
                 // Insert status after ID line.
@@ -153,6 +170,14 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
                 assigned = *it.AssignedActorID
         }
 
+        // Direct parent (shown when viewing a child).
+        var parent *model.Item
+        if it.ParentID != nil && strings.TrimSpace(*it.ParentID) != "" {
+                if p, ok := db.FindItem(strings.TrimSpace(*it.ParentID)); ok {
+                        parent = p
+                }
+        }
+
         // Direct children (shown to support outline-style nesting).
         children := db.ChildrenOf(it.ID)
         sort.Slice(children, func(i, j int) bool { return compareOutlineItems(children[i], children[j]) < 0 })
@@ -179,6 +204,7 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
         }
 
         titleBtn := btn(focus == itemFocusTitle).Render(titleStyle.Render(it.Title))
+        parentBtn := btn(focus == itemFocusParent).Render("Parent")
         childrenBtn := btn(focus == itemFocusChildren).Render("Children")
 
         headerLines := []string{
@@ -219,6 +245,11 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
         }
         bodyLines = append(bodyLines, descLines...)
         bodyLines = append(bodyLines, "")
+        if parent != nil {
+                bodyLines = append(bodyLines, parentBtn)
+                bodyLines = append(bodyLines, strings.Split(renderParentOutline(db, outline, *parent, innerW, focus == itemFocusParent), "\n")...)
+                bodyLines = append(bodyLines, "")
+        }
         bodyLines = append(bodyLines, childrenBtn)
         bodyLines = append(bodyLines, strings.Split(renderChildrenOutline(db, outline, children, innerW, focus == itemFocusChildren, childIdx, childOff, 8), "\n")...)
         bodyLines = append(bodyLines, "")
@@ -454,6 +485,40 @@ func renderChildrenOutline(db *store.DB, outline model.Outline, children []model
                 lines = append(lines, styleMuted().Render(truncateText(more, width)))
         }
         return strings.Join(lines, "\n")
+}
+
+func renderParentOutline(db *store.DB, outline model.Outline, parent model.Item, width int, focused bool) string {
+        parentID := strings.TrimSpace(parent.ID)
+        if parentID == "" {
+                return "(no parent)"
+        }
+        // Match the children renderer's width safety margin.
+        if width > 0 {
+                width -= 2
+                if width < 0 {
+                        width = 0
+                }
+        }
+
+        kids := db.ChildrenOf(parentID)
+        hasKids := len(kids) > 0
+        progress := computeChildProgress(outline, map[string][]model.Item{parentID: kids})
+        doneChildren, totalChildren := 0, 0
+        if p, ok := progress[parentID]; ok {
+                doneChildren, totalChildren = p[0], p[1]
+        }
+
+        row := outlineRow{
+                item:          parent,
+                depth:         0,
+                hasChildren:   hasKids,
+                collapsed:     hasKids, // show ▸ to indicate subtree exists
+                doneChildren:  doneChildren,
+                totalChildren: totalChildren,
+        }
+        d := newOutlineItemDelegate()
+        item := outlineRowItem{row: row, outline: outline}
+        return d.renderOutlineRow(width, "", item, focused)
 }
 
 func fmtTS(t time.Time) string {

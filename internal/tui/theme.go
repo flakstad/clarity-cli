@@ -29,7 +29,9 @@ func faintIfDark(st lipgloss.Style) lipgloss.Style {
 var (
         colorMuted = ac("240", "243") // dark-ish gray on light; soft gray on dark
 
-        colorSelectedBg = ac("252", "236")
+        // Make the selection highlight more prominent against the surface background.
+        // (Surface bg is 255/235, so bump contrast in both light+dark themes.)
+        colorSelectedBg = ac("250", "239")
         colorSelectedFg = ac("235", "255")
 
         colorSurfaceBg = ac("255", "235")

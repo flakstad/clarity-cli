@@ -218,9 +218,6 @@ func newOutlinesStatusRemoveCmd(app *App) *cobra.Command {
                         if len(next) == len(o.StatusDefs) {
                                 return writeErr(cmd, errNotFound("status", sid))
                         }
-                        if len(next) == 0 {
-                                return writeErr(cmd, errors.New("cannot remove last status from an outline"))
-                        }
                         o.StatusDefs = next
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)

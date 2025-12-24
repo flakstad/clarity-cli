@@ -75,15 +75,6 @@ func flattenOutline(outline model.Outline, items []model.Item, collapsed map[str
 }
 
 func computeChildProgress(outline model.Outline, children map[string][]model.Item) map[string][2]int {
-        isDone := func(statusID string) bool {
-                for _, def := range outline.StatusDefs {
-                        if def.ID == statusID {
-                                return def.IsEndState
-                        }
-                }
-                return strings.ToLower(strings.TrimSpace(statusID)) == "done"
-        }
-
         // Progress cookies are based on *direct children* only.
         //
         // This keeps parent nodes stable and predictable:
@@ -92,14 +83,7 @@ func computeChildProgress(outline model.Outline, children map[string][]model.Ite
         // - Deep hierarchies don't inflate denominators for ancestors.
         out := map[string][2]int{}
         for pid, ch := range children {
-                done := 0
-                total := 0
-                for _, c := range ch {
-                        total++
-                        if isDone(c.StatusID) {
-                                done++
-                        }
-                }
+                done, total := countProgressChildren(outline, ch)
                 out[pid] = [2]int{done, total}
         }
         return out

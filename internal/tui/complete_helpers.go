@@ -34,6 +34,10 @@ func hasIncompleteChildren(db *store.DB, taskID string) bool {
                 if child.Archived {
                         continue
                 }
+                // Children without an explicit status do not participate in completion blocking.
+                if strings.TrimSpace(child.StatusID) == "" {
+                        continue
+                }
                 if !isItemEndState(db, child) {
                         return true
                 }

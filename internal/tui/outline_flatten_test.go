@@ -132,3 +132,34 @@ func TestComputeChildProgress_DirectChildDoneDoesNotPropagate(t *testing.T) {
 
         _ = one
 }
+
+func TestComputeChildProgress_IgnoresChildrenWithoutStatus(t *testing.T) {
+        now := time.Date(2025, 12, 21, 0, 0, 0, 0, time.UTC)
+        outline := model.Outline{
+                ID:        "out-a",
+                ProjectID: "proj-a",
+                StatusDefs: []model.OutlineStatusDef{
+                        {ID: "todo", Label: "TODO", IsEndState: false},
+                        {ID: "done", Label: "DONE", IsEndState: true},
+                },
+                CreatedBy: "act-a",
+                CreatedAt: now,
+        }
+
+        parent := model.Item{ID: "item-parent", OutlineID: outline.ID, Title: "parent", StatusID: "todo", CreatedAt: now, UpdatedAt: now}
+        parentID := parent.ID
+
+        noStatus := model.Item{ID: "item-nostatus", OutlineID: outline.ID, ParentID: &parentID, Title: "no status", StatusID: "", CreatedAt: now, UpdatedAt: now}
+        todo := model.Item{ID: "item-todo", OutlineID: outline.ID, ParentID: &parentID, Title: "todo", StatusID: "todo", CreatedAt: now, UpdatedAt: now}
+        done := model.Item{ID: "item-done", OutlineID: outline.ID, ParentID: &parentID, Title: "done", StatusID: "done", CreatedAt: now, UpdatedAt: now}
+
+        children := map[string][]model.Item{
+                parent.ID: {noStatus, todo, done},
+        }
+
+        got := computeChildProgress(outline, children)
+        // Only children with explicit status are counted: todo + done => total=2, done=1.
+        if p := got[parent.ID]; p != [2]int{1, 2} {
+                t.Fatalf("expected parent progress [done,total]=[1,2] (excluding no-status child), got %v", p)
+        }
+}

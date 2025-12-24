@@ -38,8 +38,17 @@ func renderOutlineColumns(outline model.Outline, items []model.Item, width, heig
                 cols = append(cols, col{statusID: def.ID, label: lbl})
         }
 
-        // Assign items to columns.
+        // Columns mode shows only top-level outline items (no nesting).
+        // Nested items remain accessible via the outline list view.
+        topLevel := make([]model.Item, 0, len(items))
         for _, it := range items {
+                if it.ParentID == nil || strings.TrimSpace(*it.ParentID) == "" {
+                        topLevel = append(topLevel, it)
+                }
+        }
+
+        // Assign items to columns.
+        for _, it := range topLevel {
                 sid := strings.TrimSpace(it.StatusID)
                 if sid == "" {
                         cols[0].items = append(cols[0].items, it)

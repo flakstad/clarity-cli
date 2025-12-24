@@ -30,7 +30,18 @@ func TestItemsCreate_FiledFromPrefixesDescription(t *testing.T) {
                         {ID: projectID, Name: "Test Project", CreatedBy: actorID, CreatedAt: now},
                 },
                 Outlines: []model.Outline{
-                        {ID: outlineID, ProjectID: projectID, Name: nil, StatusDefs: store.DefaultOutlineStatusDefs(), CreatedBy: actorID, CreatedAt: now},
+                        {
+                                ID:        outlineID,
+                                ProjectID: projectID,
+                                Name:      nil,
+                                StatusDefs: []model.OutlineStatusDef{
+                                        {ID: "backlog", Label: "Backlog", IsEndState: false},
+                                        {ID: "todo", Label: "Todo", IsEndState: false},
+                                        {ID: "done", Label: "Done", IsEndState: true},
+                                },
+                                CreatedBy: actorID,
+                                CreatedAt: now,
+                        },
                 },
                 Items:    []model.Item{},
                 Deps:     []model.Dependency{},
@@ -67,5 +78,10 @@ func TestItemsCreate_FiledFromPrefixesDescription(t *testing.T) {
         desc, _ := data["description"].(string)
         if want := "Filed from: item-vth\n\nDetails"; desc != want {
                 t.Fatalf("unexpected description.\nwant:\n%q\ngot:\n%q", want, desc)
+        }
+
+        // Default status should be the first status def of the outline.
+        if got, _ := data["status"].(string); got != "backlog" {
+                t.Fatalf("unexpected status. want %q, got %q", "backlog", got)
         }
 }

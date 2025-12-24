@@ -222,3 +222,69 @@ func TestOutlineStatusDefsEditor_RemoveBlockedWhenInUse(t *testing.T) {
                 t.Fatalf("expected statuses to remain unchanged, got %d", got)
         }
 }
+
+func TestOutlineStatusDefsEditor_CanRemoveAllStatuses(t *testing.T) {
+        t.Parallel()
+
+        dir := t.TempDir()
+        now := time.Now().UTC()
+
+        actorID := "act-human"
+        projectID := "proj-a"
+        outlineID := "out-a"
+
+        db := &store.DB{
+                Version:          1,
+                CurrentActorID:   actorID,
+                CurrentProjectID: projectID,
+                NextIDs:          map[string]int{},
+                Actors:           []model.Actor{{ID: actorID, Kind: model.ActorKindHuman, Name: "Human"}},
+                Projects:         []model.Project{{ID: projectID, Name: "P", CreatedBy: actorID, CreatedAt: now}},
+                Outlines: []model.Outline{{
+                        ID:         outlineID,
+                        ProjectID:  projectID,
+                        Name:       nil,
+                        StatusDefs: store.DefaultOutlineStatusDefs(),
+                        CreatedBy:  actorID,
+                        CreatedAt:  now,
+                }},
+                Items:    []model.Item{},
+                Deps:     []model.Dependency{},
+                Comments: []model.Comment{},
+                Worklog:  []model.WorklogEntry{},
+        }
+
+        s := store.Store{Dir: dir}
+        if err := s.Save(db); err != nil {
+                t.Fatalf("save db: %v", err)
+        }
+
+        m := newAppModel(dir, db)
+        m.view = viewOutline
+        m.selectedProjectID = projectID
+        m.selectedOutlineID = outlineID
+        m.selectedOutline = &db.Outlines[0]
+
+        // Open editor via "S".
+        mAny, _ := m.updateOutline(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
+        m = mAny.(appModel)
+        if m.modal != modalEditOutlineStatuses {
+                t.Fatalf("expected modalEditOutlineStatuses, got %v", m.modal)
+        }
+
+        // Remove all default statuses.
+        for i := 0; i < 3; i++ {
+                m.outlineStatusDefsList.Select(0)
+                mAny, _ = m.updateOutline(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+                m = mAny.(appModel)
+        }
+
+        db2, err := s.Load()
+        if err != nil {
+                t.Fatalf("load db: %v", err)
+        }
+        o2, _ := db2.FindOutline(outlineID)
+        if got := len(o2.StatusDefs); got != 0 {
+                t.Fatalf("expected 0 statuses after removing all, got %d", got)
+        }
+}

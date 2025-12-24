@@ -245,10 +245,11 @@ func renderProgressCookie(done, total int) string {
 }
 
 var (
-        statusTodoStyle  = lipgloss.NewStyle().Foreground(ac("27", "39")).Bold(true)   // blue
-        statusDoingStyle = lipgloss.NewStyle().Foreground(ac("130", "214")).Bold(true) // orange
-        statusDoneStyle  = lipgloss.NewStyle().Foreground(ac("28", "42")).Bold(true)   // green
-        statusOtherStyle = lipgloss.NewStyle().Foreground(colorMuted).Bold(true)       // gray
+        // Match the default colors from clarity-components/outline.js:
+        // - non-end statuses: --clarity-outline-color-todo (#d16d7a)
+        // - end statuses:     --clarity-outline-color-done (#6c757d)
+        statusNonEndStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#d16d7a")).Bold(true)
+        statusEndStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#6c757d")).Bold(true)
 )
 
 func renderStatus(outline model.Outline, statusID string) string {
@@ -257,24 +258,10 @@ func renderStatus(outline model.Outline, statusID string) string {
                 return ""
         }
         txt := strings.ToUpper(label)
-
-        // Prefer explicit end-state styling.
-        for _, def := range outline.StatusDefs {
-                if def.ID == statusID && def.IsEndState {
-                        return statusDoneStyle.Render(txt)
-                }
+        if isEndState(outline, statusID) {
+                return statusEndStyle.Render(txt)
         }
-
-        switch strings.ToLower(strings.TrimSpace(statusID)) {
-        case "todo":
-                return statusTodoStyle.Render(txt)
-        case "doing":
-                return statusDoingStyle.Render(txt)
-        case "done":
-                return statusDoneStyle.Render(txt)
-        default:
-                return statusOtherStyle.Render(txt)
-        }
+        return statusNonEndStyle.Render(txt)
 }
 
 func newList(title, help string, items []list.Item) list.Model {

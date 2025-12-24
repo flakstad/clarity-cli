@@ -9,6 +9,7 @@ const (
         itemFocusStatus
         itemFocusPriority
         itemFocusDescription
+        itemFocusParent
         itemFocusChildren
         itemFocusComments
         itemFocusWorklog
@@ -20,6 +21,7 @@ var itemFocusOrder = []itemPageFocus{
         itemFocusStatus,
         itemFocusPriority,
         itemFocusDescription,
+        itemFocusParent,
         itemFocusChildren,
         itemFocusComments,
         itemFocusWorklog,
@@ -40,6 +42,42 @@ func (f itemPageFocus) prev() itemPageFocus {
                 if itemFocusOrder[i] == f {
                         return itemFocusOrder[(i-1+len(itemFocusOrder))%len(itemFocusOrder)]
                 }
+        }
+        return itemFocusTitle
+}
+
+func (f itemPageFocus) nextForItem(hasParent bool) itemPageFocus {
+        start := 0
+        for i := 0; i < len(itemFocusOrder); i++ {
+                if itemFocusOrder[i] == f {
+                        start = i
+                        break
+                }
+        }
+        for step := 1; step <= len(itemFocusOrder); step++ {
+                cand := itemFocusOrder[(start+step)%len(itemFocusOrder)]
+                if cand == itemFocusParent && !hasParent {
+                        continue
+                }
+                return cand
+        }
+        return itemFocusTitle
+}
+
+func (f itemPageFocus) prevForItem(hasParent bool) itemPageFocus {
+        start := 0
+        for i := 0; i < len(itemFocusOrder); i++ {
+                if itemFocusOrder[i] == f {
+                        start = i
+                        break
+                }
+        }
+        for step := 1; step <= len(itemFocusOrder); step++ {
+                cand := itemFocusOrder[(start-step+len(itemFocusOrder))%len(itemFocusOrder)]
+                if cand == itemFocusParent && !hasParent {
+                        continue
+                }
+                return cand
         }
         return itemFocusTitle
 }

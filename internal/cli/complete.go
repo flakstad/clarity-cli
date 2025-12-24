@@ -3,6 +3,7 @@ package cli
 import (
         "errors"
         "fmt"
+        "strings"
 
         "clarity-cli/internal/model"
         "clarity-cli/internal/store"
@@ -24,6 +25,10 @@ func hasIncompleteChildren(db *store.DB, taskID string) bool {
                         continue
                 }
                 if child.Archived {
+                        continue
+                }
+                // Children without an explicit status do not participate in completion blocking.
+                if strings.TrimSpace(child.StatusID) == "" {
                         continue
                 }
                 if !isEndState(db, child.OutlineID, child.StatusID) {

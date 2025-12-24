@@ -304,10 +304,10 @@ type appModel struct {
 }
 
 type itemNavEntry struct {
-        // itemID is the item we navigated *from* (the "back" target).
-        itemID string
-        // childID is the item we navigated *to* (used to restore selection when returning).
-        childID string
+        // fromID is the item we navigated *from* (the "back" target).
+        fromID string
+        // toID is the item we navigated *to* (used to restore focus/selection when returning).
+        toID string
 }
 
 func (m *appModel) currentWriteActorID() string {
@@ -1660,37 +1660,51 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 break
                         }
                         if m.view == viewItem {
-                                // If we navigated within the item view (parent -> child), pop back to the parent item.
+                                // If we navigated within the item view (parent/child), pop back to the previous item.
                                 if n := len(m.itemNavStack); n > 0 {
                                         ent := m.itemNavStack[n-1]
                                         m.itemNavStack = m.itemNavStack[:n-1]
-                                        prevID := strings.TrimSpace(ent.itemID)
+                                        prevID := strings.TrimSpace(ent.fromID)
                                         if prevID != "" {
                                                 m.openItemID = prevID
                                                 (&m).recordRecentItemVisit(m.openItemID)
                                                 m.view = viewItem
-                                                m.itemFocus = itemFocusChildren
+                                                m.itemFocus = itemFocusTitle
                                                 m.itemCommentIdx = 0
                                                 m.itemWorklogIdx = 0
                                                 m.itemHistoryIdx = 0
                                                 m.itemSideScroll = 0
                                                 m.itemDetailScroll = 0
 
-                                                // Restore selection to the child we came from (best-effort).
-                                                childID := strings.TrimSpace(ent.childID)
+                                                // Restore focus/selection (best-effort).
+                                                toID := strings.TrimSpace(ent.toID)
+                                                m.itemChildIdx = 0
+                                                m.itemChildOff = 0
+
+                                                // If toID is one of prev's children, focus Children and select it.
                                                 children := m.db.ChildrenOf(prevID)
                                                 sort.Slice(children, func(i, j int) bool { return compareOutlineItems(children[i], children[j]) < 0 })
-                                                m.itemChildIdx = 0
-                                                for i := range children {
-                                                        if strings.TrimSpace(children[i].ID) == childID {
-                                                                m.itemChildIdx = i
-                                                                break
+                                                foundChild := false
+                                                if toID != "" && len(children) > 0 {
+                                                        for i := range children {
+                                                                if strings.TrimSpace(children[i].ID) == toID {
+                                                                        m.itemChildIdx = i
+                                                                        foundChild = true
+                                                                        break
+                                                                }
                                                         }
                                                 }
-                                                const maxRows = 8
-                                                m.itemChildOff = 0
-                                                if m.itemChildIdx >= maxRows {
-                                                        m.itemChildOff = m.itemChildIdx - maxRows + 1
+                                                if foundChild {
+                                                        m.itemFocus = itemFocusChildren
+                                                        const maxRows = 8
+                                                        if m.itemChildIdx >= maxRows {
+                                                                m.itemChildOff = m.itemChildIdx - maxRows + 1
+                                                        }
+                                                } else if toID != "" {
+                                                        // Otherwise, if prev's parent is toID, focus Parent.
+                                                        if prev, ok := m.db.FindItem(prevID); ok && prev != nil && prev.ParentID != nil && strings.TrimSpace(*prev.ParentID) == toID {
+                                                                m.itemFocus = itemFocusParent
+                                                        }
                                                 }
                                         }
                                         return m, nil
@@ -1768,36 +1782,50 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 break
                         }
                         if m.view == viewItem {
-                                // If we navigated within the item view (parent -> child), pop back to the parent item.
+                                // If we navigated within the item view (parent/child), pop back to the previous item.
                                 if n := len(m.itemNavStack); n > 0 {
                                         ent := m.itemNavStack[n-1]
                                         m.itemNavStack = m.itemNavStack[:n-1]
-                                        prevID := strings.TrimSpace(ent.itemID)
+                                        prevID := strings.TrimSpace(ent.fromID)
                                         if prevID != "" {
                                                 m.openItemID = prevID
                                                 m.view = viewItem
-                                                m.itemFocus = itemFocusChildren
+                                                m.itemFocus = itemFocusTitle
                                                 m.itemCommentIdx = 0
                                                 m.itemWorklogIdx = 0
                                                 m.itemHistoryIdx = 0
                                                 m.itemSideScroll = 0
                                                 m.itemDetailScroll = 0
 
-                                                // Restore selection to the child we came from (best-effort).
-                                                childID := strings.TrimSpace(ent.childID)
+                                                // Restore focus/selection (best-effort).
+                                                toID := strings.TrimSpace(ent.toID)
+                                                m.itemChildIdx = 0
+                                                m.itemChildOff = 0
+
+                                                // If toID is one of prev's children, focus Children and select it.
                                                 children := m.db.ChildrenOf(prevID)
                                                 sort.Slice(children, func(i, j int) bool { return compareOutlineItems(children[i], children[j]) < 0 })
-                                                m.itemChildIdx = 0
-                                                for i := range children {
-                                                        if strings.TrimSpace(children[i].ID) == childID {
-                                                                m.itemChildIdx = i
-                                                                break
+                                                foundChild := false
+                                                if toID != "" && len(children) > 0 {
+                                                        for i := range children {
+                                                                if strings.TrimSpace(children[i].ID) == toID {
+                                                                        m.itemChildIdx = i
+                                                                        foundChild = true
+                                                                        break
+                                                                }
                                                         }
                                                 }
-                                                const maxRows = 8
-                                                m.itemChildOff = 0
-                                                if m.itemChildIdx >= maxRows {
-                                                        m.itemChildOff = m.itemChildIdx - maxRows + 1
+                                                if foundChild {
+                                                        m.itemFocus = itemFocusChildren
+                                                        const maxRows = 8
+                                                        if m.itemChildIdx >= maxRows {
+                                                                m.itemChildOff = m.itemChildIdx - maxRows + 1
+                                                        }
+                                                } else if toID != "" {
+                                                        // Otherwise, if prev's parent is toID, focus Parent.
+                                                        if prev, ok := m.db.FindItem(prevID); ok && prev != nil && prev.ParentID != nil && strings.TrimSpace(*prev.ParentID) == toID {
+                                                                m.itemFocus = itemFocusParent
+                                                        }
                                                 }
                                         }
                                         return m, nil
@@ -2126,6 +2154,17 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                 }
                 readOnly := m.itemArchivedReadOnly || it.Archived
 
+                parentID := ""
+                hasParent := false
+                if it.ParentID != nil {
+                        parentID = strings.TrimSpace(*it.ParentID)
+                        if parentID != "" {
+                                if _, ok := m.db.FindItem(parentID); ok {
+                                        hasParent = true
+                                }
+                        }
+                }
+
                 comments := m.db.CommentsForItem(it.ID)
                 worklog := m.db.WorklogForItem(it.ID)
                 history := filterEventsForItem(m.db, m.eventsTail, it.ID)
@@ -2299,10 +2338,10 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, nil
                         }
                 case "tab":
-                        m.itemFocus = m.itemFocus.next()
+                        m.itemFocus = m.itemFocus.nextForItem(hasParent)
                         return m, nil
                 case "shift+tab", "backtab":
-                        m.itemFocus = m.itemFocus.prev()
+                        m.itemFocus = m.itemFocus.prevForItem(hasParent)
                         return m, nil
                 case "enter":
                         // Archived view is read-only: allow opening children, but block mutations.
@@ -2333,13 +2372,36 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         case itemFocusDescription:
                                 m.openTextModal(modalEditDescription, activeID, "Markdown description…", active.Description)
                                 return m, nil
+                        case itemFocusParent:
+                                if !hasParent || parentID == "" {
+                                        return m, nil
+                                }
+                                // Record navigation so esc/backspace can return to the child item.
+                                if cur := strings.TrimSpace(it.ID); cur != "" && strings.TrimSpace(parentID) != "" && strings.TrimSpace(parentID) != cur {
+                                        m.itemNavStack = append(m.itemNavStack, itemNavEntry{fromID: cur, toID: strings.TrimSpace(parentID)})
+                                        if len(m.itemNavStack) > 64 {
+                                                m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
+                                        }
+                                }
+                                // Navigate to the direct parent.
+                                m.openItemID = strings.TrimSpace(parentID)
+                                (&m).recordRecentItemVisit(m.openItemID)
+                                m.itemFocus = itemFocusTitle
+                                m.itemCommentIdx = 0
+                                m.itemWorklogIdx = 0
+                                m.itemHistoryIdx = 0
+                                m.itemSideScroll = 0
+                                m.itemDetailScroll = 0
+                                m.itemChildIdx = 0
+                                m.itemChildOff = 0
+                                return m, nil
                         case itemFocusChildren:
                                 if len(children) == 0 || strings.TrimSpace(activeID) == "" {
                                         return m, nil
                                 }
                                 // Record navigation so esc/backspace can return to the parent item.
                                 if cur := strings.TrimSpace(it.ID); cur != "" && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != cur {
-                                        m.itemNavStack = append(m.itemNavStack, itemNavEntry{itemID: cur, childID: strings.TrimSpace(activeID)})
+                                        m.itemNavStack = append(m.itemNavStack, itemNavEntry{fromID: cur, toID: strings.TrimSpace(activeID)})
                                         if len(m.itemNavStack) > 64 {
                                                 m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
                                         }
@@ -2365,7 +2427,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, nil
                         }
                         if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
-                                m.itemNavStack = append(m.itemNavStack, itemNavEntry{itemID: strings.TrimSpace(it.ID), childID: strings.TrimSpace(activeID)})
+                                m.itemNavStack = append(m.itemNavStack, itemNavEntry{fromID: strings.TrimSpace(it.ID), toID: strings.TrimSpace(activeID)})
                                 if len(m.itemNavStack) > 64 {
                                         m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
                                 }
@@ -2384,7 +2446,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, nil
                         }
                         if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
-                                m.itemNavStack = append(m.itemNavStack, itemNavEntry{itemID: strings.TrimSpace(it.ID), childID: strings.TrimSpace(activeID)})
+                                m.itemNavStack = append(m.itemNavStack, itemNavEntry{fromID: strings.TrimSpace(it.ID), toID: strings.TrimSpace(activeID)})
                                 if len(m.itemNavStack) > 64 {
                                         m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
                                 }
@@ -2413,7 +2475,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, nil
                         }
                         if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
-                                m.itemNavStack = append(m.itemNavStack, itemNavEntry{itemID: strings.TrimSpace(it.ID), childID: strings.TrimSpace(activeID)})
+                                m.itemNavStack = append(m.itemNavStack, itemNavEntry{fromID: strings.TrimSpace(it.ID), toID: strings.TrimSpace(activeID)})
                                 if len(m.itemNavStack) > 64 {
                                         m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
                                 }
@@ -2472,7 +2534,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, nil
                         }
                         if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
-                                m.itemNavStack = append(m.itemNavStack, itemNavEntry{itemID: strings.TrimSpace(it.ID), childID: strings.TrimSpace(activeID)})
+                                m.itemNavStack = append(m.itemNavStack, itemNavEntry{fromID: strings.TrimSpace(it.ID), toID: strings.TrimSpace(activeID)})
                                 if len(m.itemNavStack) > 64 {
                                         m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
                                 }
@@ -3257,20 +3319,9 @@ func (m appModel) renderActionPanel() string {
                                 statusSeg := ""
                                 statusRaw := ""
                                 if statusTxt != "" {
-                                        style := statusOtherStyle
-                                        for _, def := range outline.StatusDefs {
-                                                if def.ID == statusID && def.IsEndState {
-                                                        style = statusDoneStyle
-                                                        break
-                                                }
-                                        }
-                                        switch strings.ToLower(statusID) {
-                                        case "todo":
-                                                style = statusTodoStyle
-                                        case "doing":
-                                                style = statusDoingStyle
-                                        case "done":
-                                                style = statusDoneStyle
+                                        style := statusNonEndStyle
+                                        if isEndState(outline, statusID) {
+                                                style = statusEndStyle
                                         }
                                         style = style.Copy().Background(colorSurfaceBg)
                                         statusSeg = style.Render(statusTxt) + base.Render(" ")
@@ -3361,13 +3412,7 @@ func (m appModel) renderActionPanel() string {
                                 }
 
                                 children := m.db.ChildrenOf(it.ID)
-                                doneChildren := 0
-                                totalChildren := len(children)
-                                for _, ch := range children {
-                                        if isEndState(*ol, ch.StatusID) {
-                                                doneChildren++
-                                        }
-                                }
+                                doneChildren, totalChildren := countProgressChildren(*ol, children)
 
                                 rendered := renderRecentRow(*ol, *it, doneChildren, totalChildren, rowW)
                                 key := strconv.Itoa(i + 1)
@@ -6758,7 +6803,7 @@ func (m *appModel) createItemFromModal(title string) error {
                 Rank:               rank,
                 Title:              title,
                 Description:        "",
-                StatusID:           "todo",
+                StatusID:           store.FirstStatusID(outline.StatusDefs),
                 Priority:           false,
                 OnHold:             false,
                 Due:                nil,
@@ -7615,9 +7660,6 @@ func (m *appModel) removeOutlineStatusDef(outlineID, statusID string) error {
                 }
                 if !removed {
                         return false, outlineMutationResult{}, errors.New("status not found")
-                }
-                if len(next) == 0 {
-                        return false, outlineMutationResult{}, errors.New("cannot remove last status from an outline")
                 }
                 o.StatusDefs = next
                 return true, outlineMutationResult{

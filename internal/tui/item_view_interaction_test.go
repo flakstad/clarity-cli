@@ -500,6 +500,105 @@ func TestItemView_Children_EnterThenBack_ReturnsToParent(t *testing.T) {
         }
 }
 
+func TestItemView_Parent_EnterThenBack_ReturnsToChild(t *testing.T) {
+        dir := t.TempDir()
+        s := store.Store{Dir: dir}
+
+        actorID := "act-human"
+        now := time.Now().UTC()
+        parentID := "item-a"
+        childID := "item-b"
+        parentPtr := func(s string) *string { return &s }
+
+        db := &store.DB{
+                CurrentActorID: actorID,
+                Actors:         []model.Actor{{ID: actorID, Kind: model.ActorKindHuman, Name: "human"}},
+                Projects: []model.Project{{
+                        ID:        "proj-a",
+                        Name:      "Project A",
+                        CreatedBy: actorID,
+                        CreatedAt: now,
+                }},
+                Outlines: []model.Outline{{
+                        ID:         "out-a",
+                        ProjectID:  "proj-a",
+                        StatusDefs: store.DefaultOutlineStatusDefs(),
+                        CreatedBy:  actorID,
+                        CreatedAt:  now,
+                }},
+                Items: []model.Item{
+                        {
+                                ID:           parentID,
+                                ProjectID:    "proj-a",
+                                OutlineID:    "out-a",
+                                Rank:         "h0",
+                                Title:        "Parent",
+                                StatusID:     "todo",
+                                Archived:     false,
+                                OwnerActorID: actorID,
+                                CreatedBy:    actorID,
+                                CreatedAt:    now,
+                                UpdatedAt:    now,
+                        },
+                        {
+                                ID:           childID,
+                                ProjectID:    "proj-a",
+                                OutlineID:    "out-a",
+                                ParentID:     parentPtr(parentID),
+                                Rank:         "h1",
+                                Title:        "Child",
+                                StatusID:     "todo",
+                                Archived:     false,
+                                OwnerActorID: actorID,
+                                CreatedBy:    actorID,
+                                CreatedAt:    now,
+                                UpdatedAt:    now,
+                        },
+                },
+        }
+        if err := s.Save(db); err != nil {
+                t.Fatalf("save db: %v", err)
+        }
+
+        m := newAppModel(dir, db)
+        m.view = viewItem
+        m.selectedProjectID = "proj-a"
+        m.selectedOutlineID = "out-a"
+        m.selectedOutline = &db.Outlines[0]
+        m.openItemID = childID
+        m.itemFocus = itemFocusTitle
+
+        // tab to parent (title -> status -> priority -> description -> parent)
+        var mAny tea.Model = m
+        for i := 0; i < 4; i++ {
+                mAny, _ = mAny.(appModel).Update(tea.KeyMsg{Type: tea.KeyTab})
+        }
+        m2 := mAny.(appModel)
+        if m2.itemFocus != itemFocusParent {
+                t.Fatalf("expected focus=%v, got %v", itemFocusParent, m2.itemFocus)
+        }
+
+        // enter navigates to parent
+        mAny, _ = m2.Update(tea.KeyMsg{Type: tea.KeyEnter})
+        m3 := mAny.(appModel)
+        if strings.TrimSpace(m3.openItemID) != parentID {
+                t.Fatalf("expected openItemID=%q, got %q", parentID, m3.openItemID)
+        }
+        if m3.itemFocus != itemFocusTitle {
+                t.Fatalf("expected focus reset to title, got %v", m3.itemFocus)
+        }
+
+        // esc goes back to child and focuses Parent
+        mAny, _ = m3.Update(tea.KeyMsg{Type: tea.KeyEsc})
+        m4 := mAny.(appModel)
+        if strings.TrimSpace(m4.openItemID) != childID {
+                t.Fatalf("expected openItemID=%q, got %q", childID, m4.openItemID)
+        }
+        if m4.itemFocus != itemFocusParent {
+                t.Fatalf("expected focus=%v, got %v", itemFocusParent, m4.itemFocus)
+        }
+}
+
 func TestItemView_ChildrenFocus_PTargetsSelectedChild(t *testing.T) {
         dir := t.TempDir()
         s := store.Store{Dir: dir}

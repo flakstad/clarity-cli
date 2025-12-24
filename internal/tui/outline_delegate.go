@@ -124,20 +124,9 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
         statusRaw := ""
         statusSeg := ""
         if statusTxt != "" {
-                style := statusOtherStyle
-                for _, def := range it.outline.StatusDefs {
-                        if def.ID == statusID && def.IsEndState {
-                                style = statusDoneStyle
-                                break
-                        }
-                }
-                switch strings.ToLower(statusID) {
-                case "todo":
-                        style = statusTodoStyle
-                case "doing":
-                        style = statusDoingStyle
-                case "done":
-                        style = statusDoneStyle
+                style := statusNonEndStyle
+                if isEndState(it.outline, statusID) {
+                        style = statusEndStyle
                 }
                 if focused || it.flashKind == "error" {
                         style = style.Copy().Background(bg)

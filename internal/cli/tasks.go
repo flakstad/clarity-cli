@@ -141,6 +141,11 @@ func newItemsCreateCmd(app *App) *cobra.Command {
                                 p = &parentID
                         }
 
+                        outline, ok := db.FindOutline(oid)
+                        if !ok || outline == nil {
+                                return writeErr(cmd, errNotFound("outline", oid))
+                        }
+
                         desc := description
                         if ff := strings.TrimSpace(filedFrom); ff != "" {
                                 origin := "Filed from: " + ff
@@ -163,7 +168,7 @@ func newItemsCreateCmd(app *App) *cobra.Command {
                                 Rank:               nextSiblingRank(db, oid, p),
                                 Title:              strings.TrimSpace(title),
                                 Description:        desc,
-                                StatusID:           "todo",
+                                StatusID:           store.FirstStatusID(outline.StatusDefs),
                                 Priority:           false,
                                 OnHold:             false,
                                 Due:                nil,
