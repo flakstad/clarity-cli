@@ -260,6 +260,9 @@ type appModel struct {
         itemArchivedReadOnly bool
         // Per-outline display mode for the outline view (experimental).
         outlineViewMode map[string]outlineViewMode
+        // outlineWrapW stores the wrap width used the last time we built the outline list items
+        // (preface + inline description rows). This allows us to rewrap lazily after initial sizing.
+        outlineWrapW map[string]int
 
         modal        modalKind
         modalForID   string
@@ -403,6 +406,29 @@ func (m *appModel) outlineViewModeForID(id string) outlineViewMode {
                 return v
         }
         return outlineViewModeList
+}
+
+func (m *appModel) outlineWrapWidthForID(outlineID string) int {
+        // Use the actual outline pane width rather than list.Model's width, because refreshItems()
+        // can run before lists are sized (e.g. on startup), which would otherwise cause very narrow wrapping.
+        if m == nil {
+                return 72
+        }
+        if m.width <= 0 {
+                return 72
+        }
+        _, _, contentW := m.outlineLayout()
+        w := contentW
+        mode := m.outlineViewModeForID(outlineID)
+        if mode == outlineViewModeListPreview && m.splitPreviewVisible() {
+                leftW, _ := splitPaneWidths(contentW)
+                w = leftW
+        }
+        if w < 20 {
+                // Avoid pathological wrapping on early/unknown sizing.
+                return 72
+        }
+        return w
 }
 
 func (m *appModel) setOutlineViewMode(id string, mode outlineViewMode) {
@@ -3695,10 +3721,7 @@ func (m *appModel) refreshItems(outline model.Outline) {
         if m.outlineViewModeForID(outline.ID) != outlineViewModeColumns {
                 desc := strings.TrimSpace(outline.Description)
                 if desc != "" {
-                        w := m.itemsList.Width()
-                        if w < 10 {
-                                w = 10
-                        }
+                        w := m.outlineWrapWidthForID(outline.ID)
                         rendered := renderMarkdown(desc, w)
                         for _, line := range strings.Split(rendered, "\n") {
                                 items = append(items, outlinePrefaceLineItem{line: line})
@@ -3728,10 +3751,7 @@ func (m *appModel) refreshItems(outline model.Outline) {
                         if !row.collapsed {
                                 body := strings.TrimSpace(row.item.Description)
                                 if body != "" {
-                                        w := m.itemsList.Width()
-                                        if w < 10 {
-                                                w = 10
-                                        }
+                                        w := m.outlineWrapWidthForID(outline.ID)
                                         rendered := renderMarkdown(body, w)
                                         for _, line := range strings.Split(rendered, "\n") {
                                                 items = append(items, outlineInlineDescLineItem{
@@ -3762,6 +3782,10 @@ func (m *appModel) refreshItems(outline model.Outline) {
                         m.itemsList, _ = m.itemsList.Update(msg)
                 }
         }
+        if m.outlineWrapW == nil {
+                m.outlineWrapW = map[string]int{}
+        }
+        m.outlineWrapW[strings.TrimSpace(outline.ID)] = m.outlineWrapWidthForID(outline.ID)
         if strings.TrimSpace(curID) != "" {
                 selectListItemByID(&m.itemsList, strings.TrimSpace(curID))
                 return
@@ -4097,6 +4121,20 @@ func (m *appModel) viewOutline() string {
         w := m.width
         if w < 10 {
                 w = 10
+        }
+
+        // If we previously built preface/inline rows with a different wrap width (common on startup
+        // before lists are sized), rebuild once to avoid "word-per-line" wrapping.
+        if m != nil && m.selectedOutline != nil && m.curOutlineViewMode() != outlineViewModeColumns {
+                oid := strings.TrimSpace(m.selectedOutline.ID)
+                want := m.outlineWrapWidthForID(oid)
+                got := 0
+                if m.outlineWrapW != nil {
+                        got = m.outlineWrapW[oid]
+                }
+                if want > 0 && got != want {
+                        m.refreshItems(*m.selectedOutline)
+                }
         }
 
         // Experimental: column/kanban view (status as columns).
