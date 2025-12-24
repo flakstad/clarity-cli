@@ -260,9 +260,6 @@ type appModel struct {
         itemArchivedReadOnly bool
         // Per-outline display mode for the outline view (experimental).
         outlineViewMode map[string]outlineViewMode
-        // outlineWrapW stores the wrap width used the last time we built the outline list items
-        // (preface + inline description rows). This allows us to rewrap lazily after initial sizing.
-        outlineWrapW map[string]int
 
         modal        modalKind
         modalForID   string
@@ -369,7 +366,6 @@ type outlineViewMode int
 const (
         outlineViewModeList outlineViewMode = iota
         outlineViewModeListPreview
-        outlineViewModeDocument
         outlineViewModeColumns
 )
 
@@ -377,8 +373,6 @@ func outlineViewModeLabel(v outlineViewMode) string {
         switch v {
         case outlineViewModeListPreview:
                 return "list+preview"
-        case outlineViewModeDocument:
-                return "document"
         case outlineViewModeColumns:
                 return "columns"
         default:
@@ -406,29 +400,6 @@ func (m *appModel) outlineViewModeForID(id string) outlineViewMode {
                 return v
         }
         return outlineViewModeList
-}
-
-func (m *appModel) outlineWrapWidthForID(outlineID string) int {
-        // Use the actual outline pane width rather than list.Model's width, because refreshItems()
-        // can run before lists are sized (e.g. on startup), which would otherwise cause very narrow wrapping.
-        if m == nil {
-                return 72
-        }
-        if m.width <= 0 {
-                return 72
-        }
-        _, _, contentW := m.outlineLayout()
-        w := contentW
-        mode := m.outlineViewModeForID(outlineID)
-        if mode == outlineViewModeListPreview && m.splitPreviewVisible() {
-                leftW, _ := splitPaneWidths(contentW)
-                w = leftW
-        }
-        if w < 20 {
-                // Avoid pathological wrapping on early/unknown sizing.
-                return 72
-        }
-        return w
 }
 
 func (m *appModel) setOutlineViewMode(id string, mode outlineViewMode) {
@@ -459,7 +430,7 @@ func (m *appModel) setOutlineViewMode(id string, mode outlineViewMode) {
                         m.itemsList.ResetFilter()
                 }
         default:
-                // list / document
+                // list
                 m.showPreview = false
                 m.pane = paneOutline
         }
@@ -480,8 +451,6 @@ func (m *appModel) cycleOutlineViewMode() {
         case outlineViewModeList:
                 next = outlineViewModeListPreview
         case outlineViewModeListPreview:
-                next = outlineViewModeDocument
-        case outlineViewModeDocument:
                 next = outlineViewModeColumns
         default:
                 next = outlineViewModeList
@@ -1156,8 +1125,6 @@ func outlineViewModeToString(v outlineViewMode) string {
         switch v {
         case outlineViewModeListPreview:
                 return "list+preview"
-        case outlineViewModeDocument:
-                return "document"
         case outlineViewModeColumns:
                 return "columns"
         default:
@@ -1170,7 +1137,8 @@ func outlineViewModeFromString(s string) (outlineViewMode, bool) {
         case "columns":
                 return outlineViewModeColumns, true
         case "document":
-                return outlineViewModeDocument, true
+                // Back-compat: "document" was an experimental mode; treat it as list.
+                return outlineViewModeList, true
         case "list+preview", "list-preview", "preview", "split":
                 return outlineViewModeListPreview, true
         case "list":
@@ -3552,11 +3520,10 @@ func splitPaneWidths(contentW int) (leftW, rightW int) {
         return leftW, rightW
 }
 
-func renderSplitWithLeftBreadcrumb(contentW, frameH, bodyHeight, leftW, rightW int, breadcrumb string, leftBody string, rightBody string) string {
-        // Split view: render the breadcrumb only over the LEFT pane, so the right pane
+func renderSplitWithLeftHeader(contentW, frameH, leftW, rightW int, leftHeader string, leftBody string, rightBody string) string {
+        // Split view: render the header only over the LEFT pane, so the right pane
         // can start at the top without wasted header padding.
-        leftCrumb := lipgloss.NewStyle().Width(leftW).Foreground(lipgloss.Color("243")).Render(breadcrumb)
-        leftCol := leftCrumb + strings.Repeat("\n", breadcrumbGap+1) + leftBody
+        leftCol := leftHeader + strings.Repeat("\n", breadcrumbGap+1) + leftBody
 
         // Below top padding, we render a full-height block (stable split rendering).
         contentH := frameH - topPadLines
@@ -3569,6 +3536,26 @@ func renderSplitWithLeftBreadcrumb(contentW, frameH, bodyHeight, leftW, rightW i
 
         body := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, strings.Repeat(" ", splitGapW), rightCol)
         // Ensure exact size for stable centering/margins.
+        body = lipgloss.NewStyle().Width(contentW).Height(contentH).Render(body)
+        return strings.Repeat("\n", topPadLines) + body
+}
+
+func renderSplitWithLeftHeaderGap(contentW, frameH, leftW, rightW int, leftHeader string, headerGapLines int, leftBody string, rightBody string) string {
+        // Like renderSplitWithLeftHeader, but allows the caller to control spacing between the left header
+        // and the left body (useful for more compact headers).
+        if headerGapLines < 0 {
+                headerGapLines = 0
+        }
+        leftCol := leftHeader + strings.Repeat("\n", headerGapLines) + leftBody
+
+        contentH := frameH - topPadLines
+        if contentH < 0 {
+                contentH = 0
+        }
+        leftCol = normalizePane(leftCol, leftW, contentH)
+        rightCol := normalizePane(rightBody, rightW, contentH)
+
+        body := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, strings.Repeat(" ", splitGapW), rightCol)
         body = lipgloss.NewStyle().Width(contentW).Height(contentH).Render(body)
         return strings.Repeat("\n", topPadLines) + body
 }
@@ -3686,8 +3673,6 @@ func (m *appModel) refreshItems(outline model.Outline) {
         switch it := m.itemsList.SelectedItem().(type) {
         case outlineRowItem:
                 curID = it.row.item.ID
-        case outlineInlineDescLineItem:
-                curID = strings.TrimSpace(it.itemID)
         case addItemRow:
                 curID = "__add__"
         }
@@ -3716,61 +3701,12 @@ func (m *appModel) refreshItems(outline model.Outline) {
         flat := flattenOutline(outline, its, m.collapsed)
         var items []list.Item
 
-        // Always show outline description (markdown) above items in non-columns modes.
-        // In columns mode, the description is rendered as a single truncated line in viewOutline().
-        if m.outlineViewModeForID(outline.ID) != outlineViewModeColumns {
-                desc := strings.TrimSpace(outline.Description)
-                if desc != "" {
-                        w := m.outlineWrapWidthForID(outline.ID)
-                        rendered := renderMarkdown(desc, w)
-                        for _, line := range strings.Split(rendered, "\n") {
-                                items = append(items, outlinePrefaceLineItem{line: line})
-                        }
-                        // Spacer between preface and first item.
-                        items = append(items, outlinePrefaceLineItem{line: ""})
-                }
-        }
-
-        // Document mode: show focused item's full description inline, directly below the item.
-        focusID := strings.TrimSpace(curID)
-        mode := m.outlineViewModeForID(outline.ID)
-        if mode == outlineViewModeDocument && focusID == "" && len(flat) > 0 {
-                // Default focus to the first item so document mode has an inline block immediately.
-                focusID = strings.TrimSpace(flat[0].item.ID)
-        }
-
         for _, row := range flat {
                 flash := ""
                 if m.flashKind != "" && m.flashItemID != "" && row.item.ID == m.flashItemID {
                         flash = m.flashKind
                 }
                 items = append(items, outlineRowItem{row: row, outline: outline, flashKind: flash})
-
-                if mode == outlineViewModeDocument && focusID != "" && focusID != "__add__" && strings.TrimSpace(row.item.ID) == focusID {
-                        // Hide inline description when the item is collapsed.
-                        if !row.collapsed {
-                                body := strings.TrimSpace(row.item.Description)
-                                if body != "" {
-                                        w := m.outlineWrapWidthForID(outline.ID)
-                                        rendered := renderMarkdown(body, w)
-                                        for _, line := range strings.Split(rendered, "\n") {
-                                                items = append(items, outlineInlineDescLineItem{
-                                                        itemID:  row.item.ID,
-                                                        outline: outline,
-                                                        depth:   row.depth,
-                                                        line:    line,
-                                                })
-                                        }
-                                        // Spacer after description block.
-                                        items = append(items, outlineInlineDescLineItem{
-                                                itemID:  row.item.ID,
-                                                outline: outline,
-                                                depth:   row.depth,
-                                                line:    "",
-                                        })
-                                }
-                        }
-                }
         }
         // Always-present affordance for adding an item (useful for empty outlines).
         items = append(items, addItemRow{})
@@ -3782,10 +3718,16 @@ func (m *appModel) refreshItems(outline model.Outline) {
                         m.itemsList, _ = m.itemsList.Update(msg)
                 }
         }
-        if m.outlineWrapW == nil {
-                m.outlineWrapW = map[string]int{}
+        // list.Model doesn't always clamp index when items shrink; clamp defensively to avoid
+        // panics in navigation helpers that iterate relative to Index().
+        if len(items) > 0 {
+                idx := m.itemsList.Index()
+                if idx < 0 {
+                        m.itemsList.Select(0)
+                } else if idx >= len(items) {
+                        m.itemsList.Select(len(items) - 1)
+                }
         }
-        m.outlineWrapW[strings.TrimSpace(outline.ID)] = m.outlineWrapWidthForID(outline.ID)
         if strings.TrimSpace(curID) != "" {
                 selectListItemByID(&m.itemsList, strings.TrimSpace(curID))
                 return
@@ -4123,18 +4065,29 @@ func (m *appModel) viewOutline() string {
                 w = 10
         }
 
-        // If we previously built preface/inline rows with a different wrap width (common on startup
-        // before lists are sized), rebuild once to avoid "word-per-line" wrapping.
-        if m != nil && m.selectedOutline != nil && m.curOutlineViewMode() != outlineViewModeColumns {
-                oid := strings.TrimSpace(m.selectedOutline.ID)
-                want := m.outlineWrapWidthForID(oid)
-                got := 0
-                if m.outlineWrapW != nil {
-                        got = m.outlineWrapW[oid]
+        // We want a stable header under the breadcrumb:
+        // breadcrumb
+        //
+        // <outline title> (heading)
+        // <outline description> (markdown; single-line in columns mode)
+        outlineTitle := func(o model.Outline) string {
+                if o.Name != nil {
+                        if t := strings.TrimSpace(*o.Name); t != "" {
+                                return t
+                        }
                 }
-                if want > 0 && got != want {
-                        m.refreshItems(*m.selectedOutline)
+                return "Outline"
+        }
+        titleStyle := func(width int) lipgloss.Style {
+                // Slightly more prominent than other text; keep it simple and readable.
+                return lipgloss.NewStyle().Width(width).Bold(true)
+        }
+        lineCount := func(s string) int {
+                s = strings.TrimRight(s, "\n")
+                if s == "" {
+                        return 0
                 }
+                return strings.Count(s, "\n") + 1
         }
 
         // Experimental: column/kanban view (status as columns).
@@ -4148,9 +4101,10 @@ func (m *appModel) viewOutline() string {
                         return main
                 }
 
-                // Show outline description as a single truncated line under the breadcrumb (above columns).
-                header := crumb
+                // Header: breadcrumb + title + (optional) single-line description.
+                header := crumb + "\n\n" + titleStyle(contentW).Render(truncateText(outlineTitle(*outline), contentW))
                 desc := strings.TrimSpace(outline.Description)
+                extraLines := 2 // blank line + title
                 if desc != "" {
                         one := ""
                         if parts := strings.Split(desc, "\n"); len(parts) > 0 {
@@ -4161,6 +4115,7 @@ func (m *appModel) viewOutline() string {
                                 one = truncateText(one, contentW)
                                 line := lipgloss.NewStyle().Width(contentW).Foreground(colorMuted).Render(one)
                                 header = header + "\n" + line
+                                extraLines++
                         }
                 }
 
@@ -4174,8 +4129,12 @@ func (m *appModel) viewOutline() string {
                         }
                         its = append(its, it)
                 }
-                board := renderOutlineColumns(*outline, its, contentW, bodyHeight)
-                main := strings.Repeat("\n", topPadLines) + header + strings.Repeat("\n", breadcrumbGap+1) + board
+                boardH := bodyHeight - extraLines
+                if boardH < 3 {
+                        boardH = 3
+                }
+                board := renderOutlineColumns(*outline, its, contentW, boardH)
+                main := strings.Repeat("\n", topPadLines) + header + "\n" + board
                 main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
                 if m.modal == modalNone {
                         return main
@@ -4188,13 +4147,54 @@ func (m *appModel) viewOutline() string {
         var main string
         if !m.splitPreviewVisible() {
                 crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-                body := m.listBodyWithOverflowHint(&m.itemsList, contentW, bodyHeight)
-                main = strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
+                outline, ok := m.db.FindOutline(m.selectedOutlineID)
+                if !ok {
+                        msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("Outline not found.")
+                        main = strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
+                } else {
+                        titleLine := titleStyle(contentW).Render(truncateText(outlineTitle(*outline), contentW))
+                        header := crumb + "\n\n" + titleLine
+                        descMD := strings.TrimSpace(outline.Description)
+                        descRendered := ""
+                        if descMD != "" {
+                                descRendered = renderMarkdownNoMargin(descMD, contentW)
+                                descRendered = strings.TrimLeft(descRendered, "\n")
+                                header = header + "\n" + descRendered
+                        }
+                        headerLines := lineCount(header)
+                        availH := (frameH - topPadLines) - headerLines - 1 // 1 line gap between header and body
+                        bodyH := availH
+                        if bodyH < 3 {
+                                bodyH = 3
+                        }
+                        body := m.listBodyWithOverflowHint(&m.itemsList, contentW, bodyH)
+                        main = strings.Repeat("\n", topPadLines) + header + "\n" + body
+                }
         } else {
                 // Split view: render the breadcrumb only over the LEFT pane, so the detail pane
                 // can start at the top without wasted header padding.
                 leftW, rightW := splitPaneWidths(contentW)
-                leftBody := m.listBodyWithOverflowHint(&m.itemsList, leftW, bodyHeight)
+                outline, ok := m.db.FindOutline(m.selectedOutlineID)
+                titleLine := titleStyle(leftW).Render(truncateText("Outline", leftW))
+                descRendered := ""
+                if ok {
+                        titleLine = titleStyle(leftW).Render(truncateText(outlineTitle(*outline), leftW))
+                        descMD := strings.TrimSpace(outline.Description)
+                        if descMD != "" {
+                                descRendered = renderMarkdownNoMargin(descMD, leftW)
+                                descRendered = strings.TrimLeft(descRendered, "\n")
+                        }
+                }
+                leftHeaderTmp := lipgloss.NewStyle().Width(leftW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText()) + "\n\n" + titleLine
+                if strings.TrimSpace(descRendered) != "" {
+                        leftHeaderTmp = leftHeaderTmp + "\n" + descRendered
+                }
+                headerLines := lineCount(leftHeaderTmp)
+                leftBodyH := (frameH - topPadLines) - headerLines - 1 // 1 line gap
+                if leftBodyH < 3 {
+                        leftBodyH = 3
+                }
+                leftBody := m.listBodyWithOverflowHint(&m.itemsList, leftW, leftBodyH)
 
                 placeholder := lipgloss.NewStyle().Width(rightW).Height(bodyHeight).Padding(0, 1).Render("(loading…)")
                 right := placeholder
@@ -4211,7 +4211,12 @@ func (m *appModel) viewOutline() string {
                         }
                 }
 
-                main = renderSplitWithLeftBreadcrumb(contentW, frameH, bodyHeight, leftW, rightW, m.breadcrumbText(), leftBody, right)
+                leftCrumb := lipgloss.NewStyle().Width(leftW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+                leftHeader := leftCrumb + "\n\n" + titleLine
+                if strings.TrimSpace(descRendered) != "" {
+                        leftHeader = leftHeader + "\n" + descRendered
+                }
+                main = renderSplitWithLeftHeaderGap(contentW, frameH, leftW, rightW, leftHeader, 1, leftBody, right)
         }
         // Outline content should be left-aligned with a small outer margin (same feel as split view).
         main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
@@ -4297,7 +4302,8 @@ func (m *appModel) viewItem() string {
                 leftW, rightW := splitPaneWidths(contentW)
                 left := renderItemDetailInteractive(m.db, *outline, *it, leftW, bodyHeight, m.itemFocus, m.eventsTail, m.itemChildIdx, m.itemChildOff, m.itemDetailScroll)
                 right := renderItemSidePanelWithEvents(m.db, *it, rightW, bodyHeight, sidePanelKindForFocus(m.itemFocus), m.itemCommentIdx, m.itemWorklogIdx, m.itemHistoryIdx, m.itemSideScroll, m.eventsTail)
-                main := renderSplitWithLeftBreadcrumb(contentW, frameH, bodyHeight, leftW, rightW, m.breadcrumbText(), left, right)
+                leftHeader := lipgloss.NewStyle().Width(leftW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+                main := renderSplitWithLeftHeader(contentW, frameH, leftW, rightW, leftHeader, left, right)
                 // Item view uses the standard (full-width) breadcrumb in non-split mode; in split mode
                 // the breadcrumb is rendered only over the left pane (like outline preview).
                 return wrap(main)
@@ -5531,7 +5537,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, nil
                         }
                 case "v":
-                        // Cycle outline view modes (list -> list+preview -> document -> columns).
+                        // Cycle outline view modes (list -> list+preview -> columns).
                         m.cycleOutlineViewMode()
                         if m.selectedOutline != nil {
                                 m.refreshItems(*m.selectedOutline)
@@ -5601,11 +5607,6 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
                 // Outline navigation.
                 if m.navOutline(msg) {
-                        // Document mode: selection changes need a refresh to move the inline description block.
-                        if m.curOutlineViewMode() == outlineViewModeDocument && m.selectedOutline != nil {
-                                m.refreshItems(*m.selectedOutline)
-                                return m, nil
-                        }
                         if m.splitPreviewVisible() {
                                 return m, m.schedulePreviewCompute()
                         }
@@ -5625,8 +5626,6 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
         switch it := m.itemsList.SelectedItem().(type) {
         case outlineRowItem:
                 beforeID = strings.TrimSpace(it.row.item.ID)
-        case outlineInlineDescLineItem:
-                beforeID = strings.TrimSpace(it.itemID)
         }
         var cmd tea.Cmd
         m.itemsList, cmd = m.itemsList.Update(msg)
@@ -5634,14 +5633,8 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
         switch it := m.itemsList.SelectedItem().(type) {
         case outlineRowItem:
                 afterID = strings.TrimSpace(it.row.item.ID)
-        case outlineInlineDescLineItem:
-                afterID = strings.TrimSpace(it.itemID)
         }
         if beforeID != afterID {
-                if m.curOutlineViewMode() == outlineViewModeDocument && m.selectedOutline != nil {
-                        m.refreshItems(*m.selectedOutline)
-                        return m, cmd
-                }
                 if m.splitPreviewVisible() {
                         return m, tea.Batch(cmd, m.schedulePreviewCompute())
                 }
@@ -6355,7 +6348,18 @@ func (m *appModel) navOutline(msg tea.KeyMsg) bool {
         case "down", "j", "ctrl+n":
                 // Skip non-item rows (e.g. outline preface and document-mode inline description rows).
                 items := m.itemsList.Items()
-                for i := m.itemsList.Index() + 1; i < len(items); i++ {
+                if len(items) == 0 {
+                        return true
+                }
+                idx := m.itemsList.Index()
+                if idx < 0 {
+                        idx = 0
+                        m.itemsList.Select(idx)
+                } else if idx >= len(items) {
+                        idx = len(items) - 1
+                        m.itemsList.Select(idx)
+                }
+                for i := idx + 1; i < len(items); i++ {
                         switch items[i].(type) {
                         case outlineRowItem, addItemRow:
                                 m.itemsList.Select(i)
@@ -6365,7 +6369,18 @@ func (m *appModel) navOutline(msg tea.KeyMsg) bool {
                 return true
         case "up", "k", "ctrl+p":
                 items := m.itemsList.Items()
-                for i := m.itemsList.Index() - 1; i >= 0; i-- {
+                if len(items) == 0 {
+                        return true
+                }
+                idx := m.itemsList.Index()
+                if idx < 0 {
+                        idx = 0
+                        m.itemsList.Select(idx)
+                } else if idx >= len(items) {
+                        idx = len(items) - 1
+                        m.itemsList.Select(idx)
+                }
+                for i := idx - 1; i >= 0; i-- {
                         switch items[i].(type) {
                         case outlineRowItem, addItemRow:
                                 m.itemsList.Select(i)
@@ -6417,11 +6432,18 @@ func (m *appModel) navToParent() {
                 return
         }
         idx := m.itemsList.Index()
+        items := m.itemsList.Items()
+        if idx >= len(items) {
+                idx = len(items) - 1
+                if idx < 0 {
+                        return
+                }
+                m.itemsList.Select(idx)
+        }
         if idx <= 0 || it.row.depth <= 0 {
                 return
         }
         wantDepth := it.row.depth - 1
-        items := m.itemsList.Items()
         for i := idx - 1; i >= 0; i-- {
                 prev, ok := items[i].(outlineRowItem)
                 if !ok {

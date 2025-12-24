@@ -131,33 +131,10 @@ func (i outlineRowItem) Title() string {
 }
 func (i outlineRowItem) Description() string { return "" }
 
-// outlinePrefaceLineItem renders the outline's top-level description (markdown) above items.
-// It is intentionally not filterable/searchable.
-type outlinePrefaceLineItem struct {
-        line string
-}
-
-func (i outlinePrefaceLineItem) FilterValue() string { return "" }
-func (i outlinePrefaceLineItem) Title() string       { return i.line }
-func (i outlinePrefaceLineItem) Description() string { return "" }
-
-// outlineInlineDescLineItem renders the focused item's description inline (document mode).
-// It carries the owning item id so actions can still operate on the item if needed.
-type outlineInlineDescLineItem struct {
-        itemID  string
-        outline model.Outline
-        depth   int
-        line    string
-}
-
-func (i outlineInlineDescLineItem) FilterValue() string { return "" }
-func (i outlineInlineDescLineItem) Title() string       { return i.line }
-func (i outlineInlineDescLineItem) Description() string { return "" }
-
 type addItemRow struct{}
 
 func (i addItemRow) FilterValue() string { return "" }
-func (i addItemRow) Title() string       { return "+ Add item" }
+func (i addItemRow) Title() string       { return "+ Add" }
 func (i addItemRow) Description() string { return "" }
 
 type addProjectRow struct{}

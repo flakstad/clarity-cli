@@ -6,6 +6,8 @@ import (
         "sync"
 
         "github.com/charmbracelet/glamour"
+        "github.com/charmbracelet/glamour/ansi"
+        "github.com/charmbracelet/glamour/styles"
 )
 
 var (
@@ -56,6 +58,59 @@ func renderMarkdown(md string, width int) string {
                 return md
         }
         return strings.TrimRight(out, "\n")
+}
+
+func renderMarkdownNoMargin(md string, width int) string {
+        md = strings.TrimSpace(md)
+        if md == "" {
+                return ""
+        }
+        if width < 10 {
+                width = 10
+        }
+
+        mdRendererMu.Lock()
+        styleName := markdownStyle()
+        key := styleName + ":nomargin:" + fmtInt(width)
+        r := mdRenderers[key]
+        mdRendererMu.Unlock()
+
+        if r == nil {
+                cfg := markdownStyleConfig(styleName)
+                zero := uint(0)
+                cfg.Document.Margin = &zero
+                rr, err := glamour.NewTermRenderer(
+                        glamour.WithStyles(cfg),
+                        glamour.WithWordWrap(width),
+                )
+                if err != nil {
+                        return md
+                }
+                mdRendererMu.Lock()
+                // Re-check in case a concurrent goroutine filled it.
+                if existing := mdRenderers[key]; existing != nil {
+                        r = existing
+                } else {
+                        mdRenderers[key] = rr
+                        r = rr
+                }
+                mdRendererMu.Unlock()
+        }
+
+        out, err := r.Render(md)
+        if err != nil {
+                return md
+        }
+        return strings.TrimRight(out, "\n")
+}
+
+func markdownStyleConfig(styleName string) ansi.StyleConfig {
+        switch strings.ToLower(strings.TrimSpace(styleName)) {
+        case "light":
+                return styles.LightStyleConfig
+        default:
+                return styles.DarkStyleConfig
+        }
 }
 
 func markdownStyle() string {

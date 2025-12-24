@@ -40,7 +40,7 @@ type TUIState struct {
         ShowPreview bool `json:"showPreview,omitempty"`
 
         // Per-outline display mode.
-        // Values: list|list+preview|document|columns
+        // Values: list|list+preview|columns
         OutlineViewMode map[string]string `json:"outlineViewMode,omitempty"`
 
         // RecentItemIDs stores most-recently-visited item ids (full item view only), newest first.
