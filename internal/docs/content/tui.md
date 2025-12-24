@@ -15,7 +15,9 @@ Current scope (early):
 
 Key bindings:
 - `enter`: open selected item (single-pane item view)
-- `o`: toggle preview pane (split view)
+- `v`: cycle outline view mode (`list` → `list+preview` → `document` → `columns`)
+- `O`: open outline actions menu (from outline screen; includes rename + description)
+- `D` (on outlines screen): edit selected outline description
 - `backspace` or `esc`: go back (from item view → outline; from outline → previous screen)
 - `x` (or `?`): open the actions menu (context-aware; includes item actions from outline focus, details pane, and item view)
 - `r`: archive selected item (with confirm)

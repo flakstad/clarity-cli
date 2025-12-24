@@ -64,7 +64,7 @@ func TestViewOutline_SplitPreview_RendersDetailPaneAndUsesOneThirdWidth(t *testi
         m.width = 100
         m.height = 30
 
-        frameH := m.height - 6
+        frameH := m.frameHeight()
         if frameH < 8 {
                 frameH = 8
         }

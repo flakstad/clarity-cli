@@ -1,6 +1,6 @@
 BINARY_NAME=clarity
 
-.PHONY: build run install tidy fmt test
+.PHONY: build run install tidy fmt test it
 
 ROOT_DIR := $(shell pwd)
 
@@ -50,7 +50,11 @@ test: prep-cache
 	fi
 	go test ./...
 
+it:
+it: prep-cache
+	bash ./scripts/cli_integration.sh
+
 install:
-install: prep-cache test
+install: prep-cache test it
 	go install ./cmd/clarity
 	@echo "Installed: $$(go env GOPATH)/bin/$(BINARY_NAME)"

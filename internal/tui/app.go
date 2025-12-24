@@ -114,6 +114,7 @@ const (
         modalEditTitle
         modalEditDescription
         modalEditOutlineName
+        modalEditOutlineDescription
         modalPickStatus
         modalPickOutline
         modalPickWorkspace
@@ -136,6 +137,7 @@ const (
         actionPanelNav
         actionPanelAgenda
         actionPanelCapture
+        actionPanelOutline
 )
 
 type actionPanelAction struct {
@@ -251,6 +253,7 @@ type appModel struct {
         itemWorklogIdx       int
         itemHistoryIdx       int
         itemSideScroll       int
+        itemDetailScroll     int
         itemChildIdx         int
         itemChildOff         int
         itemNavStack         []itemNavEntry
@@ -362,14 +365,37 @@ type outlineViewMode int
 
 const (
         outlineViewModeList outlineViewMode = iota
+        outlineViewModeListPreview
+        outlineViewModeDocument
         outlineViewModeColumns
 )
+
+func outlineViewModeLabel(v outlineViewMode) string {
+        switch v {
+        case outlineViewModeListPreview:
+                return "list+preview"
+        case outlineViewModeDocument:
+                return "document"
+        case outlineViewModeColumns:
+                return "columns"
+        default:
+                return "list"
+        }
+}
 
 func (m *appModel) curOutlineViewMode() outlineViewMode {
         if m == nil {
                 return outlineViewModeList
         }
         id := strings.TrimSpace(m.selectedOutlineID)
+        return m.outlineViewModeForID(id)
+}
+
+func (m *appModel) outlineViewModeForID(id string) outlineViewMode {
+        if m == nil {
+                return outlineViewModeList
+        }
+        id = strings.TrimSpace(id)
         if id == "" || m.outlineViewMode == nil {
                 return outlineViewModeList
         }
@@ -379,7 +405,42 @@ func (m *appModel) curOutlineViewMode() outlineViewMode {
         return outlineViewModeList
 }
 
-func (m *appModel) toggleOutlineViewMode() {
+func (m *appModel) setOutlineViewMode(id string, mode outlineViewMode) {
+        if m == nil {
+                return
+        }
+        id = strings.TrimSpace(id)
+        if id == "" {
+                return
+        }
+        if m.outlineViewMode == nil {
+                m.outlineViewMode = map[string]outlineViewMode{}
+        }
+
+        m.outlineViewMode[id] = mode
+
+        // Apply side effects.
+        switch mode {
+        case outlineViewModeListPreview:
+                m.showPreview = true
+                m.pane = paneOutline
+        case outlineViewModeColumns:
+                // Kanban uses the whole canvas: disable preview.
+                m.showPreview = false
+                m.pane = paneOutline
+                // Clear any active outline filter (columns view doesn't render the list/filter UI).
+                if m.itemsList.SettingFilter() || m.itemsList.IsFiltered() {
+                        m.itemsList.ResetFilter()
+                }
+        default:
+                // list / document
+                m.showPreview = false
+                m.pane = paneOutline
+        }
+        m.previewCacheForID = ""
+}
+
+func (m *appModel) cycleOutlineViewMode() {
         if m == nil {
                 return
         }
@@ -387,25 +448,20 @@ func (m *appModel) toggleOutlineViewMode() {
         if id == "" {
                 return
         }
-        if m.outlineViewMode == nil {
-                m.outlineViewMode = map[string]outlineViewMode{}
+        cur := m.outlineViewModeForID(id)
+        next := outlineViewModeList
+        switch cur {
+        case outlineViewModeList:
+                next = outlineViewModeListPreview
+        case outlineViewModeListPreview:
+                next = outlineViewModeDocument
+        case outlineViewModeDocument:
+                next = outlineViewModeColumns
+        default:
+                next = outlineViewModeList
         }
-        cur := m.curOutlineViewMode()
-        if cur == outlineViewModeColumns {
-                m.outlineViewMode[id] = outlineViewModeList
-                m.showMinibuffer("View: list")
-                return
-        }
-        // Switching to columns: disable split-preview (kanban uses the whole canvas).
-        // Also clear any active outline filter (columns view doesn't render the list/filter UI).
-        if m.itemsList.SettingFilter() || m.itemsList.IsFiltered() {
-                m.itemsList.ResetFilter()
-        }
-        m.outlineViewMode[id] = outlineViewModeColumns
-        m.showPreview = false
-        m.pane = paneOutline
-        m.previewCacheForID = ""
-        m.showMinibuffer("View: columns (experimental)")
+        m.setOutlineViewMode(id, next)
+        m.showMinibuffer("View: " + outlineViewModeLabel(next))
 }
 
 func (m *appModel) openActionPanel(kind actionPanelKind) {
@@ -481,6 +537,8 @@ func (m appModel) actionPanelTitle() string {
                 return "Agenda Commands"
         case actionPanelCapture:
                 return "Capture"
+        case actionPanelOutline:
+                return "Outline…"
         default:
                 return "Actions"
         }
@@ -695,6 +753,57 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         },
                 }
 
+        case actionPanelOutline:
+                // Outline sub-menu (from outline screen or outlines list).
+                actions["e"] = actionPanelAction{
+                        label: "Rename outline",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                oid := strings.TrimSpace(mm.selectedOutlineID)
+                                if mm.view == viewOutlines {
+                                        if it, ok := mm.outlinesList.SelectedItem().(outlineItem); ok {
+                                                oid = strings.TrimSpace(it.outline.ID)
+                                        }
+                                }
+                                if oid == "" {
+                                        mm.showMinibuffer("No outline selected")
+                                        return mm, nil
+                                }
+                                name := ""
+                                if mm.db != nil {
+                                        if o, ok := mm.db.FindOutline(oid); ok && o != nil && o.Name != nil {
+                                                name = strings.TrimSpace(*o.Name)
+                                        }
+                                }
+                                mm.openInputModal(modalEditOutlineName, oid, "Outline name (optional)", name)
+                                return mm, nil
+                        },
+                }
+                actions["D"] = actionPanelAction{
+                        label: "Edit outline description",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                oid := strings.TrimSpace(mm.selectedOutlineID)
+                                desc := ""
+                                if mm.view == viewOutlines {
+                                        if it, ok := mm.outlinesList.SelectedItem().(outlineItem); ok {
+                                                oid = strings.TrimSpace(it.outline.ID)
+                                                desc = it.outline.Description
+                                        }
+                                } else if mm.db != nil {
+                                        if o, ok := mm.db.FindOutline(oid); ok && o != nil {
+                                                desc = o.Description
+                                        }
+                                }
+                                if oid == "" {
+                                        mm.showMinibuffer("No outline selected")
+                                        return mm, nil
+                                }
+                                mm.openTextModal(modalEditOutlineDescription, oid, "Markdown outline description…", desc)
+                                return mm, nil
+                        },
+                }
+
         default:
                 // Contextual (depends on current view/pane).
                 actions["g"] = actionPanelAction{label: "Go to…", kind: actionPanelActionNav, next: actionPanelNav}
@@ -718,6 +827,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         actions["enter"] = actionPanelAction{label: "Select outline", kind: actionPanelActionExec}
                         actions["n"] = actionPanelAction{label: "New outline", kind: actionPanelActionExec}
                         actions["e"] = actionPanelAction{label: "Rename outline", kind: actionPanelActionExec}
+                        actions["D"] = actionPanelAction{label: "Edit outline description", kind: actionPanelActionExec}
+                        actions["O"] = actionPanelAction{label: "Outline…", kind: actionPanelActionNav, next: actionPanelOutline}
                         actions["S"] = actionPanelAction{label: "Edit outline statuses…", kind: actionPanelActionExec}
                         actions["r"] = actionPanelAction{label: "Archive outline", kind: actionPanelActionExec}
                         actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
@@ -750,8 +861,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         }
                 case viewOutline:
                         actions["enter"] = actionPanelAction{label: "Open item", kind: actionPanelActionExec}
-                        actions["o"] = actionPanelAction{label: "Toggle preview", kind: actionPanelActionExec}
-                        actions["v"] = actionPanelAction{label: "Toggle column view (experimental)", kind: actionPanelActionExec}
+                        actions["v"] = actionPanelAction{label: "Cycle view mode", kind: actionPanelActionExec}
+                        actions["O"] = actionPanelAction{label: "Outline…", kind: actionPanelActionNav, next: actionPanelOutline}
                         actions["S"] = actionPanelAction{label: "Edit outline statuses…", kind: actionPanelActionExec}
                         if m.splitPreviewVisible() {
                                 actions["tab"] = actionPanelAction{label: "Toggle focus (outline/detail)", kind: actionPanelActionExec}
@@ -1017,6 +1128,10 @@ func paneFromString(s string) (pane, bool) {
 
 func outlineViewModeToString(v outlineViewMode) string {
         switch v {
+        case outlineViewModeListPreview:
+                return "list+preview"
+        case outlineViewModeDocument:
+                return "document"
         case outlineViewModeColumns:
                 return "columns"
         default:
@@ -1028,6 +1143,10 @@ func outlineViewModeFromString(s string) (outlineViewMode, bool) {
         switch strings.TrimSpace(strings.ToLower(s)) {
         case "columns":
                 return outlineViewModeColumns, true
+        case "document":
+                return outlineViewModeDocument, true
+        case "list+preview", "list-preview", "preview", "split":
+                return outlineViewModeListPreview, true
         case "list":
                 return outlineViewModeList, true
         default:
@@ -1228,6 +1347,15 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
         }
 
         m.selectedOutline = ol
+
+        // Backward compatibility: older state stored preview as a separate boolean. If that was set and
+        // the outline mode is still "list" (or missing), upgrade to list+preview.
+        mode := m.outlineViewModeForID(outlineID)
+        if st.ShowPreview && mode == outlineViewModeList {
+                mode = outlineViewModeListPreview
+        }
+        m.setOutlineViewMode(outlineID, mode)
+
         m.collapsed = map[string]bool{}
         m.collapseInitialized = false
         m.refreshItems(*ol)
@@ -1237,12 +1365,15 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
 
         if wantView == viewOutline {
                 m.view = viewOutline
-                // Keep user preference for split preview.
+                // View mode (including preview) is restored via per-outline TUI state.
                 return
         }
 
         if wantView == viewAgenda {
                 m.view = viewAgenda
+                // Agenda doesn't currently support preview (preview is part of per-outline view modes).
+                m.showPreview = false
+                m.pane = paneOutline
                 if rv, ok := viewFromString(st.AgendaReturnView); ok && rv != viewAgenda {
                         m.hasAgendaReturnView = true
                         m.agendaReturnView = rv
@@ -1262,6 +1393,7 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
                         m.itemWorklogIdx = 0
                         m.itemHistoryIdx = 0
                         m.itemSideScroll = 0
+                        m.itemDetailScroll = 0
                         m.showPreview = false
                         m.pane = paneOutline
 
@@ -1548,6 +1680,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                 m.itemWorklogIdx = 0
                                                 m.itemHistoryIdx = 0
                                                 m.itemSideScroll = 0
+                                                m.itemDetailScroll = 0
 
                                                 // Restore selection to the child we came from (best-effort).
                                                 childID := strings.TrimSpace(ent.childID)
@@ -1654,6 +1787,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                 m.itemWorklogIdx = 0
                                                 m.itemHistoryIdx = 0
                                                 m.itemSideScroll = 0
+                                                m.itemDetailScroll = 0
 
                                                 // Restore selection to the child we came from (best-effort).
                                                 childID := strings.TrimSpace(ent.childID)
@@ -1764,8 +1898,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 if it, ok := m.outlinesList.SelectedItem().(outlineItem); ok {
                                         m.selectedOutlineID = it.outline.ID
                                         m.view = viewOutline
-                                        m.pane = paneOutline
-                                        m.showPreview = false
+                                        // Apply per-outline view mode (includes preview state).
+                                        m.setOutlineViewMode(it.outline.ID, m.outlineViewModeForID(it.outline.ID))
                                         m.openItemID = ""
                                         m.itemArchivedReadOnly = false
                                         m.collapsed = map[string]bool{}
@@ -1792,6 +1926,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.itemWorklogIdx = 0
                                         m.itemHistoryIdx = 0
                                         m.itemSideScroll = 0
+                                        m.itemDetailScroll = 0
                                         m.hasReturnView = true
                                         m.returnView = viewAgenda
                                         m.showPreview = false
@@ -1819,6 +1954,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.itemWorklogIdx = 0
                                         m.itemHistoryIdx = 0
                                         m.itemSideScroll = 0
+                                        m.itemDetailScroll = 0
                                         m.hasReturnView = true
                                         m.returnView = viewArchived
                                         m.showPreview = false
@@ -1888,6 +2024,14 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                 name = strings.TrimSpace(*it.outline.Name)
                                         }
                                         m.openInputModal(modalEditOutlineName, it.outline.ID, "Outline name (optional)", name)
+                                        return m, nil
+                                }
+                        }
+                case "D":
+                        // Edit outline description (outline list view).
+                        if m.view == viewOutlines {
+                                if it, ok := m.outlinesList.SelectedItem().(outlineItem); ok {
+                                        m.openTextModal(modalEditOutlineDescription, it.outline.ID, "Markdown outline description…", it.outline.Description)
                                         return m, nil
                                 }
                         }
@@ -2099,11 +2243,23 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         case itemFocusComments, itemFocusWorklog, itemFocusHistory:
                                 m.itemSideScroll -= 10
                                 return m, nil
+                        default:
+                                m.itemDetailScroll -= 5
+                                if m.itemDetailScroll < 0 {
+                                        m.itemDetailScroll = 0
+                                }
+                                return m, nil
                         }
                 case "pgdown", "ctrl+d":
                         switch m.itemFocus {
                         case itemFocusComments, itemFocusWorklog, itemFocusHistory:
                                 m.itemSideScroll += 10
+                                return m, nil
+                        default:
+                                m.itemDetailScroll += 5
+                                if m.itemDetailScroll < 0 {
+                                        m.itemDetailScroll = 0
+                                }
                                 return m, nil
                         }
                 case "home":
@@ -2202,6 +2358,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 m.itemWorklogIdx = 0
                                 m.itemHistoryIdx = 0
                                 m.itemSideScroll = 0
+                                m.itemDetailScroll = 0
                                 m.itemChildIdx = 0
                                 m.itemChildOff = 0
                                 return m, nil
@@ -2514,7 +2671,7 @@ func (m *appModel) breadcrumbText() string {
 }
 
 func (m *appModel) viewProjects() string {
-        frameH := m.height - 6
+        frameH := m.frameHeight()
         if frameH < 8 {
                 frameH = 8
         }
@@ -2532,10 +2689,10 @@ func (m *appModel) viewProjects() string {
         if contentW < 10 {
                 contentW = w
         }
-        m.projectsList.SetSize(contentW, bodyHeight)
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.projectsList.View()
+        body := m.listBodyWithOverflowHint(&m.projectsList, contentW, bodyHeight)
+        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
         main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
         if m.modal == modalNone {
                 return main
@@ -2546,7 +2703,7 @@ func (m *appModel) viewProjects() string {
 }
 
 func (m *appModel) viewOutlines() string {
-        frameH := m.height - 6
+        frameH := m.frameHeight()
         if frameH < 8 {
                 frameH = 8
         }
@@ -2564,10 +2721,10 @@ func (m *appModel) viewOutlines() string {
         if contentW < 10 {
                 contentW = w
         }
-        m.outlinesList.SetSize(contentW, bodyHeight)
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.outlinesList.View()
+        body := m.listBodyWithOverflowHint(&m.outlinesList, contentW, bodyHeight)
+        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
         main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
         if m.modal == modalNone {
                 return main
@@ -2578,7 +2735,7 @@ func (m *appModel) viewOutlines() string {
 }
 
 func (m *appModel) viewAgenda() string {
-        frameH := m.height - 6
+        frameH := m.frameHeight()
         if frameH < 8 {
                 frameH = 8
         }
@@ -2596,10 +2753,10 @@ func (m *appModel) viewAgenda() string {
         if contentW < 10 {
                 contentW = w
         }
-        m.agendaList.SetSize(contentW, bodyHeight)
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.agendaList.View()
+        body := m.listBodyWithOverflowHint(&m.agendaList, contentW, bodyHeight)
+        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
         main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
         if m.modal == modalNone {
                 return main
@@ -2610,7 +2767,7 @@ func (m *appModel) viewAgenda() string {
 }
 
 func (m *appModel) viewArchived() string {
-        frameH := m.height - 6
+        frameH := m.frameHeight()
         if frameH < 8 {
                 frameH = 8
         }
@@ -2628,10 +2785,10 @@ func (m *appModel) viewArchived() string {
         if contentW < 10 {
                 contentW = w
         }
-        m.archivedList.SetSize(contentW, bodyHeight)
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + m.archivedList.View()
+        body := m.listBodyWithOverflowHint(&m.archivedList, contentW, bodyHeight)
+        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
         main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
         if m.modal == modalNone {
                 return main
@@ -2697,6 +2854,9 @@ func (m appModel) footerText() string {
                 if m.modal == modalEditDescription {
                         return "description: tab: focus  ctrl+s: save  esc/ctrl+g: cancel"
                 }
+                if m.modal == modalEditOutlineDescription {
+                        return "outline description: tab: focus  ctrl+s: save  esc/ctrl+g: cancel"
+                }
                 return "new item: type title, enter/ctrl+s: save, esc/ctrl+g: cancel"
         }
         return base
@@ -2705,6 +2865,57 @@ func (m appModel) footerText() string {
 func (m appModel) footerBlock() string {
         keyHelp := lipgloss.NewStyle().Faint(true).Render(m.footerText())
         return m.minibufferView() + "\n" + keyHelp
+}
+
+// frameHeight returns the vertical space available for the main view content (everything above the footer),
+// leaving room for the footer itself plus the single blank separator line that View() inserts.
+func (m appModel) frameHeight() int {
+        h := m.height
+        if h < 0 {
+                h = 0
+        }
+        footerLines := len(strings.Split(m.footerBlock(), "\n"))
+        frame := h - footerLines - 1
+        if frame < 0 {
+                frame = 0
+        }
+        return frame
+}
+
+// listBodyWithOverflowHint renders a bubbles list and adds a muted hint line when the list can scroll.
+// It does NOT increase the total rendered height: when the hint is shown, we shrink the list height by 1
+// to reserve space for the hint line.
+func (m *appModel) listBodyWithOverflowHint(l *list.Model, width, height int) string {
+        if m == nil || l == nil {
+                return ""
+        }
+        if height <= 0 {
+                l.SetSize(width, 0)
+                return l.View()
+        }
+
+        // First pass at the full height to learn whether it overflows.
+        l.SetSize(width, height)
+        if l.Paginator.TotalPages <= 1 {
+                return l.View()
+        }
+
+        // Reserve one row for the hint line.
+        l.SetSize(width, height-1)
+        body := l.View()
+
+        hasAbove := l.Paginator.Page > 0
+        hasBelow := l.Paginator.Page < l.Paginator.TotalPages-1
+        switch {
+        case hasAbove && hasBelow:
+                return body + "\n" + styleMuted().Width(width).Render("↑ more / ↓ more")
+        case hasAbove:
+                return body + "\n" + styleMuted().Width(width).Render("↑ more")
+        case hasBelow:
+                return body + "\n" + styleMuted().Width(width).Render("↓ more")
+        default:
+                return body
+        }
 }
 
 func (m appModel) minibufferView() string {
@@ -2823,7 +3034,7 @@ func (m appModel) renderActionPanel() string {
 
         // Navigation group:
         // - In the context panel, only include actions that actually navigate to a subpanel.
-        //   (We don't want to "steal" exec actions like "o" Toggle preview from the View section.)
+        //   (We don't want to "steal" exec actions like "v" Cycle view mode from the View section.)
         // - In the Go to panel, show destinations explicitly.
         if m.curActionPanelKind() == actionPanelNav {
                 addSection("Destinations", []string{"p", "A", "o", "l", "i"})
@@ -2880,7 +3091,8 @@ func (m appModel) renderActionPanel() string {
                         // - Item: mutations + collaboration actions on the selected item
                         // - Global: app-level entrypoints (navigate / agenda / capture / quit)
 
-                        addSection("Outline View", []string{"enter", "o", "v", "S", "tab", "z", "Z"})
+                        // Outline-level view controls (preview is now part of the v cycle; outline actions are under O).
+                        addSection("Outline View", []string{"enter", "v", "O", "S", "tab", "z", "Z"})
 
                         // Item work: all changes + notes/comments, and related helpers.
                         addSection("Item", []string{
@@ -3262,7 +3474,7 @@ func rankBoundsForInsert(sibs []*model.Item, afterID, beforeID string) (lower, u
 
 func (m *appModel) resizeLists() {
         // Leave room for header/footer.
-        h := m.height - 6
+        h := m.frameHeight()
         if h < 8 {
                 h = 8
         }
@@ -3336,7 +3548,7 @@ func renderSplitWithLeftBreadcrumb(contentW, frameH, bodyHeight, leftW, rightW i
 }
 
 func (m *appModel) outlineLayout() (frameH, bodyH, contentW int) {
-        frameH = m.height - 6
+        frameH = m.frameHeight()
         if frameH < 8 {
                 frameH = 8
         }
@@ -3448,6 +3660,8 @@ func (m *appModel) refreshItems(outline model.Outline) {
         switch it := m.itemsList.SelectedItem().(type) {
         case outlineRowItem:
                 curID = it.row.item.ID
+        case outlineInlineDescLineItem:
+                curID = strings.TrimSpace(it.itemID)
         case addItemRow:
                 curID = "__add__"
         }
@@ -3475,12 +3689,68 @@ func (m *appModel) refreshItems(outline model.Outline) {
 
         flat := flattenOutline(outline, its, m.collapsed)
         var items []list.Item
+
+        // Always show outline description (markdown) above items in non-columns modes.
+        // In columns mode, the description is rendered as a single truncated line in viewOutline().
+        if m.outlineViewModeForID(outline.ID) != outlineViewModeColumns {
+                desc := strings.TrimSpace(outline.Description)
+                if desc != "" {
+                        w := m.itemsList.Width()
+                        if w < 10 {
+                                w = 10
+                        }
+                        rendered := renderMarkdown(desc, w)
+                        for _, line := range strings.Split(rendered, "\n") {
+                                items = append(items, outlinePrefaceLineItem{line: line})
+                        }
+                        // Spacer between preface and first item.
+                        items = append(items, outlinePrefaceLineItem{line: ""})
+                }
+        }
+
+        // Document mode: show focused item's full description inline, directly below the item.
+        focusID := strings.TrimSpace(curID)
+        mode := m.outlineViewModeForID(outline.ID)
+        if mode == outlineViewModeDocument && focusID == "" && len(flat) > 0 {
+                // Default focus to the first item so document mode has an inline block immediately.
+                focusID = strings.TrimSpace(flat[0].item.ID)
+        }
+
         for _, row := range flat {
                 flash := ""
                 if m.flashKind != "" && m.flashItemID != "" && row.item.ID == m.flashItemID {
                         flash = m.flashKind
                 }
                 items = append(items, outlineRowItem{row: row, outline: outline, flashKind: flash})
+
+                if mode == outlineViewModeDocument && focusID != "" && focusID != "__add__" && strings.TrimSpace(row.item.ID) == focusID {
+                        // Hide inline description when the item is collapsed.
+                        if !row.collapsed {
+                                body := strings.TrimSpace(row.item.Description)
+                                if body != "" {
+                                        w := m.itemsList.Width()
+                                        if w < 10 {
+                                                w = 10
+                                        }
+                                        rendered := renderMarkdown(body, w)
+                                        for _, line := range strings.Split(rendered, "\n") {
+                                                items = append(items, outlineInlineDescLineItem{
+                                                        itemID:  row.item.ID,
+                                                        outline: outline,
+                                                        depth:   row.depth,
+                                                        line:    line,
+                                                })
+                                        }
+                                        // Spacer after description block.
+                                        items = append(items, outlineInlineDescLineItem{
+                                                itemID:  row.item.ID,
+                                                outline: outline,
+                                                depth:   row.depth,
+                                                line:    "",
+                                        })
+                                }
+                        }
+                }
         }
         // Always-present affordance for adding an item (useful for empty outlines).
         items = append(items, addItemRow{})
@@ -3492,9 +3762,18 @@ func (m *appModel) refreshItems(outline model.Outline) {
                         m.itemsList, _ = m.itemsList.Update(msg)
                 }
         }
-        if curID != "" {
-                selectListItemByID(&m.itemsList, curID)
+        if strings.TrimSpace(curID) != "" {
+                selectListItemByID(&m.itemsList, strings.TrimSpace(curID))
+                return
         }
+        // Default selection: first real item row, otherwise "+ Add item".
+        for i := 0; i < len(items); i++ {
+                if _, ok := items[i].(outlineRowItem); ok {
+                        m.itemsList.Select(i)
+                        return
+                }
+        }
+        selectListItemByID(&m.itemsList, "__add__")
 }
 
 func (m *appModel) refreshAgenda() {
@@ -3831,6 +4110,22 @@ func (m *appModel) viewOutline() string {
                         return main
                 }
 
+                // Show outline description as a single truncated line under the breadcrumb (above columns).
+                header := crumb
+                desc := strings.TrimSpace(outline.Description)
+                if desc != "" {
+                        one := ""
+                        if parts := strings.Split(desc, "\n"); len(parts) > 0 {
+                                one = strings.TrimSpace(parts[0])
+                        }
+                        one = strings.Join(strings.Fields(one), " ")
+                        if one != "" {
+                                one = truncateText(one, contentW)
+                                line := lipgloss.NewStyle().Width(contentW).Foreground(colorMuted).Render(one)
+                                header = header + "\n" + line
+                        }
+                }
+
                 its := make([]model.Item, 0, 64)
                 for _, it := range m.db.Items {
                         if it.Archived {
@@ -3842,7 +4137,7 @@ func (m *appModel) viewOutline() string {
                         its = append(its, it)
                 }
                 board := renderOutlineColumns(*outline, its, contentW, bodyHeight)
-                main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + board
+                main := strings.Repeat("\n", topPadLines) + header + strings.Repeat("\n", breadcrumbGap+1) + board
                 main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
                 if m.modal == modalNone {
                         return main
@@ -3855,16 +4150,13 @@ func (m *appModel) viewOutline() string {
         var main string
         if !m.splitPreviewVisible() {
                 crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-                m.itemsList.SetSize(contentW, bodyHeight)
-                body := m.itemsList.View()
+                body := m.listBodyWithOverflowHint(&m.itemsList, contentW, bodyHeight)
                 main = strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
         } else {
                 // Split view: render the breadcrumb only over the LEFT pane, so the detail pane
                 // can start at the top without wasted header padding.
                 leftW, rightW := splitPaneWidths(contentW)
-                m.itemsList.SetSize(leftW, bodyHeight)
-
-                leftBody := m.itemsList.View()
+                leftBody := m.listBodyWithOverflowHint(&m.itemsList, leftW, bodyHeight)
 
                 placeholder := lipgloss.NewStyle().Width(rightW).Height(bodyHeight).Padding(0, 1).Render("(loading…)")
                 right := placeholder
@@ -3901,7 +4193,7 @@ func (m *appModel) viewOutline() string {
 }
 
 func (m *appModel) viewItem() string {
-        frameH := m.height - 6
+        frameH := m.frameHeight()
         if frameH < 8 {
                 frameH = 8
         }
@@ -3965,7 +4257,7 @@ func (m *appModel) viewItem() string {
         // Split view when focusing a section that has a side panel.
         if sidePanelKindForFocus(m.itemFocus) != itemSideNone {
                 leftW, rightW := splitPaneWidths(contentW)
-                left := renderItemDetailInteractive(m.db, *outline, *it, leftW, bodyHeight, m.itemFocus, m.eventsTail, m.itemChildIdx, m.itemChildOff)
+                left := renderItemDetailInteractive(m.db, *outline, *it, leftW, bodyHeight, m.itemFocus, m.eventsTail, m.itemChildIdx, m.itemChildOff, m.itemDetailScroll)
                 right := renderItemSidePanelWithEvents(m.db, *it, rightW, bodyHeight, sidePanelKindForFocus(m.itemFocus), m.itemCommentIdx, m.itemWorklogIdx, m.itemHistoryIdx, m.itemSideScroll, m.eventsTail)
                 main := renderSplitWithLeftBreadcrumb(contentW, frameH, bodyHeight, leftW, rightW, m.breadcrumbText(), left, right)
                 // Item view uses the standard (full-width) breadcrumb in non-split mode; in split mode
@@ -3973,7 +4265,7 @@ func (m *appModel) viewItem() string {
                 return wrap(main)
         }
 
-        card := renderItemDetailInteractive(m.db, *outline, *it, contentW, bodyHeight, m.itemFocus, m.eventsTail, m.itemChildIdx, m.itemChildOff)
+        card := renderItemDetailInteractive(m.db, *outline, *it, contentW, bodyHeight, m.itemFocus, m.eventsTail, m.itemChildIdx, m.itemChildOff, m.itemDetailScroll)
         block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + card
         return wrap(block)
 }
@@ -4000,6 +4292,8 @@ func (m *appModel) renderModal() string {
                 return m.renderTextAreaModal("Edit description")
         case modalEditOutlineName:
                 return m.renderInputModal("Rename outline")
+        case modalEditOutlineDescription:
+                return m.renderTextAreaModal("Edit outline description")
         case modalPickStatus:
                 return renderModalBox(m.width, "Set status", m.statusList.View()+"\n\nenter: set   esc/ctrl+g: cancel")
         case modalPickOutline:
@@ -4565,7 +4859,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, nil
                 }
 
-                if m.modal == modalAddComment || m.modal == modalReplyComment || m.modal == modalAddWorklog || m.modal == modalEditDescription {
+                if m.modal == modalAddComment || m.modal == modalReplyComment || m.modal == modalAddWorklog || m.modal == modalEditDescription || m.modal == modalEditOutlineDescription {
                         switch km := msg.(type) {
                         case tea.KeyMsg:
                                 switch km.String() {
@@ -4654,6 +4948,8 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                 if err := m.setDescriptionFromModal(body); err != nil {
                                                         return m, m.reportError(itemID, err)
                                                 }
+                                        } else if m.modal == modalEditOutlineDescription {
+                                                _ = m.setOutlineDescriptionFromModal(body)
                                         } else {
                                                 if body == "" {
                                                         return m, nil
@@ -4987,6 +5283,13 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
         switch msg := msg.(type) {
         case tea.KeyMsg:
+                // Outline key: open Outline… submenu in the action panel.
+                if m.modal == modalNone && msg.String() == "O" {
+                        m.openActionPanel(actionPanelContext)
+                        (&m).pushActionPanel(actionPanelOutline)
+                        return m, nil
+                }
+
                 // Enter outline filtering mode (Bubble list default is "/"), and do it early so it's not
                 // impacted by any other outline key handling.
                 if msg.String() == "/" && m.modal == modalNone {
@@ -5189,18 +5492,16 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 m.openInputModal(modalNewSibling, "", "Title", "")
                                 return m, nil
                         }
-                case "o":
-                        // Toggle split preview pane.
-                        m.showPreview = !m.showPreview
-                        m.pane = paneOutline
-                        m.previewCacheForID = ""
-                        if m.showPreview {
+                case "v":
+                        // Cycle outline view modes (list -> list+preview -> document -> columns).
+                        m.cycleOutlineViewMode()
+                        if m.selectedOutline != nil {
+                                m.refreshItems(*m.selectedOutline)
+                        }
+                        // Preview may have become visible; compute it.
+                        if m.splitPreviewVisible() {
                                 return m, m.schedulePreviewCompute()
                         }
-                        return m, nil
-                case "v":
-                        // Toggle experimental column view (status as columns).
-                        m.toggleOutlineViewMode()
                         return m, nil
                 case "S":
                         // Edit outline status definitions.
@@ -5262,7 +5563,15 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
                 // Outline navigation.
                 if m.navOutline(msg) {
-                        return m, m.schedulePreviewCompute()
+                        // Document mode: selection changes need a refresh to move the inline description block.
+                        if m.curOutlineViewMode() == outlineViewModeDocument && m.selectedOutline != nil {
+                                m.refreshItems(*m.selectedOutline)
+                                return m, nil
+                        }
+                        if m.splitPreviewVisible() {
+                                return m, m.schedulePreviewCompute()
+                        }
+                        return m, nil
                 }
 
                 // Outline structural operations (left pane only).
@@ -5275,17 +5584,27 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
         // Allow list to handle incidental keys (help paging, etc).
         beforeID := ""
-        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+        switch it := m.itemsList.SelectedItem().(type) {
+        case outlineRowItem:
                 beforeID = strings.TrimSpace(it.row.item.ID)
+        case outlineInlineDescLineItem:
+                beforeID = strings.TrimSpace(it.itemID)
         }
         var cmd tea.Cmd
         m.itemsList, cmd = m.itemsList.Update(msg)
-        if m.splitPreviewVisible() {
-                afterID := ""
-                if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-                        afterID = strings.TrimSpace(it.row.item.ID)
+        afterID := ""
+        switch it := m.itemsList.SelectedItem().(type) {
+        case outlineRowItem:
+                afterID = strings.TrimSpace(it.row.item.ID)
+        case outlineInlineDescLineItem:
+                afterID = strings.TrimSpace(it.itemID)
+        }
+        if beforeID != afterID {
+                if m.curOutlineViewMode() == outlineViewModeDocument && m.selectedOutline != nil {
+                        m.refreshItems(*m.selectedOutline)
+                        return m, cmd
                 }
-                if beforeID != afterID {
+                if m.splitPreviewVisible() {
                         return m, tea.Batch(cmd, m.schedulePreviewCompute())
                 }
         }
@@ -5301,6 +5620,13 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "x", "?":
                         m.openActionPanel(actionPanelContext)
                         return m, nil
+                case "O":
+                        // Outline actions menu (like Agenda Commands): open action panel directly in the Outline… subpanel.
+                        if m.view == viewOutline || m.view == viewOutlines {
+                                m.openActionPanel(actionPanelContext)
+                                (&m).pushActionPanel(actionPanelOutline)
+                                return m, nil
+                        }
                 case "g":
                         m.openActionPanel(actionPanelNav)
                         return m, nil
@@ -5309,13 +5635,6 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, nil
                 case "c":
                         m.openActionPanel(actionPanelCapture)
-                        return m, nil
-                case "o":
-                        // Toggle preview pane (same key as outline view).
-                        m.showPreview = !m.showPreview
-                        m.pane = paneOutline
-                        // Preview affects sizing; clear any cached detail.
-                        m.previewCacheForID = ""
                         return m, nil
                 case "tab":
                         if m.splitPreviewVisible() {
@@ -5996,10 +6315,25 @@ func splitLinesN(s string, n int) []string {
 func (m *appModel) navOutline(msg tea.KeyMsg) bool {
         switch msg.String() {
         case "down", "j", "ctrl+n":
-                m.itemsList.CursorDown()
+                // Skip non-item rows (e.g. outline preface and document-mode inline description rows).
+                items := m.itemsList.Items()
+                for i := m.itemsList.Index() + 1; i < len(items); i++ {
+                        switch items[i].(type) {
+                        case outlineRowItem, addItemRow:
+                                m.itemsList.Select(i)
+                                return true
+                        }
+                }
                 return true
         case "up", "k", "ctrl+p":
-                m.itemsList.CursorUp()
+                items := m.itemsList.Items()
+                for i := m.itemsList.Index() - 1; i >= 0; i-- {
+                        switch items[i].(type) {
+                        case outlineRowItem, addItemRow:
+                                m.itemsList.Select(i)
+                                return true
+                        }
+                }
                 return true
         case "right", "l", "ctrl+f":
                 m.navIntoFirstChild()
@@ -6025,13 +6359,17 @@ func (m *appModel) navIntoFirstChild() {
                 m.refreshItems(it.outline)
         }
         idx := m.itemsList.Index()
-        // In our flattening, the first child (if visible) is the next row with depth+1.
+        // In our flattening, the first child (if visible) is the next outlineRowItem with depth+1.
         items := m.itemsList.Items()
-        if idx+1 >= len(items) {
+        for i := idx + 1; i < len(items); i++ {
+                next, ok := items[i].(outlineRowItem)
+                if !ok {
+                        continue
+                }
+                if next.row.depth == it.row.depth+1 {
+                        m.itemsList.Select(i)
+                }
                 return
-        }
-        if next, ok := items[idx+1].(outlineRowItem); ok && next.row.depth == it.row.depth+1 {
-                m.itemsList.Select(idx + 1)
         }
 }
 
@@ -6179,11 +6517,12 @@ func isMoveUp(msg tea.KeyMsg) bool {
 
 func isIndent(msg tea.KeyMsg) bool {
         // Keep indent/outdent on Alt+Left/Right; user reports this already works in Terminal.app.
-        return isAltRight(msg)
+        // Also support Ctrl+L / Ctrl+H since Ctrl+Arrow is often unreliable across terminals.
+        return isAltRight(msg) || msg.Type == tea.KeyCtrlL || msg.String() == "ctrl+l"
 }
 
 func isOutdent(msg tea.KeyMsg) bool {
-        return isAltLeft(msg)
+        return isAltLeft(msg) || msg.Type == tea.KeyCtrlH || msg.String() == "ctrl+h"
 }
 
 // keyMsgFromUnknownCSIString attempts to interpret Bubble Tea's "unknown CSI"
@@ -6207,6 +6546,17 @@ func keyMsgFromUnknownCSIString(s string) (tea.KeyMsg, bool) {
                         return tea.KeyMsg{Type: tea.KeyRight, Alt: true}, true
                 case strings.HasSuffix(seq, "D"):
                         return tea.KeyMsg{Type: tea.KeyLeft, Alt: true}, true
+                }
+        }
+
+        // Ctrl+Arrow is typically reported as ";5" (xterm style). Bubble Tea
+        // already maps common sequences, but some terminals end up in "unknown CSI".
+        if strings.Contains(seq, ";5") {
+                switch {
+                case strings.HasSuffix(seq, "C"):
+                        return tea.KeyMsg{Type: tea.KeyCtrlRight}, true
+                case strings.HasSuffix(seq, "D"):
+                        return tea.KeyMsg{Type: tea.KeyCtrlLeft}, true
                 }
         }
 
@@ -6682,6 +7032,26 @@ func (m *appModel) setOutlineNameFromModal(name string) error {
                         eventType:    "outline.rename",
                         eventPayload: map[string]any{"name": o.Name},
                         minibuffer:   "Renamed outline " + o.ID,
+                }, nil
+        })
+}
+
+func (m *appModel) setOutlineDescriptionFromModal(description string) error {
+        outlineID := strings.TrimSpace(m.modalForID)
+        if outlineID == "" {
+                return nil
+        }
+        newDesc := strings.TrimSpace(description)
+        return m.mutateOutline(outlineID, func(_ *store.DB, o *model.Outline) (bool, outlineMutationResult, error) {
+                prev := strings.TrimSpace(o.Description)
+                if prev == newDesc {
+                        return false, outlineMutationResult{}, nil
+                }
+                o.Description = newDesc
+                return true, outlineMutationResult{
+                        eventType:    "outline.set_description",
+                        eventPayload: map[string]any{"description": o.Description},
+                        minibuffer:   "Outline description updated",
                 }, nil
         })
 }

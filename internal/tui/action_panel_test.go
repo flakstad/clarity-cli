@@ -122,8 +122,12 @@ func TestActionPanel_ExecutesActionAndCloses(t *testing.T) {
 
         m := newAppModel(dir, db)
         m.view = viewOutline
+        m.selectedProjectID = "proj-a"
+        m.selectedOutlineID = "out-a"
+        m.selectedOutline = &db.Outlines[0]
+        m.refreshItems(db.Outlines[0])
 
-        // Open panel then run 'o' (toggle preview).
+        // Open panel then run 'v' (cycle view mode => list+preview).
         mAny, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
         m2 := mAny.(appModel)
         if m2.modal != modalActionPanel {
@@ -133,13 +137,13 @@ func TestActionPanel_ExecutesActionAndCloses(t *testing.T) {
                 t.Fatalf("expected showPreview=false initially")
         }
 
-        mAny, _ = m2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+        mAny, _ = m2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
         m3 := mAny.(appModel)
         if m3.modal != modalNone {
                 t.Fatalf("expected modalNone after executing action, got %v", m3.modal)
         }
         if !m3.showPreview {
-                t.Fatalf("expected showPreview=true after executing 'o' from action panel")
+                t.Fatalf("expected showPreview=true after executing 'v' from action panel")
         }
 }
 

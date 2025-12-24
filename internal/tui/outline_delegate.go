@@ -52,6 +52,12 @@ func (d outlineItemDelegate) Render(w io.Writer, m list.Model, index int, item l
         case outlineRowItem:
                 fmt.Fprint(w, d.renderOutlineRow(contentW, prefix, it, focused))
                 return
+        case outlineInlineDescLineItem:
+                fmt.Fprint(w, d.renderInlineDescRow(contentW, prefix, it, focused))
+                return
+        case outlinePrefaceLineItem:
+                fmt.Fprint(w, d.renderPrefaceRow(contentW, prefix, it, focused))
+                return
         case addItemRow:
                 // Match the outline's twisty column (2 chars) so "+ Add item" aligns.
                 line := prefix + "  " + it.Title()
@@ -83,6 +89,28 @@ func (d outlineItemDelegate) Render(w io.Writer, m list.Model, index int, item l
                 return
         }
         fmt.Fprint(w, d.renderRow(contentW, base, line))
+}
+
+func (d outlineItemDelegate) renderPrefaceRow(width int, prefix string, it outlinePrefaceLineItem, focused bool) string {
+        // Preface rows are markdown-rendered lines (may contain ANSI codes already).
+        // Keep them visually subdued; allow focused highlight if selection ever lands here.
+        base := d.normal.Copy().Foreground(colorMuted)
+        line := prefix + strings.TrimRight(it.line, "\r")
+        if focused {
+                return d.renderFocusedRow(width, base, line)
+        }
+        return d.renderRow(width, base, line)
+}
+
+func (d outlineItemDelegate) renderInlineDescRow(width int, prefix string, it outlineInlineDescLineItem, focused bool) string {
+        // Inline description lines in document mode.
+        indent := strings.Repeat("  ", max(it.depth, 0)) + "    "
+        base := d.normal.Copy().Foreground(colorMuted)
+        line := prefix + indent + strings.TrimRight(it.line, "\r")
+        if focused {
+                return d.renderFocusedRow(width, base, line)
+        }
+        return d.renderRow(width, base, line)
 }
 
 func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outlineRowItem, focused bool) string {

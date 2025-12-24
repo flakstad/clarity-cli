@@ -31,13 +31,14 @@ type OutlineStatusDef struct {
 }
 
 type Outline struct {
-        ID         string             `json:"id"`
-        ProjectID  string             `json:"projectId"`
-        Name       *string            `json:"name,omitempty"`
-        StatusDefs []OutlineStatusDef `json:"statusDefs"`
-        CreatedBy  string             `json:"createdBy"`
-        CreatedAt  time.Time          `json:"createdAt"`
-        Archived   bool               `json:"archived"`
+        ID          string             `json:"id"`
+        ProjectID   string             `json:"projectId"`
+        Name        *string            `json:"name,omitempty"`
+        Description string             `json:"description,omitempty"`
+        StatusDefs  []OutlineStatusDef `json:"statusDefs"`
+        CreatedBy   string             `json:"createdBy"`
+        CreatedAt   time.Time          `json:"createdAt"`
+        Archived    bool               `json:"archived"`
 }
 
 type Item struct {

@@ -110,7 +110,7 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
         return normalizePane(box.Render(strings.Join(lines, "\n")), width, height)
 }
 
-func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.Item, width, height int, focus itemPageFocus, events []model.Event, childIdx int, childOff int) string {
+func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.Item, width, height int, focus itemPageFocus, events []model.Event, childIdx int, childOff int, scroll int) string {
         titleStyle := lipgloss.NewStyle().Bold(true)
         if isEndState(outline, it.StatusID) {
                 titleStyle = faintIfDark(lipgloss.NewStyle()).
@@ -178,26 +178,10 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
                 lastHistory = fmtTS(history[0].TS)
         }
 
-        desc := "(no description)"
-        if strings.TrimSpace(it.Description) != "" {
-                rendered := strings.TrimSpace(renderMarkdown(it.Description, innerW))
-                if rendered == "" {
-                        rendered = strings.TrimSpace(it.Description)
-                }
-                maxDescLines := height / 2
-                if maxDescLines < 6 {
-                        maxDescLines = 6
-                }
-                if maxDescLines > 24 {
-                        maxDescLines = 24
-                }
-                desc = truncateLines(rendered, maxDescLines)
-        }
-
         titleBtn := btn(focus == itemFocusTitle).Render(titleStyle.Render(it.Title))
         childrenBtn := btn(focus == itemFocusChildren).Render("Children")
 
-        lines := []string{
+        headerLines := []string{
                 titleBtn,
                 "",
                 labelStyle.Render("ID: ") + it.ID,
@@ -206,26 +190,179 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
                 labelStyle.Render("Priority: ") + btn(focus == itemFocusPriority).Render(fmt.Sprintf("%v", it.Priority)),
                 labelStyle.Render("On hold: ") + fmt.Sprintf("%v", it.OnHold),
                 "",
-                btn(focus == itemFocusDescription).Render("Description (edit)"),
-                desc,
-                "",
-                childrenBtn,
-                renderChildrenOutline(db, outline, children, innerW, focus == itemFocusChildren, childIdx, childOff, 8),
-                "",
-                labelStyle.Render("Related"),
-                btn(focus == itemFocusComments).Render(fmt.Sprintf("Comments: %d (last %s)", commentsCount, lastComment)),
-                btn(focus == itemFocusWorklog).Render(fmt.Sprintf("Worklog:   %d (last %s)", len(worklog), lastWorklog)),
-                btn(focus == itemFocusHistory).Render(fmt.Sprintf("History:   %d (last %s)", len(history), lastHistory)),
         }
 
         if strings.TrimSpace(status) != "" {
                 // Insert status after ID line.
                 statusLine := labelStyle.Render("Status: ") + btn(focus == itemFocusStatus).Render(status)
-                lines = append(lines[:4], append([]string{statusLine}, lines[4:]...)...)
+                headerLines = append(headerLines[:4], append([]string{statusLine}, headerLines[4:]...)...)
         }
+
+        descLines := []string{"(no description)"}
+        if strings.TrimSpace(it.Description) != "" {
+                rendered := strings.TrimSpace(renderMarkdown(it.Description, innerW))
+                if rendered == "" {
+                        rendered = strings.TrimSpace(it.Description)
+                }
+                descLines = strings.Split(rendered, "\n")
+                if len(descLines) == 0 {
+                        descLines = []string{"(no description)"}
+                }
+                // Guardrails: avoid pathological render sizes.
+                if len(descLines) > 800 {
+                        descLines = append(descLines[:799], "…")
+                }
+        }
+
+        bodyLines := []string{
+                btn(focus == itemFocusDescription).Render("Description (edit)"),
+        }
+        bodyLines = append(bodyLines, descLines...)
+        bodyLines = append(bodyLines, "")
+        bodyLines = append(bodyLines, childrenBtn)
+        bodyLines = append(bodyLines, strings.Split(renderChildrenOutline(db, outline, children, innerW, focus == itemFocusChildren, childIdx, childOff, 8), "\n")...)
+        bodyLines = append(bodyLines, "")
+        bodyLines = append(bodyLines, labelStyle.Render("Related"))
+        bodyLines = append(bodyLines, btn(focus == itemFocusComments).Render(fmt.Sprintf("Comments: %d (last %s)", commentsCount, lastComment)))
+        bodyLines = append(bodyLines, btn(focus == itemFocusWorklog).Render(fmt.Sprintf("Worklog:   %d (last %s)", len(worklog), lastWorklog)))
+        bodyLines = append(bodyLines, btn(focus == itemFocusHistory).Render(fmt.Sprintf("History:   %d (last %s)", len(history), lastHistory)))
+
+        // Window the body to the available height so small terminals don't silently cut off content.
+        moreStyle := styleMuted()
+        lines := windowWithIndicators(headerLines, bodyLines, height, scroll, moreStyle)
 
         // Normalize to guarantee stable split-pane rendering even with unbroken long tokens.
         return normalizePane(box.Render(strings.Join(lines, "\n")), width, height)
+}
+
+func windowWithIndicators(header, body []string, height int, scroll int, moreStyle lipgloss.Style) []string {
+        if height <= 0 {
+                return []string{}
+        }
+        if scroll < 0 {
+                scroll = 0
+        }
+        if len(header) > height {
+                header = header[:height]
+        }
+        avail := height - len(header)
+        if avail <= 0 {
+                // No room for body; return header only (padded).
+                out := append([]string{}, header...)
+                for len(out) < height {
+                        out = append(out, "")
+                }
+                return out
+        }
+
+        windowBody := windowLinesWithIndicators(body, avail, scroll, moreStyle)
+        out := append([]string{}, header...)
+        out = append(out, windowBody...)
+        for len(out) < height {
+                out = append(out, "")
+        }
+        if len(out) > height {
+                out = out[:height]
+        }
+        return out
+}
+
+func windowLinesWithIndicators(lines []string, height int, scroll int, moreStyle lipgloss.Style) []string {
+        if height <= 0 {
+                return []string{}
+        }
+        if scroll < 0 {
+                scroll = 0
+        }
+        if len(lines) == 0 {
+                out := []string{""}
+                for len(out) < height {
+                        out = append(out, "")
+                }
+                return out[:height]
+        }
+
+        // Converge on a stable window that accounts for indicator rows.
+        for iter := 0; iter < 6; iter++ {
+                needTop := scroll > 0
+                avail := height
+                if needTop {
+                        avail--
+                }
+                if avail < 0 {
+                        avail = 0
+                }
+                needBottom := scroll+avail < len(lines)
+                if needBottom {
+                        avail--
+                }
+                if avail < 0 {
+                        avail = 0
+                }
+                // Clamp scroll to what can actually be shown.
+                maxScroll := len(lines) - avail
+                if maxScroll < 0 {
+                        maxScroll = 0
+                }
+                if scroll > maxScroll {
+                        scroll = maxScroll
+                        continue
+                }
+                // Re-evaluate needBottom after clamping and indicator reservation.
+                needBottom2 := scroll+avail < len(lines)
+                if needBottom2 && !needBottom {
+                        // Need to reserve space for bottom indicator too.
+                        continue
+                }
+                break
+        }
+
+        needTop := scroll > 0
+        avail := height
+        if needTop {
+                avail--
+        }
+        if avail < 0 {
+                avail = 0
+        }
+        needBottom := scroll+avail < len(lines)
+        if needBottom {
+                avail--
+        }
+        if avail < 0 {
+                avail = 0
+        }
+
+        // Final clamp.
+        maxScroll := len(lines) - avail
+        if maxScroll < 0 {
+                maxScroll = 0
+        }
+        if scroll > maxScroll {
+                scroll = maxScroll
+        }
+
+        start := scroll
+        end := start + avail
+        if end > len(lines) {
+                end = len(lines)
+        }
+
+        out := []string{}
+        if needTop {
+                out = append(out, moreStyle.Render(fmt.Sprintf("↑ %d more", start)))
+        }
+        out = append(out, lines[start:end]...)
+        if needBottom {
+                out = append(out, moreStyle.Render(fmt.Sprintf("↓ %d more", len(lines)-end)))
+        }
+        for len(out) < height {
+                out = append(out, "")
+        }
+        if len(out) > height {
+                out = out[:height]
+        }
+        return out
 }
 
 func truncateLines(s string, maxLines int) string {

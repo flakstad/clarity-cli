@@ -27,10 +27,16 @@ func TestMoveIndentFallbackKeys(t *testing.T) {
                 if !isIndent(tea.KeyMsg{Type: tea.KeyRight, Alt: true}) {
                         t.Fatalf("expected Alt+Right to be recognized for indent")
                 }
+                if !isIndent(tea.KeyMsg{Type: tea.KeyCtrlL}) {
+                        t.Fatalf("expected Ctrl+L to be recognized for indent")
+                }
         })
         t.Run("outdent", func(t *testing.T) {
                 if !isOutdent(tea.KeyMsg{Type: tea.KeyLeft, Alt: true}) {
                         t.Fatalf("expected Alt+Left to be recognized for outdent")
+                }
+                if !isOutdent(tea.KeyMsg{Type: tea.KeyCtrlH}) {
+                        t.Fatalf("expected Ctrl+H to be recognized for outdent")
                 }
         })
 }
@@ -47,5 +53,14 @@ func TestUnknownCSIParsing(t *testing.T) {
         }
         if km.Type != tea.KeyUp || !km.Alt {
                 t.Fatalf("expected Alt+Up; got Type=%v Alt=%v", km.Type, km.Alt)
+        }
+
+        // "?CSI[49 59 53 67]?" => "1;5C" => Ctrl+Right
+        km, ok = keyMsgFromUnknownCSIString(fakeStringer("?CSI[49 59 53 67]?").String())
+        if !ok {
+                t.Fatalf("expected unknown CSI to parse ctrl+right")
+        }
+        if km.Type != tea.KeyCtrlRight {
+                t.Fatalf("expected Ctrl+Right; got Type=%v Alt=%v", km.Type, km.Alt)
         }
 }
