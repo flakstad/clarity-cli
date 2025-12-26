@@ -119,9 +119,23 @@ func TestViewOutline_SplitPreview_RendersDetailPaneAndUsesOneThirdWidth(t *testi
                 t.Fatalf("expected detail pane to start on the breadcrumb row in split view; got: %q", headerLine)
         }
 
+        // In overlay split mode, we keep the underlying list at full width so it doesn't get squashed.
+        if got := m.itemsList.Width(); got != contentW {
+                t.Fatalf("expected list width=%d, got %d", contentW, got)
+        }
+
+        // Ensure the right pane starts at the split x-offset.
         leftW, _ := splitPaneWidths(contentW)
-        if got := m.itemsList.Width(); got != leftW {
-                t.Fatalf("expected left pane width=%d, got %d", leftW, got)
+        headerLineNoSGR := stripSGR(headerLine)
+        if idx := strings.Index(headerLineNoSGR, "Title"); idx < 0 {
+                t.Fatalf("expected header row to contain detail title; got: %q", headerLineNoSGR)
+        } else {
+                // The detail renderer has left padding (padX=1), so the first visible character
+                // appears one column into the right pane.
+                wantX := splitOuterMargin + leftW + splitGapW + 1
+                if idx != wantX {
+                        t.Fatalf("expected detail title to start at column=%d, got %d (line=%q)", wantX, idx, headerLineNoSGR)
+                }
         }
 
         // Ensure stable full-width lines (important for split rendering).

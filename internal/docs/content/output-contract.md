@@ -17,6 +17,10 @@ Example:
 - `clarity items show <item-id>` returns the item plus counts and `_hints` for:
   - `clarity comments list <item-id>`
   - `clarity worklog list <item-id>`
+  - (Agents) `clarity items claim <item-id>`
+  - (Agents) `clarity items set-status <item-id> --status <...>`
+  - (Agents) `clarity worklog add <item-id> --body "..."`
+  - (Agents) `clarity comments add <item-id> --body "..."`
 
 List endpoints (like comments/worklog) are typically paginated:
 - `--limit N` (default small)

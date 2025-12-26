@@ -473,7 +473,7 @@ func TestActionPanel_DetailPane_X_ShowsFocusedItemGroupsAndItemActions(t *testin
                 }
         }
         // And include key item actions.
-        for _, want := range []string{"Edit title", "Toggle priority", "Add comment"} {
+        for _, want := range []string{"Edit title", "Toggle priority", "Toggle on hold", "Add comment"} {
                 if !strings.Contains(out, want) {
                         t.Fatalf("expected action panel to contain %q; got:\n%s", want, out)
                 }
@@ -534,7 +534,7 @@ func TestActionPanel_ItemView_ShowsItemSectionAndItemActions(t *testing.T) {
                 }
         }
         // Key actions should be discoverable from the item view action panel.
-        for _, want := range []string{"Edit title", "Edit description", "Toggle priority", "Add comment", "Move to outline", "Archive item"} {
+        for _, want := range []string{"Edit title", "Edit description", "Toggle priority", "Toggle on hold", "Add comment", "Move to outline", "Archive item"} {
                 if !strings.Contains(out, want) {
                         t.Fatalf("expected action panel to contain %q; got:\n%s", want, out)
                 }
@@ -600,7 +600,7 @@ func TestActionPanel_DetailPane_FocusedItemGrouping(t *testing.T) {
                         t.Fatalf("expected action panel to contain header %q; got:\n%s", h, out)
                 }
         }
-        for _, want := range []string{"Toggle focus (outline/detail)", "Edit title", "Toggle priority", "Add comment"} {
+        for _, want := range []string{"Toggle focus (outline/detail)", "Edit title", "Toggle priority", "Toggle on hold", "Add comment"} {
                 if !strings.Contains(out, want) {
                         t.Fatalf("expected action panel to contain %q; got:\n%s", want, out)
                 }

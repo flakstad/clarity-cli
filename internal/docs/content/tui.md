@@ -26,6 +26,7 @@ Key bindings:
 - `Y`: copy `clarity items show <id>` to clipboard
 - `c`: add a comment (selected item)
 - `w`: add a worklog entry (selected item)
+- `o`: toggle on-hold (selected/open item)
 - `g`: open the Go to menu (shows available destinations, including `j` jump-to-item)
   - `j`: jump to an item by id (accepts `item-vth` or just `vth`)
   - `A`: archived (browse archived content; items open read-only)

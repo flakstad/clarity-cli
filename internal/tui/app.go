@@ -845,6 +845,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                                 actions["e"] = actionPanelAction{label: "Edit title", kind: actionPanelActionExec}
                                 actions["D"] = actionPanelAction{label: "Edit description", kind: actionPanelActionExec}
                                 actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
+                                actions["o"] = actionPanelAction{label: "Toggle on hold", kind: actionPanelActionExec}
                                 actions[" "] = actionPanelAction{label: "Change status", kind: actionPanelActionExec}
                                 actions["C"] = actionPanelAction{label: "Add comment", kind: actionPanelActionExec}
                                 actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
@@ -869,6 +870,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         actions["C"] = actionPanelAction{label: "Add comment", kind: actionPanelActionExec}
                         actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
                         actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
+                        actions["o"] = actionPanelAction{label: "Toggle on hold", kind: actionPanelActionExec}
                         actions["D"] = actionPanelAction{label: "Edit description", kind: actionPanelActionExec}
                         actions["r"] = actionPanelAction{label: "Archive item", kind: actionPanelActionExec}
                         actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
@@ -972,7 +974,7 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
         m.itemsList.SetFilteringEnabled(true)
         m.itemsList.SetShowFilter(true)
 
-        m.agendaList = newList("Agenda", "All items (excluding DONE)", []list.Item{})
+        m.agendaList = newList("Agenda", "All items (excluding DONE and on hold)", []list.Item{})
         m.agendaList.SetDelegate(newCompactItemDelegate())
         m.agendaCollapsed = map[string]bool{}
 
@@ -2469,6 +2471,16 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, m.reportError(activeID, err)
                         }
                         return m, nil
+                case "o":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
+                        // Toggle on-hold.
+                        if err := m.toggleOnHold(activeID); err != nil {
+                                return m, m.reportError(activeID, err)
+                        }
+                        return m, nil
                 case "C":
                         if readOnly {
                                 m.showMinibuffer("Archived item: read-only")
@@ -3128,7 +3140,7 @@ func (m appModel) renderActionPanel() string {
                 switch m.view {
                 case viewItem:
                         // Full-screen item page: show item work + global entrypoints.
-                        addSection("Item", []string{"e", "D", "p", " ", "C", "w", "m", "y", "Y", "r"})
+                        addSection("Item", []string{"e", "D", "p", "o", " ", "C", "w", "m", "y", "Y", "r"})
 
                         globalKeys := []string{}
                         for _, k := range []string{"g", "a", "c"} {
@@ -3154,7 +3166,7 @@ func (m appModel) renderActionPanel() string {
                         addSection("Item", []string{
                                 "e", "n", "N", // title/new items
                                 " ", "shift+left", "shift+right", // status
-                                "p", "D", // priority/description
+                                "p", "o", "D", // priority/on-hold/description
                                 "m",      // move
                                 "C", "w", // comment/worklog
                                 "y", "Y", // copy helpers (still item-scoped)
@@ -3529,9 +3541,15 @@ func (m *appModel) resizeLists() {
         m.outlinesList.SetSize(centeredW, h)
         m.agendaList.SetSize(centeredW, h)
         if m.splitPreviewVisible() {
-                leftW, _ := splitPaneWidths(centeredW)
-                m.itemsList.SetSize(leftW, h)
+                // In split-preview mode we overlay the right pane on top of the list; keep the list
+                // at full width so its content doesn't get squashed.
+                contentW := w - 2*splitOuterMargin
+                if contentW < 10 {
+                        contentW = w
+                }
+                m.itemsList.SetSize(contentW, h)
         } else {
+                // Keep the default capped width for non-outline list views.
                 m.itemsList.SetSize(centeredW, h)
         }
 }
@@ -3576,11 +3594,29 @@ func renderSplitWithLeftHeader(contentW, frameH, leftW, rightW int, leftHeader s
                 contentH = 0
         }
 
-        leftCol = normalizePane(leftCol, leftW, contentH)
-        rightCol := normalizePane(rightBody, rightW, contentH)
+        // Important: render the left content at FULL width so it doesn't get squashed;
+        // then overlay the right pane on top. This keeps the underlying left layout stable
+        // (wrapping/truncation based on full width) while still presenting a split view.
+        //
+        // Visually, the right pane starts at x = leftW + splitGapW (i.e. 2/3 on the right),
+        // and we blank out the split gap so left content doesn't "bleed" under it.
+        bg := normalizePane(leftCol, contentW, contentH)
+        bgLines := strings.Split(bg, "\n")
 
-        body := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, strings.Repeat(" ", splitGapW), rightCol)
-        // Ensure exact size for stable centering/margins.
+        if splitGapW > 0 {
+                gapLine := strings.Repeat(" ", splitGapW)
+                gap := make([]string, 0, contentH)
+                for i := 0; i < contentH; i++ {
+                        gap = append(gap, gapLine)
+                }
+                overlayAt(bgLines, gap, contentW, leftW, 0, splitGapW)
+        }
+
+        rightCol := normalizePane(rightBody, rightW, contentH)
+        rightLines := strings.Split(rightCol, "\n")
+        overlayAt(bgLines, rightLines, contentW, leftW+splitGapW, 0, rightW)
+
+        body := strings.Join(bgLines, "\n")
         body = lipgloss.NewStyle().Width(contentW).Height(contentH).Render(body)
         return strings.Repeat("\n", topPadLines) + body
 }
@@ -3597,10 +3633,25 @@ func renderSplitWithLeftHeaderGap(contentW, frameH, leftW, rightW int, leftHeade
         if contentH < 0 {
                 contentH = 0
         }
-        leftCol = normalizePane(leftCol, leftW, contentH)
-        rightCol := normalizePane(rightBody, rightW, contentH)
 
-        body := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, strings.Repeat(" ", splitGapW), rightCol)
+        // Same overlay strategy as renderSplitWithLeftHeader.
+        bg := normalizePane(leftCol, contentW, contentH)
+        bgLines := strings.Split(bg, "\n")
+
+        if splitGapW > 0 {
+                gapLine := strings.Repeat(" ", splitGapW)
+                gap := make([]string, 0, contentH)
+                for i := 0; i < contentH; i++ {
+                        gap = append(gap, gapLine)
+                }
+                overlayAt(bgLines, gap, contentW, leftW, 0, splitGapW)
+        }
+
+        rightCol := normalizePane(rightBody, rightW, contentH)
+        rightLines := strings.Split(rightCol, "\n")
+        overlayAt(bgLines, rightLines, contentW, leftW+splitGapW, 0, rightW)
+
+        body := strings.Join(bgLines, "\n")
         body = lipgloss.NewStyle().Width(contentW).Height(contentH).Render(body)
         return strings.Repeat("\n", topPadLines) + body
 }
@@ -3871,6 +3922,9 @@ func (m *appModel) refreshAgenda() {
                         var its []model.Item
                         for _, it := range m.db.Items {
                                 if it.Archived {
+                                        continue
+                                }
+                                if it.OnHold {
                                         continue
                                 }
                                 if it.ProjectID != p.ID {
@@ -4230,7 +4284,10 @@ func (m *appModel) viewOutline() string {
                                 descRendered = strings.TrimLeft(descRendered, "\n")
                         }
                 }
-                leftHeaderTmp := lipgloss.NewStyle().Width(leftW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText()) + "\n\n" + titleLine
+                // Render the breadcrumb at full content width so it doesn't wrap early on narrow left panes.
+                // The right pane overlays on top, so any breadcrumb overflow into the right side is naturally hidden.
+                fullCrumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+                leftHeaderTmp := fullCrumb + "\n\n" + titleLine
                 if strings.TrimSpace(descRendered) != "" {
                         leftHeaderTmp = leftHeaderTmp + "\n" + descRendered
                 }
@@ -4239,7 +4296,8 @@ func (m *appModel) viewOutline() string {
                 if leftBodyH < 3 {
                         leftBodyH = 3
                 }
-                leftBody := m.listBodyWithOverflowHint(&m.itemsList, leftW, leftBodyH)
+                // Render the left list at full width (the right pane will overlay it).
+                leftBody := m.listBodyWithOverflowHint(&m.itemsList, contentW, leftBodyH)
 
                 placeholder := lipgloss.NewStyle().Width(rightW).Height(bodyHeight).Padding(0, 1).Render("(loading…)")
                 right := placeholder
@@ -4256,8 +4314,7 @@ func (m *appModel) viewOutline() string {
                         }
                 }
 
-                leftCrumb := lipgloss.NewStyle().Width(leftW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-                leftHeader := leftCrumb + "\n\n" + titleLine
+                leftHeader := fullCrumb + "\n\n" + titleLine
                 if strings.TrimSpace(descRendered) != "" {
                         leftHeader = leftHeader + "\n" + descRendered
                 }
@@ -4345,12 +4402,14 @@ func (m *appModel) viewItem() string {
         // Split view when focusing a section that has a side panel.
         if sidePanelKindForFocus(m.itemFocus) != itemSideNone {
                 leftW, rightW := splitPaneWidths(contentW)
-                left := renderItemDetailInteractive(m.db, *outline, *it, leftW, bodyHeight, m.itemFocus, m.eventsTail, m.itemChildIdx, m.itemChildOff, m.itemDetailScroll)
+                // Render the left pane at full width (the right pane will overlay it).
+                left := renderItemDetailInteractive(m.db, *outline, *it, contentW, bodyHeight, m.itemFocus, m.eventsTail, m.itemChildIdx, m.itemChildOff, m.itemDetailScroll)
                 right := renderItemSidePanelWithEvents(m.db, *it, rightW, bodyHeight, sidePanelKindForFocus(m.itemFocus), m.itemCommentIdx, m.itemWorklogIdx, m.itemHistoryIdx, m.itemSideScroll, m.eventsTail)
-                leftHeader := lipgloss.NewStyle().Width(leftW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+                // Same breadcrumb strategy as outline split preview: render at full width so wrapping is "behind" the overlay.
+                leftHeader := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
                 main := renderSplitWithLeftHeader(contentW, frameH, leftW, rightW, leftHeader, left, right)
                 // Item view uses the standard (full-width) breadcrumb in non-split mode; in split mode
-                // the breadcrumb is rendered only over the left pane (like outline preview).
+                // the right pane overlays on top, so the breadcrumb effectively sits "under" it.
                 return wrap(main)
         }
 
@@ -5512,6 +5571,14 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         // Toggle priority for selected item.
                         if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
                                 if err := m.togglePriority(it.row.item.ID); err != nil {
+                                        return m, m.reportError(it.row.item.ID, err)
+                                }
+                                return m, nil
+                        }
+                case "o":
+                        // Toggle on-hold for selected item.
+                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                if err := m.toggleOnHold(it.row.item.ID); err != nil {
                                         return m, m.reportError(it.row.item.ID, err)
                                 }
                                 return m, nil
@@ -7108,6 +7175,21 @@ func (m *appModel) togglePriority(itemID string) error {
                         eventType:    "item.set_priority",
                         eventPayload: map[string]any{"priority": it.Priority},
                         minibuffer:   fmt.Sprintf("Priority: %v", it.Priority),
+                }, nil
+        })
+}
+
+func (m *appModel) toggleOnHold(itemID string) error {
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" {
+                return nil
+        }
+        return m.mutateItem(itemID, func(_ *store.DB, it *model.Item) (bool, itemMutationResult, error) {
+                it.OnHold = !it.OnHold
+                return true, itemMutationResult{
+                        eventType:    "item.set_on_hold",
+                        eventPayload: map[string]any{"onHold": it.OnHold},
+                        minibuffer:   fmt.Sprintf("On hold: %v", it.OnHold),
                 }, nil
         })
 }

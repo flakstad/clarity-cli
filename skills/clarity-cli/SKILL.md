@@ -70,9 +70,16 @@ clarity agent start <item-id>
 # If another agent already claimed it, you must be explicit:
 clarity agent start <item-id> --take-assigned
 
-# 3) Do work and record updates (prefer worklog for private notes, comments for collaboration)
+# 3) Move item to "in progress" (status ids vary per outline; "doing" is the default)
+clarity items set-status <item-id> --status doing
+
+# 4) Do work and record updates (prefer worklog for private notes, comments for collaboration)
 clarity worklog add <item-id> --body "Implemented X; next: Y"
 clarity comments add <item-id> --body "FYI: shipped X; open question: Y"
+
+# 5) When finished, mark it done (end-state status id varies per outline; "done" is the default)
+# Tip: `clarity items show <item-id>` will include `_hints` with the recommended end-state for that outline.
+clarity items set-status <item-id> --status <done-status>
 ```
 
 ## Capturing unrelated issues (hard requirement for autonomous agents)

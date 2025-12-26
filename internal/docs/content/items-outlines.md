@@ -41,6 +41,12 @@ clarity items create --title "Write spec" --description "Markdown supported"
 clarity items ready
 ```
 
+By default, `items ready` excludes items that are **on hold**. To include them:
+
+```bash
+clarity items ready --include-on-hold
+```
+
 ## Show an item
 
 ```bash

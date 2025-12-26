@@ -289,6 +289,8 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
 
         // ready (with include-assigned)
         run(t, invocation{name: "items ready --include-assigned", cmdPath: "items ready", args: []string{"--dir", dir, "--actor", humanID, "items", "ready", "--include-assigned"}, expect: expectJSONEnvelope})
+        // ready (include on-hold items)
+        run(t, invocation{name: "items ready --include-on-hold", cmdPath: "items ready", args: []string{"--dir", dir, "--actor", humanID, "items", "ready", "--include-on-hold"}, expect: expectJSONEnvelope})
 
         // move + set-parent + move-outline
         run(t, invocation{name: "items move --before", cmdPath: "items move", args: []string{"--dir", dir, "--actor", humanID, "items", "move", itemB, "--before", itemA}, expect: expectJSONEnvelope})

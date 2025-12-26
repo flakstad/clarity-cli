@@ -37,6 +37,9 @@ clarity projects current
 clarity items create --title "First item"
 clarity items ready
 
+# Include items that are on hold:
+clarity items ready --include-on-hold
+
 # Direct item lookup (shortcut for `clarity items show <item-id>`)
 clarity <item-id>
 ```

@@ -29,6 +29,7 @@ generate one automatically (i.e. **new agent identity per run**):
 ## Avoiding agent collisions (recommended)
 By default:
 - `clarity items ready` only shows **unassigned** items
+- `clarity items ready` excludes items that are **on hold**
 - `clarity items claim` / `clarity agent start` refuse to take an already-assigned item
 
 To explicitly take an item that is already assigned, pass:

@@ -16,7 +16,7 @@ import (
 
 func ptr(s string) *string { return &s }
 
-func TestAgendaView_ShowsAllNonDoneItemsAcrossWorkspace(t *testing.T) {
+func TestAgendaView_ShowsAllNonDoneNonHoldItemsAcrossWorkspace(t *testing.T) {
         dir := t.TempDir()
         s := store.Store{Dir: dir}
 
@@ -38,6 +38,7 @@ func TestAgendaView_ShowsAllNonDoneItemsAcrossWorkspace(t *testing.T) {
                         {ID: "item-parent", ProjectID: "proj-a", OutlineID: "out-a", Rank: "h", Title: "Parent", StatusID: "todo", OwnerActorID: actorID, CreatedBy: actorID, CreatedAt: now, UpdatedAt: now},
                         {ID: "item-child", ProjectID: "proj-a", OutlineID: "out-a", Rank: "i", Title: "Child", StatusID: "todo", OwnerActorID: actorID, CreatedBy: actorID, CreatedAt: now, UpdatedAt: now, ParentID: ptr("item-parent")},
                         {ID: "item-done", ProjectID: "proj-a", OutlineID: "out-a", Rank: "i", Title: "Hide me", StatusID: "done", OwnerActorID: actorID, CreatedBy: actorID, CreatedAt: now, UpdatedAt: now},
+                        {ID: "item-hold", ProjectID: "proj-a", OutlineID: "out-a", Rank: "j", Title: "Hold me", StatusID: "todo", OnHold: true, OwnerActorID: actorID, CreatedBy: actorID, CreatedAt: now, UpdatedAt: now},
                         {ID: "item-empty", ProjectID: "proj-b", OutlineID: "out-b", Rank: "h", Title: "Also keep", StatusID: "", OwnerActorID: actorID, CreatedBy: actorID, CreatedAt: now, UpdatedAt: now},
                 },
         }
@@ -74,6 +75,9 @@ func TestAgendaView_ShowsAllNonDoneItemsAcrossWorkspace(t *testing.T) {
                 rows++
                 if r.row.item.ID == "item-done" {
                         t.Fatalf("did not expect done item in agenda")
+                }
+                if r.row.item.ID == "item-hold" {
+                        t.Fatalf("did not expect on-hold item in agenda")
                 }
                 if r.row.item.ID == "item-parent" {
                         if !r.row.hasChildren {

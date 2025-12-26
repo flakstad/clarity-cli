@@ -505,6 +505,33 @@ func showItem(app *App, cmd *cobra.Command, id string) error {
                 "clarity items events " + id,
         }
 
+        // Agent-friendly pickup hints: nudge agents into the intended workflow without
+        // changing any core command semantics.
+        if actorID, err := currentActorID(app, db); err == nil {
+                if act, ok := db.FindActor(actorID); ok && act.Kind == model.ActorKindAgent {
+                        doingID, hasDoing := preferredInProgressStatusID(db, t.OutlineID)
+                        doneID := preferredDoneStatusID(db, t.OutlineID)
+                        curStatus := strings.TrimSpace(t.StatusID)
+
+                        pickup := []string{
+                                "clarity items claim " + id,
+                        }
+                        if !isEndState(db, t.OutlineID, curStatus) {
+                                if hasDoing && doingID != "" && doingID != curStatus {
+                                        pickup = append(pickup, "clarity items set-status "+id+" --status "+doingID)
+                                } else if !hasDoing {
+                                        pickup = append(pickup, "clarity items set-status "+id+" --status <doing-status>")
+                                }
+                                pickup = append(pickup, "clarity worklog add "+id+" --body \"...\"")
+                                pickup = append(pickup, "clarity comments add "+id+" --body \"...\"")
+                                if doneID != "" && doneID != curStatus {
+                                        pickup = append(pickup, "clarity items set-status "+id+" --status "+doneID)
+                                }
+                        }
+                        hints = append(pickup, hints...)
+                }
+        }
+
         return writeOut(cmd, app, map[string]any{
                 "data": map[string]any{
                         "item": t,
@@ -649,11 +676,13 @@ func newItemsSetStatusCmd(app *App) *cobra.Command {
 
 func newItemsReadyCmd(app *App) *cobra.Command {
         var includeAssigned bool
+        var includeOnHold bool
         cmd := &cobra.Command{
                 Use:   "ready",
                 Short: "List ready items (good for picking the next task)",
                 Long: strings.TrimSpace(`
 List items that are not archived, not in an end-state, and have no blocking dependencies.
+By default, items that are on-hold are excluded.
 
 This is the recommended way to find the next thing to work on.
 `),
@@ -661,6 +690,7 @@ This is the recommended way to find the next thing to work on.
 clarity items ready
 clarity items ready --pretty
 clarity items ready --include-assigned
+clarity items ready --include-on-hold
 
 # Open an item from the list
 clarity <item-id>
@@ -683,6 +713,9 @@ clarity <item-id>
                                 if t.Archived {
                                         continue
                                 }
+                                if !includeOnHold && t.OnHold {
+                                        continue
+                                }
                                 if blocked[t.ID] {
                                         continue
                                 }
@@ -698,12 +731,74 @@ clarity <item-id>
                                 "clarity <item-id>",
                                 "clarity items show <item-id>",
                                 "clarity items claim <item-id>",
+                                "clarity items set-status <item-id> --status <doing-status>",
+                                "clarity worklog add <item-id> --body \"...\"",
+                                "clarity comments add <item-id> --body \"...\"",
                         }
                         return writeOut(cmd, app, map[string]any{"data": out, "_hints": hints})
                 },
         }
         cmd.Flags().BoolVar(&includeAssigned, "include-assigned", false, "Include items already assigned to an actor")
+        cmd.Flags().BoolVar(&includeOnHold, "include-on-hold", false, "Include items marked as on-hold")
         return cmd
+}
+
+func preferredInProgressStatusID(db *store.DB, outlineID string) (string, bool) {
+        o, ok := db.FindOutline(outlineID)
+        if !ok || o == nil {
+                return "", false
+        }
+
+        // 1) If "doing" is explicitly present, use it.
+        for _, def := range o.StatusDefs {
+                if def.IsEndState {
+                        continue
+                }
+                if strings.EqualFold(strings.TrimSpace(def.ID), "doing") {
+                        return def.ID, true
+                }
+        }
+
+        // 2) Heuristics on label/id.
+        for _, def := range o.StatusDefs {
+                if def.IsEndState {
+                        continue
+                }
+                id := strings.ToLower(strings.TrimSpace(def.ID))
+                label := strings.ToLower(strings.TrimSpace(def.Label))
+                if id == "wip" || strings.Contains(id, "progress") || strings.Contains(id, "active") {
+                        return def.ID, true
+                }
+                if label == "doing" || label == "wip" || strings.Contains(label, "in progress") || strings.Contains(label, "in-progress") || strings.Contains(label, "progress") || strings.Contains(label, "active") {
+                        return def.ID, true
+                }
+        }
+
+        // 3) Fallback: choose the second non-end-state status (often the "in progress" column).
+        nonEnd := make([]string, 0)
+        for _, def := range o.StatusDefs {
+                if def.IsEndState {
+                        continue
+                }
+                nonEnd = append(nonEnd, def.ID)
+        }
+        if len(nonEnd) >= 2 {
+                return nonEnd[1], true
+        }
+
+        return "", false
+}
+
+func preferredDoneStatusID(db *store.DB, outlineID string) string {
+        o, ok := db.FindOutline(outlineID)
+        if ok && o != nil {
+                for _, def := range o.StatusDefs {
+                        if def.IsEndState {
+                                return def.ID
+                        }
+                }
+        }
+        return "done"
 }
 
 func nextSiblingRank(db *store.DB, outlineID string, parentID *string) string {
