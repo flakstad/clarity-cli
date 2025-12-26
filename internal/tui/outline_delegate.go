@@ -147,14 +147,14 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
         progressW := xansi.StringWidth(progressCookie)
 
         if it.row.item.Priority {
-                st := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+                st := metaPriorityStyle
                 if focused {
                         st = st.Background(bg)
                 }
                 metaParts = append(metaParts, st.Render("priority"))
         }
         if it.row.item.OnHold {
-                st := lipgloss.NewStyle().Foreground(ac("240", "245"))
+                st := metaOnHoldStyle
                 if focused {
                         st = st.Background(bg)
                 }

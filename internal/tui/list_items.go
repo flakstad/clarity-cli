@@ -248,8 +248,12 @@ var (
         // Match the default colors from clarity-components/outline.js:
         // - non-end statuses: --clarity-outline-color-todo (#d16d7a)
         // - end statuses:     --clarity-outline-color-done (#6c757d)
+        // - priority:        --clarity-outline-color-priority (#5f9fb0)
+        // - on hold:         --clarity-outline-color-on-hold (#f39c12)
         statusNonEndStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#d16d7a")).Bold(true)
         statusEndStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#6c757d")).Bold(true)
+        metaPriorityStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#5f9fb0")).Bold(true)
+        metaOnHoldStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#f39c12")).Bold(true)
 )
 
 func renderStatus(outline model.Outline, statusID string) string {
@@ -316,10 +320,10 @@ func (i agendaRowItem) Title() string {
 
         metaParts := make([]string, 0, 3)
         if i.row.item.Priority {
-                metaParts = append(metaParts, "priority")
+                metaParts = append(metaParts, metaPriorityStyle.Render("priority"))
         }
         if i.row.item.OnHold {
-                metaParts = append(metaParts, "on hold")
+                metaParts = append(metaParts, metaOnHoldStyle.Render("on hold"))
         }
         if i.row.totalChildren > 0 {
                 metaParts = append(metaParts, renderProgressCookie(i.row.doneChildren, i.row.totalChildren))

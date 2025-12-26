@@ -3356,11 +3356,11 @@ func (m appModel) renderActionPanel() string {
                                 // Inline metadata (priority / on hold), matching outline semantics.
                                 metaParts := make([]string, 0, 2)
                                 if it.Priority {
-                                        st := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true).Background(colorSurfaceBg)
+                                        st := metaPriorityStyle.Copy().Background(colorSurfaceBg)
                                         metaParts = append(metaParts, st.Render("priority"))
                                 }
                                 if it.OnHold {
-                                        st := lipgloss.NewStyle().Foreground(ac("240", "245")).Background(colorSurfaceBg)
+                                        st := metaOnHoldStyle.Copy().Background(colorSurfaceBg)
                                         metaParts = append(metaParts, st.Render("on hold"))
                                 }
                                 inlineMetaSeg := strings.Join(metaParts, base.Render(" "))
