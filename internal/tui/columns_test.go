@@ -20,12 +20,16 @@ func TestRenderOutlineColumns_OnlyTopLevelItems(t *testing.T) {
                 {ID: "b", OutlineID: ol.ID, Title: "Child", ParentID: strPtr("a"), StatusID: "s1"},
         }
 
-        out := renderOutlineColumns(ol, items, 80, 10)
+        board := buildOutlineColumnsBoard(ol, items)
+        out := renderOutlineColumns(ol, board, outlineColumnsSelection{}, 80, 10)
         if strings.Contains(out, "Child") {
                 t.Fatalf("expected nested item title to be excluded from columns output, got=%q", out)
         }
         if !strings.Contains(out, "Top") {
                 t.Fatalf("expected top-level item title to be present in columns output, got=%q", out)
+        }
+        if strings.Contains(out, "- Top") {
+                t.Fatalf("expected columns view to not render list-style prefixes, got=%q", out)
         }
         // Count in the column header should reflect only top-level items.
         if !strings.Contains(out, "Todo (1)") {

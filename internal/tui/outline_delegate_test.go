@@ -81,6 +81,7 @@ func TestOutlineDelegate_MetaTakesPrecedenceOverTitle(t *testing.T) {
                                 Title:        title,
                                 StatusID:     "todo",
                                 Priority:     true,
+                                Due:          &model.DateTime{Date: "2025-12-31"},
                                 OwnerActorID: "act-human",
                                 CreatedBy:    "act-human",
                                 CreatedAt:    time.Now().UTC(),
@@ -101,6 +102,9 @@ func TestOutlineDelegate_MetaTakesPrecedenceOverTitle(t *testing.T) {
         }
         if !strings.Contains(out, "priority") {
                 t.Fatalf("expected meta 'priority' to be present; got %q", out)
+        }
+        if !strings.Contains(stripANSIEscapes(out), "due Dec 31") {
+                t.Fatalf("expected due metadata to be present; got %q", stripANSIEscapes(out))
         }
         if !strings.Contains(out, "1/2") {
                 t.Fatalf("expected progress cookie to include 1/2; got %q", out)

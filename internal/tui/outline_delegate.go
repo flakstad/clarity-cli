@@ -160,6 +160,20 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
                 }
                 metaParts = append(metaParts, st.Render("on hold"))
         }
+        if s := strings.TrimSpace(formatScheduleLabel(it.row.item.Schedule)); s != "" {
+                st := metaScheduleStyle
+                if focused {
+                        st = st.Background(bg)
+                }
+                metaParts = append(metaParts, st.Render(s))
+        }
+        if s := strings.TrimSpace(formatDueLabel(it.row.item.Due)); s != "" {
+                st := metaDueStyle
+                if focused {
+                        st = st.Background(bg)
+                }
+                metaParts = append(metaParts, st.Render(s))
+        }
         inlineMetaSeg := strings.Join(metaParts, base.Render(" "))
         inlineMetaW := xansi.StringWidth(inlineMetaSeg)
 

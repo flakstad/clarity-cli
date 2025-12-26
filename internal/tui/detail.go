@@ -605,6 +605,20 @@ func eventSummary(ev model.Event) string {
                 if v, ok := m["onHold"].(bool); ok {
                         return fmt.Sprintf("set on hold: %v", v)
                 }
+        case "item.set_due":
+                if v, ok := m["due"]; ok {
+                        if v == nil {
+                                return "due: cleared"
+                        }
+                        return "due: set"
+                }
+        case "item.set_schedule":
+                if v, ok := m["schedule"]; ok {
+                        if v == nil {
+                                return "schedule: cleared"
+                        }
+                        return "schedule: set"
+                }
         case "item.set_assign":
                 if v, ok := m["assignedActorId"]; ok {
                         if v == nil {

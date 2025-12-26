@@ -254,6 +254,9 @@ var (
         statusEndStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#6c757d")).Bold(true)
         metaPriorityStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#5f9fb0")).Bold(true)
         metaOnHoldStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#f39c12")).Bold(true)
+        // due/schedule buttons in outline.js use the default "has-data" color (text-secondary), not a semantic accent.
+        metaDueStyle      = lipgloss.NewStyle().Foreground(ac("240", "245"))
+        metaScheduleStyle = lipgloss.NewStyle().Foreground(ac("240", "245"))
 )
 
 func renderStatus(outline model.Outline, statusID string) string {
@@ -324,6 +327,12 @@ func (i agendaRowItem) Title() string {
         }
         if i.row.item.OnHold {
                 metaParts = append(metaParts, metaOnHoldStyle.Render("on hold"))
+        }
+        if s := strings.TrimSpace(formatScheduleLabel(i.row.item.Schedule)); s != "" {
+                metaParts = append(metaParts, metaScheduleStyle.Render(s))
+        }
+        if s := strings.TrimSpace(formatDueLabel(i.row.item.Due)); s != "" {
+                metaParts = append(metaParts, metaDueStyle.Render(s))
         }
         if i.row.totalChildren > 0 {
                 metaParts = append(metaParts, renderProgressCookie(i.row.doneChildren, i.row.totalChildren))

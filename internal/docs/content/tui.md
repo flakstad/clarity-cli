@@ -27,6 +27,8 @@ Key bindings:
 - `c`: add a comment (selected item)
 - `w`: add a worklog entry (selected item)
 - `o`: toggle on-hold (selected/open item)
+- `d`: set/clear due date (selected/open item)
+- `s`: set/clear schedule date (selected/open item)
 - `g`: open the Go to menu (shows available destinations, including `j` jump-to-item)
   - `j`: jump to an item by id (accepts `item-vth` or just `vth`)
   - `A`: archived (browse archived content; items open read-only)
@@ -36,6 +38,17 @@ Key bindings:
 Item view:
 - `tab` / `shift+tab`: cycle focus across fields (title/status/priority/description/children/…)
 - When **Children** is focused: `↑/↓` selects a child; `enter` opens the selected child
+
+Due/schedule modal:
+- Date is required (`YYYY-MM-DD`), time is optional (`HH:MM`)
+- Focus is shown per field (`YYYY`, `MM`, `DD`, `HH`, `MM`)
+- `tab` / `shift+tab`: change focus
+- `enter` / `ctrl+s`: save
+- `ctrl+c`: clear
+- `h` / `l` (or `←` / `→`): previous/next field
+- `j` / `k` (or `↓` / `↑`): decrement/increment the focused field
+- `t` (or space on the toggle): enable/disable time fields
+- `esc` / `ctrl+g`: cancel
 
 Outline navigation (outline.js-style):
 - `↑/↓`, `j/k`, `ctrl+n/ctrl+p`: previous/next visible item

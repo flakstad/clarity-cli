@@ -115,6 +115,8 @@ const (
         modalEditDescription
         modalEditOutlineName
         modalEditOutlineDescription
+        modalSetDue
+        modalSetSchedule
         modalPickStatus
         modalPickOutline
         modalPickWorkspace
@@ -175,6 +177,20 @@ const (
         textFocusCancel
 )
 
+type dateModalFocus int
+
+const (
+        dateFocusYear dateModalFocus = iota
+        dateFocusMonth
+        dateFocusDay
+        dateFocusTimeToggle
+        dateFocusHour
+        dateFocusMinute
+        dateFocusSave
+        dateFocusClear
+        dateFocusCancel
+)
+
 func (m *appModel) closeAllModals() {
         if m == nil {
                 return
@@ -190,11 +206,29 @@ func (m *appModel) closeAllModals() {
         m.pendingMoveOutlineTo = ""
 
         m.textFocus = textFocusBody
+        m.dateFocus = dateFocusYear
+        m.timeEnabled = false
 
         // Reset inputs (safe even if not currently used).
         m.input.Placeholder = "Title"
         m.input.SetValue("")
         m.input.Blur()
+
+        m.yearInput.Placeholder = "YYYY"
+        m.yearInput.SetValue("")
+        m.yearInput.Blur()
+        m.monthInput.Placeholder = "MM"
+        m.monthInput.SetValue("")
+        m.monthInput.Blur()
+        m.dayInput.Placeholder = "DD"
+        m.dayInput.SetValue("")
+        m.dayInput.Blur()
+        m.hourInput.Placeholder = "HH"
+        m.hourInput.SetValue("")
+        m.hourInput.Blur()
+        m.minuteInput.Placeholder = "MM"
+        m.minuteInput.SetValue("")
+        m.minuteInput.Blur()
 
         m.textarea.SetValue("")
         m.textarea.Blur()
@@ -260,14 +294,24 @@ type appModel struct {
         itemArchivedReadOnly bool
         // Per-outline display mode for the outline view (experimental).
         outlineViewMode map[string]outlineViewMode
+        // Per-outline selection state for columns mode.
+        columnsSel map[string]outlineColumnsSelection
 
-        modal        modalKind
-        modalForID   string
-        modalForKey  string
-        archiveFor   archiveTarget
-        input        textinput.Model
-        textarea     textarea.Model
-        textFocus    textModalFocus
+        modal       modalKind
+        modalForID  string
+        modalForKey string
+        archiveFor  archiveTarget
+        input       textinput.Model
+        textarea    textarea.Model
+        textFocus   textModalFocus
+        // Date modal inputs (due/schedule).
+        yearInput    textinput.Model
+        monthInput   textinput.Model
+        dayInput     textinput.Model
+        hourInput    textinput.Model
+        minuteInput  textinput.Model
+        dateFocus    dateModalFocus
+        timeEnabled  bool
         replyQuoteMD string
 
         // pendingMoveOutlineTo is set when a move-outline flow needs the user to pick a status
@@ -846,6 +890,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                                 actions["D"] = actionPanelAction{label: "Edit description", kind: actionPanelActionExec}
                                 actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
                                 actions["o"] = actionPanelAction{label: "Toggle on hold", kind: actionPanelActionExec}
+                                actions["d"] = actionPanelAction{label: "Set due", kind: actionPanelActionExec}
+                                actions["s"] = actionPanelAction{label: "Set schedule", kind: actionPanelActionExec}
                                 actions[" "] = actionPanelAction{label: "Change status", kind: actionPanelActionExec}
                                 actions["C"] = actionPanelAction{label: "Add comment", kind: actionPanelActionExec}
                                 actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
@@ -871,6 +917,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
                         actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
                         actions["o"] = actionPanelAction{label: "Toggle on hold", kind: actionPanelActionExec}
+                        actions["d"] = actionPanelAction{label: "Set due", kind: actionPanelActionExec}
+                        actions["s"] = actionPanelAction{label: "Set schedule", kind: actionPanelActionExec}
                         actions["D"] = actionPanelAction{label: "Edit description", kind: actionPanelActionExec}
                         actions["r"] = actionPanelAction{label: "Archive item", kind: actionPanelActionExec}
                         actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
@@ -957,6 +1005,7 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
                 view:      viewProjects,
                 pane:      paneOutline,
         }
+        m.columnsSel = map[string]outlineColumnsSelection{}
 
         if strings.TrimSpace(os.Getenv("CLARITY_TUI_DEBUG")) != "" {
                 m.debugEnabled = true
@@ -1017,6 +1066,28 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
         m.input.Placeholder = "Title"
         m.input.CharLimit = 200
         m.input.Width = 40
+
+        // Date/time inputs for due/schedule (outline.js-style: date required, time optional).
+        m.yearInput = textinput.New()
+        m.yearInput.Placeholder = "YYYY"
+        m.yearInput.CharLimit = 4
+        m.yearInput.Width = 6
+        m.monthInput = textinput.New()
+        m.monthInput.Placeholder = "MM"
+        m.monthInput.CharLimit = 2
+        m.monthInput.Width = 4
+        m.dayInput = textinput.New()
+        m.dayInput.Placeholder = "DD"
+        m.dayInput.CharLimit = 2
+        m.dayInput.Width = 4
+        m.hourInput = textinput.New()
+        m.hourInput.Placeholder = "HH"
+        m.hourInput.CharLimit = 2
+        m.hourInput.Width = 4
+        m.minuteInput = textinput.New()
+        m.minuteInput.Placeholder = "MM"
+        m.minuteInput.CharLimit = 2
+        m.minuteInput.Width = 4
 
         m.textarea = textarea.New()
         m.textarea.Placeholder = "Write…"
@@ -2481,6 +2552,38 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, m.reportError(activeID, err)
                         }
                         return m, nil
+                case "d":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
+                        if activeID == "" {
+                                return m, nil
+                        }
+                        var cur *model.DateTime
+                        if m.db != nil {
+                                if it, ok := m.db.FindItem(activeID); ok && it != nil {
+                                        cur = it.Due
+                                }
+                        }
+                        m.openDateModal(modalSetDue, activeID, cur)
+                        return m, nil
+                case "s":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
+                        if activeID == "" {
+                                return m, nil
+                        }
+                        var cur *model.DateTime
+                        if m.db != nil {
+                                if it, ok := m.db.FindItem(activeID); ok && it != nil {
+                                        cur = it.Schedule
+                                }
+                        }
+                        m.openDateModal(modalSetSchedule, activeID, cur)
+                        return m, nil
                 case "C":
                         if readOnly {
                                 m.showMinibuffer("Archived item: read-only")
@@ -2925,6 +3028,12 @@ func (m appModel) footerText() string {
                 if m.modal == modalEditOutlineDescription {
                         return "outline description: tab: focus  ctrl+s: save  esc/ctrl+g: cancel"
                 }
+                if m.modal == modalSetDue {
+                        return "due: tab: focus  enter/ctrl+s: save  ctrl+c: clear  esc/ctrl+g: cancel"
+                }
+                if m.modal == modalSetSchedule {
+                        return "schedule: tab: focus  enter/ctrl+s: save  ctrl+c: clear  esc/ctrl+g: cancel"
+                }
                 return "new item: type title, enter/ctrl+s: save, esc/ctrl+g: cancel"
         }
         return base
@@ -3140,7 +3249,7 @@ func (m appModel) renderActionPanel() string {
                 switch m.view {
                 case viewItem:
                         // Full-screen item page: show item work + global entrypoints.
-                        addSection("Item", []string{"e", "D", "p", "o", " ", "C", "w", "m", "y", "Y", "r"})
+                        addSection("Item", []string{"e", "D", "p", "o", "d", "s", " ", "C", "w", "m", "y", "Y", "r"})
 
                         globalKeys := []string{}
                         for _, k := range []string{"g", "a", "c"} {
@@ -3166,7 +3275,7 @@ func (m appModel) renderActionPanel() string {
                         addSection("Item", []string{
                                 "e", "n", "N", // title/new items
                                 " ", "shift+left", "shift+right", // status
-                                "p", "o", "D", // priority/on-hold/description
+                                "p", "o", "d", "s", "D", // priority/on-hold/due/schedule/description
                                 "m",      // move
                                 "C", "w", // comment/worklog
                                 "y", "Y", // copy helpers (still item-scoped)
@@ -4232,7 +4341,15 @@ func (m *appModel) viewOutline() string {
                 if boardH < 3 {
                         boardH = 3
                 }
-                board := renderOutlineColumns(*outline, its, contentW, boardH)
+                boardData := buildOutlineColumnsBoard(*outline, its)
+                sel := m.columnsSel[strings.TrimSpace(outline.ID)]
+                sel = boardData.clamp(sel)
+                m.columnsSel[strings.TrimSpace(outline.ID)] = sel
+                // Keep list selection aligned so switching back to list mode preserves focus.
+                if it, ok := boardData.selectedItem(sel); ok {
+                        selectListItemByID(&m.itemsList, strings.TrimSpace(it.Item.ID))
+                }
+                board := renderOutlineColumns(*outline, boardData, sel, contentW, boardH)
                 main := strings.Repeat("\n", topPadLines) + header + "\n" + board
                 main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
                 if m.modal == modalNone {
@@ -4442,6 +4559,10 @@ func (m *appModel) renderModal() string {
                 return m.renderInputModal("Rename outline")
         case modalEditOutlineDescription:
                 return m.renderTextAreaModal("Edit outline description")
+        case modalSetDue:
+                return m.renderDateTimeModal("Due date")
+        case modalSetSchedule:
+                return m.renderDateTimeModal("Schedule")
         case modalPickStatus:
                 return renderModalBox(m.width, "Set status", m.statusList.View()+"\n\nenter: set   esc/ctrl+g: cancel")
         case modalPickOutline:
@@ -4521,6 +4642,75 @@ func (m *appModel) renderModal() string {
         default:
                 return ""
         }
+}
+
+func (m *appModel) renderDateTimeModal(title string) string {
+        bodyW := modalBodyWidth(m.width)
+
+        focusBtn := func(active bool) lipgloss.Style {
+                if active {
+                        return lipgloss.NewStyle().Padding(0, 1).Foreground(colorSelectedFg).Background(colorSelectedBg).Bold(true)
+                }
+                return lipgloss.NewStyle().Padding(0, 1).Foreground(colorSurfaceFg).Background(colorControlBg)
+        }
+
+        renderPill := func(active bool, content string) string {
+                // Avoid Width()+Padding() wrapping which can render as two lines in some terminals.
+                st := lipgloss.NewStyle().Background(colorInputBg).Foreground(colorSurfaceFg)
+                if active {
+                        st = lipgloss.NewStyle().Foreground(colorSelectedFg).Background(colorSelectedBg).Bold(true)
+                }
+                return st.Render(" " + content + " ")
+        }
+
+        // Use the raw input values for rendering (avoid nested background styling in textinput.View()).
+        y := renderPill(m.dateFocus == dateFocusYear, padLeft(strings.TrimSpace(m.yearInput.Value()), 4))
+        mo := renderPill(m.dateFocus == dateFocusMonth, padLeft(strings.TrimSpace(m.monthInput.Value()), 2))
+        da := renderPill(m.dateFocus == dateFocusDay, padLeft(strings.TrimSpace(m.dayInput.Value()), 2))
+
+        timeToggle := "[ ] time"
+        if m.timeEnabled {
+                timeToggle = "[x] time"
+        }
+        toggleLine := renderPill(m.dateFocus == dateFocusTimeToggle, timeToggle)
+
+        hh := renderPill(m.dateFocus == dateFocusHour, padLeft(strings.TrimSpace(m.hourInput.Value()), 2))
+        min := renderPill(m.dateFocus == dateFocusMinute, padLeft(strings.TrimSpace(m.minuteInput.Value()), 2))
+
+        save := focusBtn(m.dateFocus == dateFocusSave).Render("Save")
+        clear := focusBtn(m.dateFocus == dateFocusClear).Render("Clear")
+        cancel := focusBtn(m.dateFocus == dateFocusCancel).Render("Cancel")
+
+        help := styleMuted().Width(bodyW).Render("tab: focus  h/l: prev/next  j/k or ↓/↑: -/+  enter/ctrl+s: save  ctrl+c: clear  esc/ctrl+g: cancel")
+
+        timeLine := toggleLine
+        if m.timeEnabled {
+                timeLine = toggleLine + "  " + lipgloss.JoinHorizontal(lipgloss.Left, hh, ":", min)
+        }
+
+        body := strings.Join([]string{
+                styleMuted().Width(bodyW).Render("Date"),
+                lipgloss.JoinHorizontal(lipgloss.Left, y, "-", mo, "-", da),
+                "",
+                styleMuted().Width(bodyW).Render("Time (optional)"),
+                timeLine,
+                "",
+                lipgloss.JoinHorizontal(lipgloss.Left, save, clear, cancel),
+                "",
+                help,
+        }, "\n")
+
+        return renderModalBox(m.width, title, body)
+}
+
+func padLeft(s string, w int) string {
+        for xansi.StringWidth(s) < w {
+                s = "0" + s
+        }
+        if xansi.StringWidth(s) > w {
+                return xansi.Cut(s, xansi.StringWidth(s)-w, xansi.StringWidth(s))
+        }
+        return s
 }
 
 func (m *appModel) renderTextAreaModal(title string) string {
@@ -4860,6 +5050,275 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         var cmd tea.Cmd
                         m.outlineStatusDefsList, cmd = m.outlineStatusDefsList.Update(msg)
                         return m, cmd
+                }
+
+                if m.modal == modalSetDue || m.modal == modalSetSchedule {
+                        switch km := msg.(type) {
+                        case tea.KeyMsg:
+                                switch km.String() {
+                                case "esc", "ctrl+g":
+                                        m.modal = modalNone
+                                        m.modalForID = ""
+                                        m.yearInput.Blur()
+                                        m.monthInput.Blur()
+                                        m.dayInput.Blur()
+                                        m.hourInput.Blur()
+                                        m.minuteInput.Blur()
+                                        m.dateFocus = dateFocusDay
+                                        return m, nil
+                                case "tab":
+                                        switch m.dateFocus {
+                                        case dateFocusYear:
+                                                m.dateFocus = dateFocusMonth
+                                        case dateFocusMonth:
+                                                m.dateFocus = dateFocusDay
+                                        case dateFocusDay:
+                                                m.dateFocus = dateFocusTimeToggle
+                                        case dateFocusTimeToggle:
+                                                if m.timeEnabled {
+                                                        m.dateFocus = dateFocusHour
+                                                } else {
+                                                        m.dateFocus = dateFocusSave
+                                                }
+                                        case dateFocusHour:
+                                                m.dateFocus = dateFocusMinute
+                                        case dateFocusMinute:
+                                                m.dateFocus = dateFocusSave
+                                        case dateFocusSave:
+                                                m.dateFocus = dateFocusClear
+                                        case dateFocusClear:
+                                                m.dateFocus = dateFocusCancel
+                                        default:
+                                                m.dateFocus = dateFocusYear
+                                        }
+                                case "shift+tab", "backtab":
+                                        switch m.dateFocus {
+                                        case dateFocusYear:
+                                                m.dateFocus = dateFocusCancel
+                                        case dateFocusCancel:
+                                                m.dateFocus = dateFocusClear
+                                        case dateFocusClear:
+                                                m.dateFocus = dateFocusSave
+                                        case dateFocusSave:
+                                                if m.timeEnabled {
+                                                        m.dateFocus = dateFocusMinute
+                                                } else {
+                                                        m.dateFocus = dateFocusTimeToggle
+                                                }
+                                        case dateFocusMinute:
+                                                m.dateFocus = dateFocusHour
+                                        case dateFocusHour:
+                                                m.dateFocus = dateFocusTimeToggle
+                                        case dateFocusTimeToggle:
+                                                m.dateFocus = dateFocusDay
+                                        case dateFocusDay:
+                                                m.dateFocus = dateFocusMonth
+                                        case dateFocusMonth:
+                                                m.dateFocus = dateFocusYear
+                                        default:
+                                                m.dateFocus = dateFocusYear
+                                        }
+                                case "ctrl+c":
+                                        // Clear (safe: avoid single-letter clears).
+                                        itemID := strings.TrimSpace(m.modalForID)
+                                        if m.modal == modalSetDue {
+                                                _ = m.setDue(itemID, nil)
+                                        } else {
+                                                _ = m.setSchedule(itemID, nil)
+                                        }
+                                        (&m).closeAllModals()
+                                        return m, nil
+                                case "left", "h":
+                                        switch m.dateFocus {
+                                        case dateFocusYear:
+                                                // wrap to last field (depends on time enabled)
+                                                if m.timeEnabled {
+                                                        m.dateFocus = dateFocusMinute
+                                                } else {
+                                                        m.dateFocus = dateFocusTimeToggle
+                                                }
+                                                return m, nil
+                                        case dateFocusMonth:
+                                                m.dateFocus = dateFocusYear
+                                                return m, nil
+                                        case dateFocusDay:
+                                                m.dateFocus = dateFocusMonth
+                                                return m, nil
+                                        case dateFocusTimeToggle:
+                                                m.dateFocus = dateFocusDay
+                                                return m, nil
+                                        case dateFocusHour:
+                                                m.dateFocus = dateFocusDay
+                                                return m, nil
+                                        case dateFocusMinute:
+                                                m.dateFocus = dateFocusHour
+                                                return m, nil
+                                        }
+                                case "right", "l":
+                                        switch m.dateFocus {
+                                        case dateFocusYear:
+                                                m.dateFocus = dateFocusMonth
+                                                return m, nil
+                                        case dateFocusMonth:
+                                                m.dateFocus = dateFocusDay
+                                                return m, nil
+                                        case dateFocusDay:
+                                                m.dateFocus = dateFocusTimeToggle
+                                                return m, nil
+                                        case dateFocusTimeToggle:
+                                                if m.timeEnabled {
+                                                        m.dateFocus = dateFocusHour
+                                                } else {
+                                                        m.dateFocus = dateFocusSave
+                                                }
+                                                return m, nil
+                                        case dateFocusHour:
+                                                m.dateFocus = dateFocusMinute
+                                                return m, nil
+                                        case dateFocusMinute:
+                                                m.dateFocus = dateFocusYear
+                                                return m, nil
+                                        }
+                                case "up", "k":
+                                        if m.dateFocus == dateFocusTimeToggle {
+                                                // Toggle time on/off.
+                                                m.timeEnabled = !m.timeEnabled
+                                                if !m.timeEnabled {
+                                                        m.hourInput.SetValue("")
+                                                        m.minuteInput.SetValue("")
+                                                } else {
+                                                        // Seed a sensible time when enabling.
+                                                        if strings.TrimSpace(m.hourInput.Value()) == "" {
+                                                                m.hourInput.SetValue("09")
+                                                        }
+                                                        if strings.TrimSpace(m.minuteInput.Value()) == "" {
+                                                                m.minuteInput.SetValue("00")
+                                                        }
+                                                }
+                                                return m, nil
+                                        }
+                                        if m.bumpDateTimeField(+1) {
+                                                return m, nil
+                                        }
+                                case "down", "j":
+                                        if m.dateFocus == dateFocusTimeToggle {
+                                                m.timeEnabled = !m.timeEnabled
+                                                if !m.timeEnabled {
+                                                        m.hourInput.SetValue("")
+                                                        m.minuteInput.SetValue("")
+                                                } else {
+                                                        if strings.TrimSpace(m.hourInput.Value()) == "" {
+                                                                m.hourInput.SetValue("09")
+                                                        }
+                                                        if strings.TrimSpace(m.minuteInput.Value()) == "" {
+                                                                m.minuteInput.SetValue("00")
+                                                        }
+                                                }
+                                                return m, nil
+                                        }
+                                        if m.bumpDateTimeField(-1) {
+                                                return m, nil
+                                        }
+                                case " ", "t":
+                                        if m.dateFocus == dateFocusTimeToggle {
+                                                m.timeEnabled = !m.timeEnabled
+                                                if !m.timeEnabled {
+                                                        m.hourInput.SetValue("")
+                                                        m.minuteInput.SetValue("")
+                                                } else {
+                                                        if strings.TrimSpace(m.hourInput.Value()) == "" {
+                                                                m.hourInput.SetValue("09")
+                                                        }
+                                                        if strings.TrimSpace(m.minuteInput.Value()) == "" {
+                                                                m.minuteInput.SetValue("00")
+                                                        }
+                                                }
+                                                return m, nil
+                                        }
+                                case "enter":
+                                        if m.dateFocus == dateFocusTimeToggle {
+                                                m.timeEnabled = !m.timeEnabled
+                                                if !m.timeEnabled {
+                                                        m.hourInput.SetValue("")
+                                                        m.minuteInput.SetValue("")
+                                                } else {
+                                                        if strings.TrimSpace(m.hourInput.Value()) == "" {
+                                                                m.hourInput.SetValue("09")
+                                                        }
+                                                        if strings.TrimSpace(m.minuteInput.Value()) == "" {
+                                                                m.minuteInput.SetValue("00")
+                                                        }
+                                                }
+                                                return m, nil
+                                        }
+                                        fallthrough
+                                case "ctrl+s":
+                                        itemID := strings.TrimSpace(m.modalForID)
+                                        // If focused on cancel, treat enter as cancel.
+                                        if m.dateFocus == dateFocusCancel {
+                                                (&m).closeAllModals()
+                                                return m, nil
+                                        }
+                                        // If focused on clear, clear.
+                                        if m.dateFocus == dateFocusClear {
+                                                if m.modal == modalSetDue {
+                                                        _ = m.setDue(itemID, nil)
+                                                } else {
+                                                        _ = m.setSchedule(itemID, nil)
+                                                }
+                                                (&m).closeAllModals()
+                                                return m, nil
+                                        }
+                                        // If time is disabled, ignore time fields.
+                                        hv := m.hourInput.Value()
+                                        mv := m.minuteInput.Value()
+                                        if !m.timeEnabled {
+                                                hv = ""
+                                                mv = ""
+                                        }
+                                        dt, err := parseDateTimeInputsFields(m.yearInput.Value(), m.monthInput.Value(), m.dayInput.Value(), hv, mv)
+                                        if err != nil {
+                                                m.showMinibuffer(err.Error())
+                                                return m, nil
+                                        }
+                                        if m.modal == modalSetDue {
+                                                if err := m.setDue(itemID, dt); err != nil {
+                                                        return m, m.reportError(itemID, err)
+                                                }
+                                        } else {
+                                                if err := m.setSchedule(itemID, dt); err != nil {
+                                                        return m, m.reportError(itemID, err)
+                                                }
+                                        }
+                                        (&m).closeAllModals()
+                                        return m, nil
+                                }
+
+                                // Apply focus to inputs.
+                                m.applyDateFieldFocus()
+
+                                // Update inputs if focused.
+                                var cmd tea.Cmd
+                                switch m.dateFocus {
+                                case dateFocusYear:
+                                        m.yearInput, cmd = m.yearInput.Update(msg)
+                                        return m, cmd
+                                case dateFocusMonth:
+                                        m.monthInput, cmd = m.monthInput.Update(msg)
+                                        return m, cmd
+                                case dateFocusDay:
+                                        m.dayInput, cmd = m.dayInput.Update(msg)
+                                        return m, cmd
+                                case dateFocusHour:
+                                        m.hourInput, cmd = m.hourInput.Update(msg)
+                                        return m, cmd
+                                case dateFocusMinute:
+                                        m.minuteInput, cmd = m.minuteInput.Update(msg)
+                                        return m, cmd
+                                }
+                                return m, nil
+                        }
+                        return m, nil
                 }
 
                 if m.modal == modalAddOutlineStatus || m.modal == modalRenameOutlineStatus {
@@ -5431,6 +5890,12 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
         switch msg := msg.(type) {
         case tea.KeyMsg:
+                if m.curOutlineViewMode() == outlineViewModeColumns && m.modal == modalNone {
+                        if handled, cmd := (&m).updateOutlineColumns(msg); handled {
+                                return m, cmd
+                        }
+                }
+
                 // Outline key: open Outline… submenu in the action panel.
                 if m.modal == modalNone && msg.String() == "O" {
                         m.openActionPanel(actionPanelContext)
@@ -5581,6 +6046,18 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 if err := m.toggleOnHold(it.row.item.ID); err != nil {
                                         return m, m.reportError(it.row.item.ID, err)
                                 }
+                                return m, nil
+                        }
+                case "d":
+                        // Set due for selected item.
+                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                m.openDateModal(modalSetDue, it.row.item.ID, it.row.item.Due)
+                                return m, nil
+                        }
+                case "s":
+                        // Set schedule for selected item.
+                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                m.openDateModal(modalSetSchedule, it.row.item.ID, it.row.item.Schedule)
                                 return m, nil
                         }
                 case "D":
@@ -5752,6 +6229,197 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                 }
         }
         return m, cmd
+}
+
+func (m *appModel) updateOutlineColumns(msg tea.KeyMsg) (bool, tea.Cmd) {
+        if m == nil || m.db == nil {
+                return false, nil
+        }
+
+        outline, ok := m.db.FindOutline(m.selectedOutlineID)
+        if !ok || outline == nil {
+                return false, nil
+        }
+
+        its := make([]model.Item, 0, 64)
+        for _, it := range m.db.Items {
+                if it.Archived {
+                        continue
+                }
+                if it.OutlineID != outline.ID {
+                        continue
+                }
+                its = append(its, it)
+        }
+
+        board := buildOutlineColumnsBoard(*outline, its)
+        if len(board.cols) == 0 {
+                return false, nil
+        }
+
+        oid := strings.TrimSpace(outline.ID)
+        if m.columnsSel == nil {
+                m.columnsSel = map[string]outlineColumnsSelection{}
+        }
+        sel := board.clamp(m.columnsSel[oid])
+        if sel.ItemID == "" {
+                if picked, ok := board.selectedItem(sel); ok {
+                        sel.ItemID = strings.TrimSpace(picked.Item.ID)
+                }
+        }
+
+        nCols := len(board.cols)
+        switch msg.String() {
+        case "tab", "right", "l", "ctrl+f":
+                // Explicit navigation should not be pinned by ItemID; clear it so we can move.
+                sel.ItemID = ""
+                sel.Col = (sel.Col + 1) % nCols
+                sel = board.clamp(sel)
+                m.columnsSel[oid] = sel
+                if it, ok := board.selectedItem(sel); ok {
+                        sel.ItemID = strings.TrimSpace(it.Item.ID)
+                        m.columnsSel[oid] = sel
+                        selectListItemByID(&m.itemsList, strings.TrimSpace(it.Item.ID))
+                }
+                return true, nil
+        case "shift+tab", "left", "h", "ctrl+b":
+                sel.ItemID = ""
+                sel.Col = (sel.Col - 1 + nCols) % nCols
+                sel = board.clamp(sel)
+                m.columnsSel[oid] = sel
+                if it, ok := board.selectedItem(sel); ok {
+                        sel.ItemID = strings.TrimSpace(it.Item.ID)
+                        m.columnsSel[oid] = sel
+                        selectListItemByID(&m.itemsList, strings.TrimSpace(it.Item.ID))
+                }
+                return true, nil
+        case "down", "j":
+                sel.ItemID = ""
+                sel.Item++
+                sel = board.clamp(sel)
+                m.columnsSel[oid] = sel
+                if it, ok := board.selectedItem(sel); ok {
+                        sel.ItemID = strings.TrimSpace(it.Item.ID)
+                        m.columnsSel[oid] = sel
+                        selectListItemByID(&m.itemsList, strings.TrimSpace(it.Item.ID))
+                }
+                return true, nil
+        case "up", "k":
+                sel.ItemID = ""
+                sel.Item--
+                sel = board.clamp(sel)
+                m.columnsSel[oid] = sel
+                if it, ok := board.selectedItem(sel); ok {
+                        sel.ItemID = strings.TrimSpace(it.Item.ID)
+                        m.columnsSel[oid] = sel
+                        selectListItemByID(&m.itemsList, strings.TrimSpace(it.Item.ID))
+                }
+                return true, nil
+        }
+
+        // Item actions (when an item is selected).
+        it, ok := board.selectedItem(sel)
+        if !ok {
+                return false, nil
+        }
+
+        switch msg.String() {
+        case "y":
+                txt := m.clipboardItemRef(it.Item.ID)
+                if err := copyToClipboard(txt); err != nil {
+                        m.showMinibuffer("Clipboard error: " + err.Error())
+                } else {
+                        m.showMinibuffer("Copied: " + txt)
+                }
+                return true, nil
+        case "Y":
+                cmd := m.clipboardShowCmd(it.Item.ID)
+                if err := copyToClipboard(cmd); err != nil {
+                        m.showMinibuffer("Clipboard error: " + err.Error())
+                } else {
+                        m.showMinibuffer("Copied: " + cmd)
+                }
+                return true, nil
+        case "C":
+                m.openTextModal(modalAddComment, it.Item.ID, "Write a comment…", "")
+                return true, nil
+        case "w":
+                m.openTextModal(modalAddWorklog, it.Item.ID, "Log work…", "")
+                return true, nil
+        case "p":
+                if err := m.togglePriority(it.Item.ID); err != nil {
+                        return true, m.reportError(it.Item.ID, err)
+                }
+                return true, nil
+        case "o":
+                if err := m.toggleOnHold(it.Item.ID); err != nil {
+                        return true, m.reportError(it.Item.ID, err)
+                }
+                return true, nil
+        case "d":
+                m.openDateModal(modalSetDue, it.Item.ID, it.Item.Due)
+                return true, nil
+        case "s":
+                m.openDateModal(modalSetSchedule, it.Item.ID, it.Item.Schedule)
+                return true, nil
+        case "D":
+                m.openTextModal(modalEditDescription, it.Item.ID, "Markdown description…", it.Item.Description)
+                return true, nil
+        case " ":
+                m.openStatusPicker(*outline, it.Item.ID, it.Item.StatusID)
+                m.modal = modalPickStatus
+                m.modalForID = it.Item.ID
+                return true, nil
+        case "m":
+                m.openMoveOutlinePicker(it.Item.ID)
+                return true, nil
+        case "shift+right":
+                if err := m.cycleItemStatus(*outline, it.Item.ID, +1); err != nil {
+                        return true, m.reportError(it.Item.ID, err)
+                }
+                sel.ItemID = strings.TrimSpace(it.Item.ID)
+                m.columnsSel[oid] = sel
+                return true, nil
+        case "shift+left":
+                if err := m.cycleItemStatus(*outline, it.Item.ID, -1); err != nil {
+                        return true, m.reportError(it.Item.ID, err)
+                }
+                sel.ItemID = strings.TrimSpace(it.Item.ID)
+                m.columnsSel[oid] = sel
+                return true, nil
+        case "e":
+                m.openInputModal(modalEditTitle, it.Item.ID, "Title", it.Item.Title)
+                return true, nil
+        case "n":
+                // New sibling (after selected).
+                m.openInputModal(modalNewSibling, it.Item.ID, "Title", "")
+                return true, nil
+        case "N":
+                // New child (under selected).
+                m.openInputModal(modalNewChild, it.Item.ID, "Title", "")
+                return true, nil
+        case "r":
+                m.modal = modalConfirmArchive
+                m.modalForID = it.Item.ID
+                m.archiveFor = archiveTargetItem
+                m.input.Blur()
+                return true, nil
+        case "enter":
+                m.view = viewItem
+                m.openItemID = it.Item.ID
+                m.itemArchivedReadOnly = false
+                m.recordRecentItemVisit(m.openItemID)
+                m.itemFocus = itemFocusTitle
+                m.itemCommentIdx = 0
+                m.itemWorklogIdx = 0
+                m.itemHistoryIdx = 0
+                m.itemSideScroll = 0
+                m.showPreview = false
+                m.previewCacheForID = ""
+                return true, nil
+        }
+
+        return false, nil
 }
 
 func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -7194,6 +7862,91 @@ func (m *appModel) toggleOnHold(itemID string) error {
         })
 }
 
+func (m *appModel) setDue(itemID string, dt *model.DateTime) error {
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" {
+                return nil
+        }
+        return m.mutateItem(itemID, func(_ *store.DB, it *model.Item) (bool, itemMutationResult, error) {
+                // Treat structurally-equal values as no-op.
+                same := func(a, b *model.DateTime) bool {
+                        if a == nil && b == nil {
+                                return true
+                        }
+                        if a == nil || b == nil {
+                                return false
+                        }
+                        if strings.TrimSpace(a.Date) != strings.TrimSpace(b.Date) {
+                                return false
+                        }
+                        at := ""
+                        bt := ""
+                        if a.Time != nil {
+                                at = strings.TrimSpace(*a.Time)
+                        }
+                        if b.Time != nil {
+                                bt = strings.TrimSpace(*b.Time)
+                        }
+                        return at == bt
+                }
+                if same(it.Due, dt) {
+                        return false, itemMutationResult{}, nil
+                }
+                it.Due = dt
+                msg := "Due cleared"
+                if dt != nil {
+                        msg = "Due: " + formatDateTimeOutline(dt)
+                }
+                return true, itemMutationResult{
+                        eventType:    "item.set_due",
+                        eventPayload: map[string]any{"due": it.Due},
+                        minibuffer:   msg,
+                }, nil
+        })
+}
+
+func (m *appModel) setSchedule(itemID string, dt *model.DateTime) error {
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" {
+                return nil
+        }
+        return m.mutateItem(itemID, func(_ *store.DB, it *model.Item) (bool, itemMutationResult, error) {
+                same := func(a, b *model.DateTime) bool {
+                        if a == nil && b == nil {
+                                return true
+                        }
+                        if a == nil || b == nil {
+                                return false
+                        }
+                        if strings.TrimSpace(a.Date) != strings.TrimSpace(b.Date) {
+                                return false
+                        }
+                        at := ""
+                        bt := ""
+                        if a.Time != nil {
+                                at = strings.TrimSpace(*a.Time)
+                        }
+                        if b.Time != nil {
+                                bt = strings.TrimSpace(*b.Time)
+                        }
+                        return at == bt
+                }
+                if same(it.Schedule, dt) {
+                        return false, itemMutationResult{}, nil
+                }
+                it.Schedule = dt
+                msg := "Schedule cleared"
+                if dt != nil {
+                        msg = "Schedule: " + formatDateTimeOutline(dt)
+                }
+                return true, itemMutationResult{
+                        eventType:    "item.set_schedule",
+                        eventPayload: map[string]any{"schedule": it.Schedule},
+                        minibuffer:   msg,
+                }, nil
+        })
+}
+
 func (m *appModel) setOutlineNameFromModal(name string) error {
         outlineID := strings.TrimSpace(m.modalForID)
         if outlineID == "" {
@@ -8536,6 +9289,48 @@ func (m *appModel) openInputModal(kind modalKind, forID, placeholder, initial st
         m.input.Placeholder = placeholder
         m.input.SetValue(initial)
         m.input.Focus()
+}
+
+func (m *appModel) openDateModal(kind modalKind, itemID string, initial *model.DateTime) {
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" {
+                return
+        }
+        m.modal = kind
+        m.modalForID = itemID
+        m.dateFocus = dateFocusYear
+        m.timeEnabled = initial != nil && initial.Time != nil && strings.TrimSpace(*initial.Time) != ""
+
+        // Seed values from existing field (if any); default to today.
+        y, mo, d, h, mi := parseDateTimeFieldsOrNow(initial)
+        m.yearInput.SetValue(fmt.Sprintf("%04d", y))
+        m.monthInput.SetValue(fmt.Sprintf("%02d", mo))
+        m.dayInput.SetValue(fmt.Sprintf("%02d", d))
+        if m.timeEnabled {
+                m.hourInput.SetValue(fmt.Sprintf("%02d", h))
+                m.minuteInput.SetValue(fmt.Sprintf("%02d", mi))
+        } else {
+                // No time semantics.
+                m.hourInput.SetValue("")
+                m.minuteInput.SetValue("")
+        }
+
+        // Style inputs similarly to other modals.
+        st := lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorInputBg)
+        for _, in := range []*textinput.Model{&m.yearInput, &m.monthInput, &m.dayInput, &m.hourInput, &m.minuteInput} {
+                in.Prompt = ""
+                in.PromptStyle = st
+                in.TextStyle = st
+                in.PlaceholderStyle = styleMuted().Background(colorInputBg)
+                in.CursorStyle = lipgloss.NewStyle().Foreground(colorSelectedFg).Background(colorAccent)
+        }
+
+        // Focus day by default (clear cursor elsewhere).
+        m.yearInput.Blur()
+        m.monthInput.Blur()
+        m.dayInput.Focus()
+        m.hourInput.Blur()
+        m.minuteInput.Blur()
 }
 
 func (m *appModel) jumpToItemByID(itemID string) error {
