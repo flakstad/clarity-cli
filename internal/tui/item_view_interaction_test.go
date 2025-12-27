@@ -69,9 +69,13 @@ func TestItemView_TabCyclesFocus_EnterOpensModal(t *testing.T) {
                 t.Fatalf("expected focus=%v, got %v", itemFocusStatus, m2.itemFocus)
         }
 
-        // tab => priority
+        // tab => assigned; tab => tags; tab => priority
         mAny, _ = m2.Update(tea.KeyMsg{Type: tea.KeyTab})
-        m3 := mAny.(appModel)
+        m3 := mAny.(appModel) // assigned
+        mAny, _ = m3.Update(tea.KeyMsg{Type: tea.KeyTab})
+        m3b := mAny.(appModel) // tags
+        mAny, _ = m3b.Update(tea.KeyMsg{Type: tea.KeyTab})
+        m3 = mAny.(appModel) // priority
         if m3.itemFocus != itemFocusPriority {
                 t.Fatalf("expected focus=%v, got %v", itemFocusPriority, m3.itemFocus)
         }
@@ -345,11 +349,15 @@ func TestItemView_TabToPriority_EnterTogglesPriority(t *testing.T) {
         m.openItemID = "item-a"
         m.itemFocus = itemFocusTitle
 
-        // tab => status; tab => priority
+        // tab => status; tab => assigned; tab => tags; tab => priority
         mAny, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
         m2 := mAny.(appModel)
         mAny, _ = m2.Update(tea.KeyMsg{Type: tea.KeyTab})
-        m3 := mAny.(appModel)
+        m3 := mAny.(appModel) // assigned
+        mAny, _ = m3.Update(tea.KeyMsg{Type: tea.KeyTab})
+        m4 := mAny.(appModel) // tags
+        mAny, _ = m4.Update(tea.KeyMsg{Type: tea.KeyTab})
+        m3 = mAny.(appModel) // priority
         if m3.itemFocus != itemFocusPriority {
                 t.Fatalf("expected focus=%v, got %v", itemFocusPriority, m3.itemFocus)
         }
@@ -457,9 +465,9 @@ func TestItemView_Children_TabSelectAndEnterNavigates(t *testing.T) {
         m.openItemID = parentID
         m.itemFocus = itemFocusTitle
 
-        // tab to children (title -> status -> priority -> description -> children)
+        // tab to children (title -> status -> assigned -> tags -> priority -> description -> children)
         var mAny tea.Model = m
-        for i := 0; i < 4; i++ {
+        for i := 0; i < 6; i++ {
                 mAny, _ = mAny.(appModel).Update(tea.KeyMsg{Type: tea.KeyTab})
         }
         m2 := mAny.(appModel)
@@ -634,9 +642,9 @@ func TestItemView_Parent_EnterThenBack_ReturnsToChild(t *testing.T) {
         m.openItemID = childID
         m.itemFocus = itemFocusTitle
 
-        // tab to parent (title -> status -> priority -> description -> parent)
+        // tab to parent (title -> status -> assigned -> tags -> priority -> description -> parent)
         var mAny tea.Model = m
-        for i := 0; i < 4; i++ {
+        for i := 0; i < 6; i++ {
                 mAny, _ = mAny.(appModel).Update(tea.KeyMsg{Type: tea.KeyTab})
         }
         m2 := mAny.(appModel)

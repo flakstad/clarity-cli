@@ -20,7 +20,7 @@ func TestRenderOutlineColumns_OnlyTopLevelItems(t *testing.T) {
                 {ID: "b", OutlineID: ol.ID, Title: "Child", ParentID: strPtr("a"), StatusID: "s1"},
         }
 
-        board := buildOutlineColumnsBoard(ol, items)
+        board := buildOutlineColumnsBoard(nil, ol, items)
         out := renderOutlineColumns(ol, board, outlineColumnsSelection{}, 80, 10)
         if strings.Contains(out, "Child") {
                 t.Fatalf("expected nested item title to be excluded from columns output, got=%q", out)

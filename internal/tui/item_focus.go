@@ -7,6 +7,8 @@ type itemPageFocus int
 const (
         itemFocusTitle itemPageFocus = iota
         itemFocusStatus
+        itemFocusAssigned
+        itemFocusTags
         itemFocusPriority
         itemFocusDescription
         itemFocusParent
@@ -19,6 +21,8 @@ const (
 var itemFocusOrder = []itemPageFocus{
         itemFocusTitle,
         itemFocusStatus,
+        itemFocusAssigned,
+        itemFocusTags,
         itemFocusPriority,
         itemFocusDescription,
         itemFocusParent,

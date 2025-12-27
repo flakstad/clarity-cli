@@ -119,6 +119,8 @@ const (
         modalSetSchedule
         modalPickStatus
         modalPickOutline
+        modalPickAssignee
+        modalEditTags
         modalPickWorkspace
         modalNewWorkspace
         modalRenameWorkspace
@@ -191,6 +193,13 @@ const (
         dateFocusCancel
 )
 
+type tagsModalFocus int
+
+const (
+        tagsFocusInput tagsModalFocus = iota
+        tagsFocusList
+)
+
 func (m *appModel) closeAllModals() {
         if m == nil {
                 return
@@ -207,6 +216,7 @@ func (m *appModel) closeAllModals() {
 
         m.textFocus = textFocusBody
         m.dateFocus = dateFocusYear
+        m.tagsFocus = tagsFocusInput
         m.timeEnabled = false
 
         // Reset inputs (safe even if not currently used).
@@ -256,6 +266,9 @@ type appModel struct {
         itemsList       list.Model
         statusList      list.Model
         outlinePickList list.Model
+        assigneeList    list.Model
+        tagsList        list.Model
+        tagsListActive  *bool
         workspaceList   list.Model
         agendaList      list.Model
         archivedList    list.Model
@@ -311,6 +324,7 @@ type appModel struct {
         hourInput    textinput.Model
         minuteInput  textinput.Model
         dateFocus    dateModalFocus
+        tagsFocus    tagsModalFocus
         timeEnabled  bool
         replyQuoteMD string
 
@@ -890,6 +904,28 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                                 actions["D"] = actionPanelAction{label: "Edit description", kind: actionPanelActionExec}
                                 actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
                                 actions["o"] = actionPanelAction{label: "Toggle on hold", kind: actionPanelActionExec}
+                                actions["u"] = actionPanelAction{
+                                        label: "Assign…",
+                                        kind:  actionPanelActionExec,
+                                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                                id := strings.TrimSpace(mm.openItemID)
+                                                if id != "" {
+                                                        (&mm).openAssigneePicker(id)
+                                                }
+                                                return mm, nil
+                                        },
+                                }
+                                actions["t"] = actionPanelAction{
+                                        label: "Tags…",
+                                        kind:  actionPanelActionExec,
+                                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                                id := strings.TrimSpace(mm.openItemID)
+                                                if id != "" {
+                                                        (&mm).openTagsEditor(id)
+                                                }
+                                                return mm, nil
+                                        },
+                                }
                                 actions["d"] = actionPanelAction{label: "Set due", kind: actionPanelActionExec}
                                 actions["s"] = actionPanelAction{label: "Set schedule", kind: actionPanelActionExec}
                                 actions[" "] = actionPanelAction{label: "Change status", kind: actionPanelActionExec}
@@ -917,6 +953,19 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
                         actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
                         actions["o"] = actionPanelAction{label: "Toggle on hold", kind: actionPanelActionExec}
+                        // Use "u" (like "user") in the action panel to avoid shadowing the global "a: agenda"
+                        // entrypoint in context menus.
+                        actions["u"] = actionPanelAction{
+                                label: "Assign…",
+                                kind:  actionPanelActionExec,
+                                handler: func(mm appModel) (appModel, tea.Cmd) {
+                                        if it, ok := mm.itemsList.SelectedItem().(outlineRowItem); ok {
+                                                (&mm).openAssigneePicker(it.row.item.ID)
+                                        }
+                                        return mm, nil
+                                },
+                        }
+                        actions["t"] = actionPanelAction{label: "Tags…", kind: actionPanelActionExec}
                         actions["d"] = actionPanelAction{label: "Set due", kind: actionPanelActionExec}
                         actions["s"] = actionPanelAction{label: "Set schedule", kind: actionPanelActionExec}
                         actions["D"] = actionPanelAction{label: "Edit description", kind: actionPanelActionExec}
@@ -1006,6 +1055,7 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
                 pane:      paneOutline,
         }
         m.columnsSel = map[string]outlineColumnsSelection{}
+        m.tagsListActive = new(bool)
 
         if strings.TrimSpace(os.Getenv("CLARITY_TUI_DEBUG")) != "" {
                 m.debugEnabled = true
@@ -1044,6 +1094,22 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
         m.outlinePickList.SetShowHelp(false)
         m.outlinePickList.SetShowStatusBar(false)
         m.outlinePickList.SetShowPagination(false)
+
+        m.assigneeList = newList("Assignee", "Select an assignee", []list.Item{})
+        m.assigneeList.SetDelegate(newCompactItemDelegate())
+        m.assigneeList.SetFilteringEnabled(false)
+        m.assigneeList.SetShowFilter(false)
+        m.assigneeList.SetShowHelp(false)
+        m.assigneeList.SetShowStatusBar(false)
+        m.assigneeList.SetShowPagination(false)
+
+        m.tagsList = newList("Tags", "Edit tags", []list.Item{})
+        m.tagsList.SetDelegate(newFocusAwareCompactItemDelegate(m.tagsListActive))
+        m.tagsList.SetFilteringEnabled(false)
+        m.tagsList.SetShowFilter(false)
+        m.tagsList.SetShowHelp(false)
+        m.tagsList.SetShowStatusBar(false)
+        m.tagsList.SetShowPagination(false)
 
         m.workspaceList = newList("Workspaces", "Select a workspace", []list.Item{})
         m.workspaceList.SetDelegate(newCompactItemDelegate())
@@ -1700,6 +1766,19 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, nil
                 case "a":
                         // Org-style agenda flow: open the agenda commands panel, then choose a command (e.g. 't').
+                        //
+                        // In outline view, "a" is reserved for item assignment (outline.js parity), so we only
+                        // treat it as a global agenda shortcut outside the outline (and item view).
+                        if m.view == viewOutline {
+                                return m.updateOutline(msg)
+                        }
+                        if m.view == viewItem {
+                                return m.updateItem(msg)
+                        }
+                        m.openActionPanel(actionPanelAgenda)
+                        return m, nil
+                case "A":
+                        // Always-available agenda alias (useful when "a" is used for assignment in outline view).
                         m.openActionPanel(actionPanelAgenda)
                         return m, nil
                 case "c":
@@ -2436,6 +2515,12 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.modalForID = activeID
                                 }
                                 return m, nil
+                        case itemFocusAssigned:
+                                m.openAssigneePicker(activeID)
+                                return m, nil
+                        case itemFocusTags:
+                                m.openTagsEditor(activeID)
+                                return m, nil
                         case itemFocusPriority:
                                 // Toggle priority.
                                 if err := m.togglePriority(activeID); err != nil {
@@ -2551,6 +2636,28 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         if err := m.toggleOnHold(activeID); err != nil {
                                 return m, m.reportError(activeID, err)
                         }
+                        return m, nil
+                case "a":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
+                        if strings.TrimSpace(activeID) == "" {
+                                return m, nil
+                        }
+                        m.itemFocus = itemFocusAssigned
+                        m.openAssigneePicker(activeID)
+                        return m, nil
+                case "t":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
+                        if strings.TrimSpace(activeID) == "" {
+                                return m, nil
+                        }
+                        m.itemFocus = itemFocusTags
+                        m.openTagsEditor(activeID)
                         return m, nil
                 case "d":
                         if readOnly {
@@ -3007,6 +3114,12 @@ func (m appModel) footerText() string {
                 if m.modal == modalPickOutline {
                         return "move outline: enter: move  esc/ctrl+g: cancel"
                 }
+                if m.modal == modalPickAssignee {
+                        return "assign: enter: set  esc/ctrl+g: cancel"
+                }
+                if m.modal == modalEditTags {
+                        return "tags: tab: focus  enter: add/toggle  esc/ctrl+g: close"
+                }
                 if m.modal == modalEditTitle {
                         return "edit title: type, enter/ctrl+s: save, esc/ctrl+g: cancel"
                 }
@@ -3249,7 +3362,7 @@ func (m appModel) renderActionPanel() string {
                 switch m.view {
                 case viewItem:
                         // Full-screen item page: show item work + global entrypoints.
-                        addSection("Item", []string{"e", "D", "p", "o", "d", "s", " ", "C", "w", "m", "y", "Y", "r"})
+                        addSection("Item", []string{"e", "D", "p", "o", "u", "t", "d", "s", " ", "C", "w", "m", "y", "Y", "r"})
 
                         globalKeys := []string{}
                         for _, k := range []string{"g", "a", "c"} {
@@ -3275,7 +3388,7 @@ func (m appModel) renderActionPanel() string {
                         addSection("Item", []string{
                                 "e", "n", "N", // title/new items
                                 " ", "shift+left", "shift+right", // status
-                                "p", "o", "d", "s", "D", // priority/on-hold/due/schedule/description
+                                "p", "o", "u", "t", "d", "s", "D", // priority/on-hold/assign/tags/due/schedule/description
                                 "m",      // move
                                 "C", "w", // comment/worklog
                                 "y", "Y", // copy helpers (still item-scoped)
@@ -3907,6 +4020,22 @@ func (m *appModel) refreshItems(outline model.Outline) {
         var items []list.Item
 
         for _, row := range flat {
+                // Cache display labels for metadata that needs DB context.
+                if row.item.AssignedActorID != nil && strings.TrimSpace(*row.item.AssignedActorID) != "" {
+                        row.assignedLabel = actorDisplayLabel(m.db, *row.item.AssignedActorID)
+                }
+                // Normalize tags for stable display.
+                if len(row.item.Tags) > 0 {
+                        cleaned := make([]string, 0, len(row.item.Tags))
+                        for _, t := range row.item.Tags {
+                                t = normalizeTag(t)
+                                if t == "" {
+                                        continue
+                                }
+                                cleaned = append(cleaned, t)
+                        }
+                        row.item.Tags = uniqueSortedStrings(cleaned)
+                }
                 flash := ""
                 if m.flashKind != "" && m.flashItemID != "" && row.item.ID == m.flashItemID {
                         flash = m.flashKind
@@ -4070,6 +4199,20 @@ func (m *appModel) refreshAgenda() {
                         }
                         flat := flattenOutline(o, its, m.agendaCollapsed)
                         for _, row := range flat {
+                                if row.item.AssignedActorID != nil && strings.TrimSpace(*row.item.AssignedActorID) != "" {
+                                        row.assignedLabel = actorDisplayLabel(m.db, *row.item.AssignedActorID)
+                                }
+                                if len(row.item.Tags) > 0 {
+                                        cleaned := make([]string, 0, len(row.item.Tags))
+                                        for _, t := range row.item.Tags {
+                                                t = normalizeTag(t)
+                                                if t == "" {
+                                                        continue
+                                                }
+                                                cleaned = append(cleaned, t)
+                                        }
+                                        row.item.Tags = uniqueSortedStrings(cleaned)
+                                }
                                 items = append(items, agendaRowItem{
                                         row:     row,
                                         outline: o,
@@ -4341,7 +4484,7 @@ func (m *appModel) viewOutline() string {
                 if boardH < 3 {
                         boardH = 3
                 }
-                boardData := buildOutlineColumnsBoard(*outline, its)
+                boardData := buildOutlineColumnsBoard(m.db, *outline, its)
                 sel := m.columnsSel[strings.TrimSpace(outline.ID)]
                 sel = boardData.clamp(sel)
                 m.columnsSel[strings.TrimSpace(outline.ID)] = sel
@@ -4567,6 +4710,10 @@ func (m *appModel) renderModal() string {
                 return renderModalBox(m.width, "Set status", m.statusList.View()+"\n\nenter: set   esc/ctrl+g: cancel")
         case modalPickOutline:
                 return renderModalBox(m.width, "Move to outline", m.outlinePickList.View()+"\n\nenter: move   esc/ctrl+g: cancel")
+        case modalPickAssignee:
+                return renderModalBox(m.width, "Assign", m.assigneeList.View()+"\n\nenter: set   esc/ctrl+g: cancel")
+        case modalEditTags:
+                return m.renderTagsModal()
         case modalPickWorkspace:
                 return renderModalBox(m.width, "Workspaces", m.workspaceList.View()+"\n\nenter: switch   n:new   r:rename   esc/ctrl+g: close")
         case modalNewWorkspace:
@@ -4843,6 +4990,32 @@ func (m *appModel) renderInputModal(title string) string {
                 "ctrl+s: save    tab: focus    esc: cancel    ctrl+g: close",
         }, "\n")
         return renderModalBox(m.width, title, body)
+}
+
+func (m *appModel) renderTagsModal() string {
+        bodyW := modalBodyWidth(m.width)
+        inputW := bodyW - 2 // one space padding on each side
+        if inputW < 10 {
+                inputW = 10
+        }
+        m.input.Width = inputW
+
+        inputLine := lipgloss.PlaceHorizontal(
+                bodyW,
+                lipgloss.Left,
+                " "+m.input.View()+" ",
+                lipgloss.WithWhitespaceChars(" "),
+                lipgloss.WithWhitespaceBackground(colorInputBg),
+        )
+        help := styleMuted().Width(bodyW).Render("tab: focus  enter (input): add  enter/space (list): toggle  esc/ctrl+g: close")
+        body := strings.Join([]string{
+                inputLine,
+                "",
+                m.tagsList.View(),
+                "",
+                help,
+        }, "\n")
+        return renderModalBox(m.width, "Tags", body)
 }
 
 func tickReload() tea.Cmd {
@@ -5688,6 +5861,150 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, cmd
                 }
 
+                if m.modal == modalPickAssignee {
+                        switch km := msg.(type) {
+                        case tea.KeyMsg:
+                                switch km.String() {
+                                case "esc":
+                                        m.modal = modalNone
+                                        m.modalForID = ""
+                                        return m, nil
+                                case "enter":
+                                        itemID := strings.TrimSpace(m.modalForID)
+                                        pick, _ := m.assigneeList.SelectedItem().(assigneeOptionItem)
+                                        m.modal = modalNone
+                                        m.modalForID = ""
+                                        if itemID == "" {
+                                                return m, nil
+                                        }
+                                        if strings.TrimSpace(pick.id) == "" {
+                                                if err := m.setAssignedActor(itemID, nil); err != nil {
+                                                        return m, m.reportError(itemID, err)
+                                                }
+                                                return m, nil
+                                        }
+                                        tmp := strings.TrimSpace(pick.id)
+                                        if err := m.setAssignedActor(itemID, &tmp); err != nil {
+                                                return m, m.reportError(itemID, err)
+                                        }
+                                        return m, nil
+                                }
+                        }
+                        var cmd tea.Cmd
+                        m.assigneeList, cmd = m.assigneeList.Update(msg)
+                        return m, cmd
+                }
+
+                if m.modal == modalEditTags {
+                        itemID := strings.TrimSpace(m.modalForID)
+                        switch km := msg.(type) {
+                        case tea.KeyMsg:
+                                switch km.String() {
+                                case "esc":
+                                        m.modal = modalNone
+                                        m.modalForID = ""
+                                        m.tagsFocus = tagsFocusInput
+                                        if m.tagsListActive != nil {
+                                                *m.tagsListActive = false
+                                        }
+                                        m.input.Placeholder = "Title"
+                                        m.input.SetValue("")
+                                        m.input.Blur()
+                                        return m, nil
+                                case "tab":
+                                        if m.tagsFocus == tagsFocusInput {
+                                                m.tagsFocus = tagsFocusList
+                                                m.input.Blur()
+                                                if m.tagsListActive != nil {
+                                                        *m.tagsListActive = true
+                                                }
+                                        } else {
+                                                m.tagsFocus = tagsFocusInput
+                                                m.input.Focus()
+                                                if m.tagsListActive != nil {
+                                                        *m.tagsListActive = false
+                                                }
+                                        }
+                                        return m, nil
+                                case "shift+tab", "backtab":
+                                        if m.tagsFocus == tagsFocusList {
+                                                m.tagsFocus = tagsFocusInput
+                                                m.input.Focus()
+                                                if m.tagsListActive != nil {
+                                                        *m.tagsListActive = false
+                                                }
+                                        } else {
+                                                m.tagsFocus = tagsFocusList
+                                                m.input.Blur()
+                                                if m.tagsListActive != nil {
+                                                        *m.tagsListActive = true
+                                                }
+                                        }
+                                        return m, nil
+                                }
+                                if m.tagsFocus == tagsFocusInput {
+                                        switch km.String() {
+                                        case "enter":
+                                                tag := normalizeTag(m.input.Value())
+                                                if tag == "" || itemID == "" {
+                                                        return m, nil
+                                                }
+                                                if err := m.setTagChecked(itemID, tag, true); err != nil {
+                                                        return m, m.reportError(itemID, err)
+                                                }
+                                                m.input.SetValue("")
+                                                m.refreshTagsEditor(itemID, tag)
+                                                return m, nil
+                                        case "down", "j", "ctrl+n":
+                                                if len(m.tagsList.Items()) > 0 {
+                                                        m.tagsFocus = tagsFocusList
+                                                        m.input.Blur()
+                                                        if m.tagsListActive != nil {
+                                                                *m.tagsListActive = true
+                                                        }
+                                                        return m, nil
+                                                }
+                                        }
+                                } else {
+                                        switch km.String() {
+                                        case "up", "k", "ctrl+p":
+                                                if m.tagsList.Index() <= 0 {
+                                                        m.tagsFocus = tagsFocusInput
+                                                        m.input.Focus()
+                                                        if m.tagsListActive != nil {
+                                                                *m.tagsListActive = false
+                                                        }
+                                                        return m, nil
+                                                }
+                                        }
+                                        switch km.String() {
+                                        case "enter", " ":
+                                                pick, ok := m.tagsList.SelectedItem().(tagOptionItem)
+                                                if !ok {
+                                                        return m, nil
+                                                }
+                                                tag := strings.TrimSpace(pick.tag)
+                                                if tag == "" || itemID == "" {
+                                                        return m, nil
+                                                }
+                                                if err := m.setTagChecked(itemID, tag, !pick.checked); err != nil {
+                                                        return m, m.reportError(itemID, err)
+                                                }
+                                                m.refreshTagsEditor(itemID, tag)
+                                                return m, nil
+                                        }
+                                }
+                        }
+                        if m.tagsFocus == tagsFocusInput {
+                                var cmd tea.Cmd
+                                m.input, cmd = m.input.Update(msg)
+                                return m, cmd
+                        }
+                        var cmd tea.Cmd
+                        m.tagsList, cmd = m.tagsList.Update(msg)
+                        return m, cmd
+                }
+
                 if m.modal == modalPickWorkspace {
                         switch km := msg.(type) {
                         case tea.KeyMsg:
@@ -6048,6 +6365,18 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 }
                                 return m, nil
                         }
+                case "a":
+                        // Assign selected item.
+                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                m.openAssigneePicker(it.row.item.ID)
+                                return m, nil
+                        }
+                case "t":
+                        // Edit tags for selected item.
+                        if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+                                m.openTagsEditor(it.row.item.ID)
+                                return m, nil
+                        }
                 case "d":
                         // Set due for selected item.
                         if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
@@ -6252,7 +6581,7 @@ func (m *appModel) updateOutlineColumns(msg tea.KeyMsg) (bool, tea.Cmd) {
                 its = append(its, it)
         }
 
-        board := buildOutlineColumnsBoard(*outline, its)
+        board := buildOutlineColumnsBoard(m.db, *outline, its)
         if len(board.cols) == 0 {
                 return false, nil
         }
@@ -6355,6 +6684,12 @@ func (m *appModel) updateOutlineColumns(msg tea.KeyMsg) (bool, tea.Cmd) {
                 if err := m.toggleOnHold(it.Item.ID); err != nil {
                         return true, m.reportError(it.Item.ID, err)
                 }
+                return true, nil
+        case "a":
+                m.openAssigneePicker(it.Item.ID)
+                return true, nil
+        case "t":
+                m.openTagsEditor(it.Item.ID)
                 return true, nil
         case "d":
                 m.openDateModal(modalSetDue, it.Item.ID, it.Item.Due)
@@ -7862,6 +8197,106 @@ func (m *appModel) toggleOnHold(itemID string) error {
         })
 }
 
+func (m *appModel) setAssignedActor(itemID string, assignedActorID *string) error {
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" {
+                return nil
+        }
+        next := ""
+        if assignedActorID != nil {
+                next = strings.TrimSpace(*assignedActorID)
+        }
+        return m.mutateItem(itemID, func(db *store.DB, it *model.Item) (bool, itemMutationResult, error) {
+                if next == "" {
+                        if it.AssignedActorID == nil || strings.TrimSpace(*it.AssignedActorID) == "" {
+                                return false, itemMutationResult{}, nil
+                        }
+                        it.AssignedActorID = nil
+                        return true, itemMutationResult{
+                                eventType:    "item.set_assign",
+                                eventPayload: map[string]any{"assignedActorId": nil},
+                                minibuffer:   "Unassigned",
+                        }, nil
+                }
+                if _, ok := db.FindActor(next); !ok {
+                        return false, itemMutationResult{}, errors.New("actor not found")
+                }
+                if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) == next {
+                        return false, itemMutationResult{}, nil
+                }
+
+                // Transfer ownership when assigning to someone else.
+                if strings.TrimSpace(it.OwnerActorID) != next {
+                        now := time.Now().UTC()
+                        prev := strings.TrimSpace(it.OwnerActorID)
+                        if prev != "" {
+                                it.OwnerDelegatedFrom = &prev
+                                it.OwnerDelegatedAt = &now
+                        } else {
+                                it.OwnerDelegatedFrom = nil
+                                it.OwnerDelegatedAt = nil
+                        }
+                        it.OwnerActorID = next
+                }
+                tmp := next
+                it.AssignedActorID = &tmp
+                return true, itemMutationResult{
+                        eventType:    "item.set_assign",
+                        eventPayload: map[string]any{"assignedActorId": it.AssignedActorID},
+                        minibuffer:   "Assigned: @" + actorDisplayLabel(db, next),
+                }, nil
+        })
+}
+
+func (m *appModel) setTagChecked(itemID, tag string, checked bool) error {
+        itemID = strings.TrimSpace(itemID)
+        tag = normalizeTag(tag)
+        if itemID == "" || tag == "" {
+                return nil
+        }
+        return m.mutateItem(itemID, func(_ *store.DB, it *model.Item) (bool, itemMutationResult, error) {
+                has := false
+                for _, t := range it.Tags {
+                        if normalizeTag(t) == tag {
+                                has = true
+                                break
+                        }
+                }
+                if checked {
+                        if has {
+                                return false, itemMutationResult{}, nil
+                        }
+                        it.Tags = append(it.Tags, tag)
+                        it.Tags = uniqueSortedStrings(it.Tags)
+                        return true, itemMutationResult{
+                                eventType:    "item.tags_add",
+                                eventPayload: map[string]any{"tag": tag},
+                                minibuffer:   "Tag added: #" + tag,
+                        }, nil
+                }
+                if !has {
+                        return false, itemMutationResult{}, nil
+                }
+                nextTags := make([]string, 0, len(it.Tags))
+                for _, t := range it.Tags {
+                        if normalizeTag(t) == tag {
+                                continue
+                        }
+                        t = normalizeTag(t)
+                        if t == "" {
+                                continue
+                        }
+                        nextTags = append(nextTags, t)
+                }
+                it.Tags = uniqueSortedStrings(nextTags)
+                return true, itemMutationResult{
+                        eventType:    "item.tags_remove",
+                        eventPayload: map[string]any{"tag": tag},
+                        minibuffer:   "Tag removed: #" + tag,
+                }, nil
+        })
+}
+
 func (m *appModel) setDue(itemID string, dt *model.DateTime) error {
         itemID = strings.TrimSpace(itemID)
         if itemID == "" {
@@ -8167,6 +8602,174 @@ func (m *appModel) openStatusPickerForOutline(outline model.Outline, currentStat
                 }
         }
         m.statusList.Select(selected)
+}
+
+func (m *appModel) openAssigneePicker(itemID string) {
+        if m == nil || m.db == nil {
+                return
+        }
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" {
+                return
+        }
+        it, ok := m.db.FindItem(itemID)
+        if !ok || it == nil {
+                return
+        }
+        cur := ""
+        if it.AssignedActorID != nil {
+                cur = strings.TrimSpace(*it.AssignedActorID)
+        }
+
+        opts := []list.Item{assigneeOptionItem{id: "", label: ""}}
+        actors := append([]model.Actor(nil), m.db.Actors...)
+        sort.Slice(actors, func(i, j int) bool {
+                ai := strings.ToLower(strings.TrimSpace(actors[i].Name))
+                aj := strings.ToLower(strings.TrimSpace(actors[j].Name))
+                if ai == aj {
+                        return actors[i].ID < actors[j].ID
+                }
+                if ai == "" {
+                        return false
+                }
+                if aj == "" {
+                        return true
+                }
+                return ai < aj
+        })
+        for _, a := range actors {
+                lbl := actorDisplayLabel(m.db, a.ID)
+                opts = append(opts, assigneeOptionItem{id: a.ID, label: lbl})
+        }
+
+        m.assigneeList.Title = ""
+        m.assigneeList.SetItems(opts)
+        bodyW := modalBodyWidth(m.width)
+        h := len(opts) + 2
+        if h > 14 {
+                h = 14
+        }
+        if h < 6 {
+                h = 6
+        }
+        m.assigneeList.SetSize(bodyW, h)
+
+        selected := 0
+        for i := 0; i < len(opts); i++ {
+                if o, ok := opts[i].(assigneeOptionItem); ok && strings.TrimSpace(o.id) == cur {
+                        selected = i
+                        break
+                }
+        }
+        m.assigneeList.Select(selected)
+
+        m.modal = modalPickAssignee
+        m.modalForID = itemID
+}
+
+func (m *appModel) openTagsEditor(itemID string) {
+        if m == nil || m.db == nil {
+                return
+        }
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" {
+                return
+        }
+        m.refreshTagsEditor(itemID, "")
+        m.tagsFocus = tagsFocusInput
+        if m.tagsListActive != nil {
+                *m.tagsListActive = false
+        }
+        m.input.Placeholder = "Add tag"
+        m.input.SetValue("")
+        m.input.Focus()
+        m.modal = modalEditTags
+        m.modalForID = itemID
+}
+
+func (m *appModel) refreshTagsEditor(itemID string, preferredTag string) {
+        if m == nil || m.db == nil {
+                return
+        }
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" {
+                return
+        }
+        it, ok := m.db.FindItem(itemID)
+        if !ok || it == nil {
+                return
+        }
+
+        // Collect available tags from the outline (plus current item tags).
+        all := make([]string, 0, 32)
+        for _, x := range m.db.Items {
+                if x.Archived {
+                        continue
+                }
+                if strings.TrimSpace(x.OutlineID) != strings.TrimSpace(it.OutlineID) {
+                        continue
+                }
+                for _, t := range x.Tags {
+                        t = normalizeTag(t)
+                        if t == "" {
+                                continue
+                        }
+                        all = append(all, t)
+                }
+        }
+        for _, t := range it.Tags {
+                t = normalizeTag(t)
+                if t == "" {
+                        continue
+                }
+                all = append(all, t)
+        }
+        all = uniqueSortedStrings(all)
+
+        checked := map[string]bool{}
+        for _, t := range it.Tags {
+                t = normalizeTag(t)
+                if t == "" {
+                        continue
+                }
+                checked[t] = true
+        }
+
+        opts := make([]list.Item, 0, len(all))
+        for _, tag := range all {
+                opts = append(opts, tagOptionItem{tag: tag, checked: checked[tag]})
+        }
+
+        // Preserve selection when possible.
+        selectedTag := strings.TrimSpace(preferredTag)
+        if selectedTag == "" {
+                if cur, ok := m.tagsList.SelectedItem().(tagOptionItem); ok {
+                        selectedTag = strings.TrimSpace(cur.tag)
+                }
+        }
+
+        m.tagsList.Title = ""
+        m.tagsList.SetItems(opts)
+        bodyW := modalBodyWidth(m.width)
+        h := len(opts) + 2
+        if h > 12 {
+                h = 12
+        }
+        if h < 4 {
+                h = 4
+        }
+        m.tagsList.SetSize(bodyW, h)
+
+        selectedIdx := 0
+        if selectedTag != "" {
+                for i := 0; i < len(opts); i++ {
+                        if o, ok := opts[i].(tagOptionItem); ok && strings.TrimSpace(o.tag) == selectedTag {
+                                selectedIdx = i
+                                break
+                        }
+                }
+        }
+        m.tagsList.Select(selectedIdx)
 }
 
 func (m *appModel) openWorkspacePicker() {

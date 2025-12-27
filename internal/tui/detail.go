@@ -36,7 +36,26 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
         status := renderStatus(outline, it.StatusID)
         assigned := "-"
         if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) != "" {
-                assigned = *it.AssignedActorID
+                assigned = "@" + actorDisplayLabel(db, *it.AssignedActorID)
+        }
+        tags := "-"
+        if len(it.Tags) > 0 {
+                cleaned := make([]string, 0, len(it.Tags))
+                for _, t := range it.Tags {
+                        t = normalizeTag(t)
+                        if t == "" {
+                                continue
+                        }
+                        cleaned = append(cleaned, t)
+                }
+                cleaned = uniqueSortedStrings(cleaned)
+                if len(cleaned) > 0 {
+                        parts := make([]string, 0, len(cleaned))
+                        for _, t := range cleaned {
+                                parts = append(parts, "#"+t)
+                        }
+                        tags = strings.Join(parts, " ")
+                }
         }
 
         // Direct parent (shown when viewing a child).
@@ -94,6 +113,7 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
                 labelStyle.Render("ID: ") + it.ID,
                 labelStyle.Render("Owner: ") + it.OwnerActorID,
                 labelStyle.Render("Assigned: ") + assigned,
+                labelStyle.Render("Tags: ") + tags,
                 labelStyle.Render("Priority: ") + fmt.Sprintf("%v", it.Priority),
                 labelStyle.Render("On hold: ") + fmt.Sprintf("%v", it.OnHold),
                 "",
@@ -167,7 +187,26 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
         status := renderStatus(outline, it.StatusID)
         assigned := "-"
         if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) != "" {
-                assigned = *it.AssignedActorID
+                assigned = "@" + actorDisplayLabel(db, *it.AssignedActorID)
+        }
+        tags := "-"
+        if len(it.Tags) > 0 {
+                cleaned := make([]string, 0, len(it.Tags))
+                for _, t := range it.Tags {
+                        t = normalizeTag(t)
+                        if t == "" {
+                                continue
+                        }
+                        cleaned = append(cleaned, t)
+                }
+                cleaned = uniqueSortedStrings(cleaned)
+                if len(cleaned) > 0 {
+                        parts := make([]string, 0, len(cleaned))
+                        for _, t := range cleaned {
+                                parts = append(parts, "#"+t)
+                        }
+                        tags = strings.Join(parts, " ")
+                }
         }
 
         // Direct parent (shown when viewing a child).
@@ -212,7 +251,8 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
                 "",
                 labelStyle.Render("ID: ") + it.ID,
                 labelStyle.Render("Owner: ") + it.OwnerActorID,
-                labelStyle.Render("Assigned: ") + assigned,
+                labelStyle.Render("Assigned: ") + btn(focus == itemFocusAssigned).Render(assigned),
+                labelStyle.Render("Tags: ") + btn(focus == itemFocusTags).Render(tags),
                 labelStyle.Render("Priority: ") + btn(focus == itemFocusPriority).Render(fmt.Sprintf("%v", it.Priority)),
                 labelStyle.Render("On hold: ") + fmt.Sprintf("%v", it.OnHold),
                 "",
@@ -273,12 +313,22 @@ func windowWithIndicators(header, body []string, height int, scroll int, moreSty
         if scroll < 0 {
                 scroll = 0
         }
+        // If the header itself doesn't fit, fall back to a single scrollable window over
+        // the combined content so we still show "more" indicators on small terminals.
         if len(header) > height {
-                header = header[:height]
+                all := append([]string{}, header...)
+                all = append(all, body...)
+                return windowLinesWithIndicators(all, height, scroll, moreStyle)
         }
         avail := height - len(header)
         if avail <= 0 {
-                // No room for body; return header only (padded).
+                // No room for body: fall back to a single scrollable window over the combined content
+                // so we still expose body content and "more" indicators.
+                if len(body) > 0 {
+                        all := append([]string{}, header...)
+                        all = append(all, body...)
+                        return windowLinesWithIndicators(all, height, scroll, moreStyle)
+                }
                 out := append([]string{}, header...)
                 for len(out) < height {
                         out = append(out, "")
@@ -627,6 +677,21 @@ func eventSummary(ev model.Event) string {
                         if s, ok := v.(string); ok {
                                 return "assigned: " + s
                         }
+                }
+        case "item.tags_add":
+                if v, ok := m["tag"].(string); ok && strings.TrimSpace(v) != "" {
+                        return "tag added: #" + normalizeTag(v)
+                }
+        case "item.tags_remove":
+                if v, ok := m["tag"].(string); ok && strings.TrimSpace(v) != "" {
+                        return "tag removed: #" + normalizeTag(v)
+                }
+        case "item.tags_set":
+                if v, ok := m["tags"]; ok {
+                        if v == nil {
+                                return "tags: cleared"
+                        }
+                        return "tags: updated"
                 }
         case "comment.add":
                 if v, ok := m["body"].(string); ok && strings.TrimSpace(v) != "" {

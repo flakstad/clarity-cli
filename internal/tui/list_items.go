@@ -101,6 +101,9 @@ type outlineRow struct {
         collapsed     bool
         doneChildren  int
         totalChildren int
+        // assignedLabel is a cached display label for item.AssignedActorID (computed during refresh).
+        // It should not include the leading '@' so renderers can style/prefix consistently.
+        assignedLabel string
 }
 
 type outlineRowItem struct {
@@ -157,6 +160,42 @@ type statusOptionItem struct {
 func (i statusOptionItem) FilterValue() string { return "" }
 func (i statusOptionItem) Title() string       { return i.label }
 func (i statusOptionItem) Description() string { return i.id }
+
+type assigneeOptionItem struct {
+        id    string // empty => none
+        label string // display label (typically actor name; falls back to id)
+}
+
+func (i assigneeOptionItem) FilterValue() string { return strings.TrimSpace(i.label + " " + i.id) }
+func (i assigneeOptionItem) Title() string {
+        if strings.TrimSpace(i.id) == "" {
+                return "None"
+        }
+        lbl := strings.TrimSpace(i.label)
+        if lbl == "" {
+                lbl = strings.TrimSpace(i.id)
+        }
+        return "@" + lbl
+}
+func (i assigneeOptionItem) Description() string { return strings.TrimSpace(i.id) }
+
+type tagOptionItem struct {
+        tag     string
+        checked bool
+}
+
+func (i tagOptionItem) FilterValue() string { return strings.TrimSpace(i.tag) }
+func (i tagOptionItem) Title() string {
+        tag := strings.TrimSpace(i.tag)
+        if tag == "" {
+                tag = "(empty)"
+        }
+        if i.checked {
+                return "[x] " + tag
+        }
+        return "[ ] " + tag
+}
+func (i tagOptionItem) Description() string { return "" }
 
 type outlineStatusDefItem struct {
         def model.OutlineStatusDef
@@ -257,6 +296,8 @@ var (
         // due/schedule buttons in outline.js use the default "has-data" color (text-secondary), not a semantic accent.
         metaDueStyle      = lipgloss.NewStyle().Foreground(ac("240", "245"))
         metaScheduleStyle = lipgloss.NewStyle().Foreground(ac("240", "245"))
+        metaAssignStyle   = lipgloss.NewStyle().Foreground(ac("240", "245"))
+        metaTagStyle      = lipgloss.NewStyle().Foreground(ac("240", "245"))
 )
 
 func renderStatus(outline model.Outline, statusID string) string {
@@ -321,7 +362,7 @@ func (i agendaRowItem) Title() string {
                 title = "(untitled)"
         }
 
-        metaParts := make([]string, 0, 3)
+        metaParts := make([]string, 0, 12)
         if i.row.item.Priority {
                 metaParts = append(metaParts, metaPriorityStyle.Render("priority"))
         }
@@ -333,6 +374,16 @@ func (i agendaRowItem) Title() string {
         }
         if s := strings.TrimSpace(formatDueLabel(i.row.item.Due)); s != "" {
                 metaParts = append(metaParts, metaDueStyle.Render(s))
+        }
+        if lbl := strings.TrimSpace(i.row.assignedLabel); lbl != "" {
+                metaParts = append(metaParts, metaAssignStyle.Render("@"+lbl))
+        }
+        for _, tag := range i.row.item.Tags {
+                tag = strings.TrimSpace(tag)
+                if tag == "" {
+                        continue
+                }
+                metaParts = append(metaParts, metaTagStyle.Render("#"+tag))
         }
         if i.row.totalChildren > 0 {
                 metaParts = append(metaParts, renderProgressCookie(i.row.doneChildren, i.row.totalChildren))

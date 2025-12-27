@@ -6,6 +6,7 @@ import (
         "strings"
 
         "clarity-cli/internal/model"
+        "clarity-cli/internal/store"
 
         "github.com/charmbracelet/lipgloss"
         xansi "github.com/charmbracelet/x/ansi"
@@ -34,9 +35,10 @@ type outlineColumnsItem struct {
         DoneChildren  int
         TotalChildren int
         HasChildren   bool
+        AssignedLabel string // cached display label (no leading '@')
 }
 
-func buildOutlineColumnsBoard(outline model.Outline, items []model.Item) outlineColumnsBoard {
+func buildOutlineColumnsBoard(db *store.DB, outline model.Outline, items []model.Item) outlineColumnsBoard {
         // Column order: (no status) then outline-defined statuses (in order).
         cols := make([]outlineColumnsCol, 0, len(outline.StatusDefs)+1)
         cols = append(cols, outlineColumnsCol{statusID: "", label: "(no status)"})
@@ -97,6 +99,20 @@ func buildOutlineColumnsBoard(outline model.Outline, items []model.Item) outline
                         DoneChildren:  doneChildren,
                         TotalChildren: totalChildren,
                         HasChildren:   len(children[it.ID]) > 0,
+                }
+                if wrapped.Item.AssignedActorID != nil && strings.TrimSpace(*wrapped.Item.AssignedActorID) != "" {
+                        wrapped.AssignedLabel = actorDisplayLabel(db, *wrapped.Item.AssignedActorID)
+                }
+                if len(wrapped.Item.Tags) > 0 {
+                        cleaned := make([]string, 0, len(wrapped.Item.Tags))
+                        for _, t := range wrapped.Item.Tags {
+                                t = normalizeTag(t)
+                                if t == "" {
+                                        continue
+                                }
+                                cleaned = append(cleaned, t)
+                        }
+                        wrapped.Item.Tags = uniqueSortedStrings(cleaned)
                 }
 
                 sid := strings.TrimSpace(it.StatusID)
@@ -401,6 +417,26 @@ func renderOutlineColumns(outline model.Outline, board outlineColumnsBoard, sel 
                                 st = st.Copy().Background(colorSelectedBg)
                         }
                         seg := st.Render(s)
+                        tokens = append(tokens, token{s: seg, w: xansi.StringWidth(seg)})
+                }
+                if lbl := strings.TrimSpace(it.AssignedLabel); lbl != "" {
+                        st := metaAssignStyle
+                        if selected {
+                                st = st.Copy().Background(colorSelectedBg)
+                        }
+                        seg := st.Render("@" + lbl)
+                        tokens = append(tokens, token{s: seg, w: xansi.StringWidth(seg)})
+                }
+                for _, tag := range it.Item.Tags {
+                        tag = strings.TrimSpace(tag)
+                        if tag == "" {
+                                continue
+                        }
+                        st := metaTagStyle
+                        if selected {
+                                st = st.Copy().Background(colorSelectedBg)
+                        }
+                        seg := st.Render("#" + tag)
                         tokens = append(tokens, token{s: seg, w: xansi.StringWidth(seg)})
                 }
 

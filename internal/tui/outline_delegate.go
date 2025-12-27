@@ -135,7 +135,7 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
                 statusRaw = statusTxt + " "
         }
 
-        metaParts := make([]string, 0, 3)
+        metaParts := make([]string, 0, 10)
 
         // Progress cookie should follow immediately after the title (not float on the right).
         progressCookie := ""
@@ -173,6 +173,24 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
                         st = st.Background(bg)
                 }
                 metaParts = append(metaParts, st.Render(s))
+        }
+        if lbl := strings.TrimSpace(it.row.assignedLabel); lbl != "" {
+                st := metaAssignStyle
+                if focused {
+                        st = st.Background(bg)
+                }
+                metaParts = append(metaParts, st.Render("@"+lbl))
+        }
+        for _, tag := range it.row.item.Tags {
+                tag = strings.TrimSpace(tag)
+                if tag == "" {
+                        continue
+                }
+                st := metaTagStyle
+                if focused {
+                        st = st.Background(bg)
+                }
+                metaParts = append(metaParts, st.Render("#"+tag))
         }
         inlineMetaSeg := strings.Join(metaParts, base.Render(" "))
         inlineMetaW := xansi.StringWidth(inlineMetaSeg)
