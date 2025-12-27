@@ -7,6 +7,7 @@ import (
         "time"
 
         "clarity-cli/internal/model"
+        "clarity-cli/internal/mutate"
         "clarity-cli/internal/statusutil"
         "clarity-cli/internal/store"
 
@@ -662,17 +663,30 @@ func newItemsSetStatusCmd(app *App) *cobra.Command {
                                         return writeErr(cmd, completionBlockedError{taskID: t.ID, reason: explainCompletionBlockers(db, t.ID)})
                                 }
                         }
-                        prev := strings.TrimSpace(t.StatusID)
-                        t.StatusID = st
+                        res, err := mutate.SetItemStatus(db, actorID, t.ID, st)
+                        if err != nil {
+                                switch e := err.(type) {
+                                case mutate.NotFoundError:
+                                        return writeErr(cmd, errNotFound(e.Kind, e.ID))
+                                case mutate.OwnerOnlyError:
+                                        return writeErr(cmd, errorsOwnerOnly(actorID, e.OwnerActorID, id))
+                                default:
+                                        if err == mutate.ErrInvalidStatus {
+                                                return writeErr(cmd, errors.New("invalid status for this outline"))
+                                        }
+                                        return writeErr(cmd, err)
+                                }
+                        }
+                        if !res.Changed {
+                                return writeOut(cmd, app, map[string]any{"data": res.Item})
+                        }
+
+                        t = res.Item
                         t.UpdatedAt = time.Now().UTC()
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.set_status", t.ID, map[string]any{
-                                "from":   prev,
-                                "to":     strings.TrimSpace(t.StatusID),
-                                "status": strings.TrimSpace(t.StatusID), // backwards-compat
-                        })
+                        _ = s.AppendEvent(actorID, "item.set_status", t.ID, res.EventPayload)
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }

@@ -307,20 +307,27 @@ func newItemsArchiveCmd(app *App) *cobra.Command {
                                 return writeErr(cmd, err)
                         }
                         id := args[0]
-                        t, ok := db.FindItem(id)
-                        if !ok {
-                                return writeErr(cmd, errNotFound("item", id))
+                        res, err := mutate.SetItemArchived(db, actorID, id, !unarchive)
+                        if err != nil {
+                                switch e := err.(type) {
+                                case mutate.NotFoundError:
+                                        return writeErr(cmd, errNotFound(e.Kind, e.ID))
+                                case mutate.OwnerOnlyError:
+                                        return writeErr(cmd, errorsOwnerOnly(actorID, e.OwnerActorID, id))
+                                default:
+                                        return writeErr(cmd, err)
+                                }
                         }
-                        if !canEditTask(db, actorID, t) {
-                                return writeErr(cmd, errorsOwnerOnly(actorID, t.OwnerActorID, id))
+                        if !res.Changed {
+                                return writeOut(cmd, app, map[string]any{"data": res.Item})
                         }
 
-                        t.Archived = !unarchive
+                        t := res.Item
                         t.UpdatedAt = time.Now().UTC()
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.archive", t.ID, map[string]any{"archived": t.Archived})
+                        _ = s.AppendEvent(actorID, "item.archive", t.ID, res.EventPayload)
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }
