@@ -11,7 +11,9 @@ import (
         "time"
 
         "clarity-cli/internal/model"
+        "clarity-cli/internal/mutate"
         "clarity-cli/internal/perm"
+        "clarity-cli/internal/statusutil"
         "clarity-cli/internal/store"
 
         "github.com/charmbracelet/bubbles/list"
@@ -8207,42 +8209,43 @@ func (m *appModel) setAssignedActor(itemID string, assignedActorID *string) erro
                 next = strings.TrimSpace(*assignedActorID)
         }
         return m.mutateItem(itemID, func(db *store.DB, it *model.Item) (bool, itemMutationResult, error) {
-                if next == "" {
-                        if it.AssignedActorID == nil || strings.TrimSpace(*it.AssignedActorID) == "" {
+                actorID := m.editActorID()
+                if actorID == "" {
+                        return false, itemMutationResult{}, errors.New("no current actor")
+                }
+
+                var target *string
+                if next != "" {
+                        tmp := next
+                        target = &tmp
+                }
+                res, err := mutate.SetAssignedActor(db, actorID, it.ID, target, mutate.AssignOpts{TakeAssigned: true})
+                if err != nil {
+                        switch e := err.(type) {
+                        case mutate.NotFoundError:
+                                if strings.TrimSpace(e.Kind) == "actor" {
+                                        return false, itemMutationResult{}, errors.New("actor not found")
+                                }
                                 return false, itemMutationResult{}, nil
+                        case mutate.OwnerOnlyError:
+                                return false, itemMutationResult{}, errors.New("permission denied")
+                        default:
+                                return false, itemMutationResult{}, err
                         }
-                        it.AssignedActorID = nil
+                }
+                if !res.Changed {
+                        return false, itemMutationResult{}, nil
+                }
+                if target == nil {
                         return true, itemMutationResult{
                                 eventType:    "item.set_assign",
-                                eventPayload: map[string]any{"assignedActorId": nil},
+                                eventPayload: res.EventPayload,
                                 minibuffer:   "Unassigned",
                         }, nil
                 }
-                if _, ok := db.FindActor(next); !ok {
-                        return false, itemMutationResult{}, errors.New("actor not found")
-                }
-                if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) == next {
-                        return false, itemMutationResult{}, nil
-                }
-
-                // Transfer ownership when assigning to someone else.
-                if strings.TrimSpace(it.OwnerActorID) != next {
-                        now := time.Now().UTC()
-                        prev := strings.TrimSpace(it.OwnerActorID)
-                        if prev != "" {
-                                it.OwnerDelegatedFrom = &prev
-                                it.OwnerDelegatedAt = &now
-                        } else {
-                                it.OwnerDelegatedFrom = nil
-                                it.OwnerDelegatedAt = nil
-                        }
-                        it.OwnerActorID = next
-                }
-                tmp := next
-                it.AssignedActorID = &tmp
                 return true, itemMutationResult{
                         eventType:    "item.set_assign",
-                        eventPayload: map[string]any{"assignedActorId": it.AssignedActorID},
+                        eventPayload: res.EventPayload,
                         minibuffer:   "Assigned: @" + actorDisplayLabel(db, next),
                 }, nil
         })
@@ -9226,7 +9229,7 @@ func (m *appModel) moveItemToOutline(itemID, toOutlineID, statusOverride string,
                         if statusOverride == "" {
                                 return false, itemMutationResult{}, errors.New("missing status")
                         }
-                        if _, ok := db.StatusDef(o.ID, statusOverride); !ok {
+                        if !statusutil.ValidateStatusID(*o, statusOverride) {
                                 return false, itemMutationResult{}, errors.New("invalid status id for target outline")
                         }
                 }
@@ -9265,7 +9268,7 @@ func (m *appModel) moveItemToOutline(itemID, toOutlineID, statusOverride string,
                         if id == it.ID && statusOverride != "" {
                                 nextStatus = statusOverride
                         }
-                        if _, ok := db.StatusDef(o.ID, nextStatus); !ok {
+                        if nextStatus == "" || !statusutil.ValidateStatusID(*o, nextStatus) {
                                 if applyStatusToInvalidSubtree {
                                         nextStatus = statusOverride
                                 } else {
@@ -9363,13 +9366,18 @@ func subtreeHasInvalidStatusInOutline(db *store.DB, rootID, outlineID string) bo
         if db == nil || rootID == "" || outlineID == "" {
                 return false
         }
+        o, ok := db.FindOutline(outlineID)
+        if !ok || o == nil {
+                return true
+        }
         ids := collectSubtreeItemIDs(db, rootID)
         for _, id := range ids {
                 it, ok := db.FindItem(id)
                 if !ok {
                         continue
                 }
-                if _, ok := db.StatusDef(outlineID, strings.TrimSpace(it.StatusID)); !ok {
+                sid := strings.TrimSpace(it.StatusID)
+                if sid == "" || !statusutil.ValidateStatusID(*o, sid) {
                         return true
                 }
         }
@@ -9424,14 +9432,7 @@ func (m *appModel) setStatusForItem(itemID, statusID string) error {
                 // Validate against outline status defs (empty is always allowed).
                 if statusID != "" {
                         if o, ok := db.FindOutline(it.OutlineID); ok && o != nil {
-                                valid := false
-                                for _, def := range o.StatusDefs {
-                                        if def.ID == statusID {
-                                                valid = true
-                                                break
-                                        }
-                                }
-                                if !valid {
+                                if !statusutil.ValidateStatusID(*o, statusID) {
                                         return false, itemMutationResult{}, errors.New("invalid status")
                                 }
                         }

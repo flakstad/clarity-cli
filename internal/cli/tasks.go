@@ -7,6 +7,7 @@ import (
         "time"
 
         "clarity-cli/internal/model"
+        "clarity-cli/internal/statusutil"
         "clarity-cli/internal/store"
 
         "github.com/spf13/cobra"
@@ -642,12 +643,18 @@ func newItemsSetStatusCmd(app *App) *cobra.Command {
                         }
                         if st == "" {
                                 // allow "no status"
-                        } else if _, ok := db.StatusDef(t.OutlineID, st); !ok {
-                                // also allow labels as input by resolving them
-                                if sid, ok := resolveStatusIDByLabel(db, t.OutlineID, st); ok {
-                                        st = sid
+                        } else {
+                                o, ok := db.FindOutline(t.OutlineID)
+                                valid := ok && o != nil && statusutil.ValidateStatusID(*o, st)
+                                if valid {
+                                        // ok
                                 } else {
-                                        return writeErr(cmd, errors.New("invalid status for this outline"))
+                                        // also allow labels as input by resolving them
+                                        if sid, ok := resolveStatusIDByLabel(db, t.OutlineID, st); ok {
+                                                st = sid
+                                        } else {
+                                                return writeErr(cmd, errors.New("invalid status for this outline"))
+                                        }
                                 }
                         }
                         if isEndState(db, t.OutlineID, st) {

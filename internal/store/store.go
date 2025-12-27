@@ -13,6 +13,7 @@ import (
         "time"
 
         "clarity-cli/internal/model"
+        "clarity-cli/internal/statusutil"
 )
 
 const (
@@ -507,23 +508,7 @@ func NormalizeActorKind(s string) (model.ActorKind, error) {
 }
 
 func ParseStatusID(s string) (string, error) {
-        switch strings.ToUpper(strings.TrimSpace(s)) {
-        case "TODO", "todo":
-                return "todo", nil
-        case "DOING", "doing":
-                return "doing", nil
-        case "DONE", "done":
-                return "done", nil
-        case "NONE", "none":
-                return "", nil
-        default:
-                // For outline-defined statuses, we allow any non-empty id.
-                s = strings.TrimSpace(s)
-                if s == "" {
-                        return "", fmt.Errorf("invalid status: empty")
-                }
-                return s, nil
-        }
+        return statusutil.NormalizeStatusID(s)
 }
 
 func ReadEvents(dir string, limit int) ([]model.Event, error) {

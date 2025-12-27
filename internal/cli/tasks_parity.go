@@ -5,6 +5,8 @@ import (
         "strings"
         "time"
 
+        "clarity-cli/internal/mutate"
+
         "github.com/spf13/cobra"
 )
 
@@ -249,73 +251,38 @@ func newItemsSetAssignCmd(app *App) *cobra.Command {
                         }
 
                         id := args[0]
-                        t, ok := db.FindItem(id)
-                        if !ok {
-                                return writeErr(cmd, errNotFound("item", id))
+                        var target *string
+                        if clear {
+                                target = nil
+                        } else {
+                                if strings.TrimSpace(assignee) == "" {
+                                        return writeErr(cmd, errors.New("missing --assignee (or pass --clear)"))
+                                }
+                                tmp := strings.TrimSpace(assignee)
+                                target = &tmp
                         }
 
-                        if clear {
-                                // Owner-only: clearing assignment does not transfer ownership.
-                                if !canEditTask(db, actorID, t) {
-                                        return writeErr(cmd, errorsOwnerOnly(actorID, t.OwnerActorID, id))
-                                }
-                                t.AssignedActorID = nil
-                                t.UpdatedAt = time.Now().UTC()
-                                if err := s.Save(db); err != nil {
+                        res, err := mutate.SetAssignedActor(db, actorID, id, target, mutate.AssignOpts{TakeAssigned: true})
+                        if err != nil {
+                                switch e := err.(type) {
+                                case mutate.NotFoundError:
+                                        return writeErr(cmd, errNotFound(e.Kind, e.ID))
+                                case mutate.OwnerOnlyError:
+                                        return writeErr(cmd, errorsOwnerOnly(actorID, e.OwnerActorID, id))
+                                default:
                                         return writeErr(cmd, err)
                                 }
-                                _ = s.AppendEvent(actorID, "item.set_assign", t.ID, map[string]any{"assignedActorId": nil})
-                                return writeOut(cmd, app, map[string]any{"data": t})
+                        }
+                        if !res.Changed {
+                                return writeOut(cmd, app, map[string]any{"data": res.Item})
                         }
 
-                        if strings.TrimSpace(assignee) == "" {
-                                return writeErr(cmd, errors.New("missing --assignee (or pass --clear)"))
-                        }
-                        if _, ok := db.FindActor(assignee); !ok {
-                                return writeErr(cmd, errNotFound("actor", assignee))
-                        }
-
-                        // Special case: allow an agent to self-assign an unassigned item
-                        // belonging to the same human user, even if they're not the current owner.
-                        isUnassigned := t.AssignedActorID == nil
-                        isSelfAssign := assignee == actorID
-                        if isUnassigned && isSelfAssign {
-                                curHuman, ok1 := db.HumanUserIDForActor(actorID)
-                                ownerHuman, ok2 := db.HumanUserIDForActor(t.OwnerActorID)
-                                if ok1 && ok2 && curHuman == ownerHuman {
-                                        // OK: claim the item. Transfer ownership to the agent.
-                                        tmp := actorID
-                                        t.AssignedActorID = &tmp
-                                        t.OwnerActorID = actorID
-                                        t.OwnerDelegatedFrom = nil
-                                        t.OwnerDelegatedAt = nil
-                                } else if !canEditTask(db, actorID, t) {
-                                        return writeErr(cmd, errorsOwnerOnly(actorID, t.OwnerActorID, id))
-                                }
-                        } else {
-                                // Normal path: owner-only.
-                                if !canEditTask(db, actorID, t) {
-                                        return writeErr(cmd, errorsOwnerOnly(actorID, t.OwnerActorID, id))
-                                }
-
-                                // Transfer ownership when assigning to someone else.
-                                if assignee != t.OwnerActorID {
-                                        now := time.Now().UTC()
-                                        prev := t.OwnerActorID
-                                        t.OwnerDelegatedFrom = &prev
-                                        t.OwnerDelegatedAt = &now
-                                        t.OwnerActorID = assignee
-                                }
-                                tmp := assignee
-                                t.AssignedActorID = &tmp
-                        }
-
-                        t.UpdatedAt = time.Now().UTC()
+                        res.Item.UpdatedAt = time.Now().UTC()
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.set_assign", t.ID, map[string]any{"assignedActorId": t.AssignedActorID})
-                        return writeOut(cmd, app, map[string]any{"data": t})
+                        _ = s.AppendEvent(actorID, "item.set_assign", res.Item.ID, res.EventPayload)
+                        return writeOut(cmd, app, map[string]any{"data": res.Item})
                 },
         }
         cmd.Flags().StringVar(&assignee, "assignee", "", "Actor id to assign to")

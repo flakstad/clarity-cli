@@ -6,6 +6,7 @@ import (
         "time"
 
         "clarity-cli/internal/model"
+        "clarity-cli/internal/mutate"
         "clarity-cli/internal/store"
 
         "github.com/spf13/cobra"
@@ -70,69 +71,27 @@ func claimItemAsCurrentActor(app *App, db *store.DB, s store.Store, itemID strin
                 return nil, err
         }
 
-        t, ok := db.FindItem(itemID)
-        if !ok {
-                return nil, errNotFound("item", itemID)
-        }
-
-        // No-op: already assigned to current actor.
-        if t.AssignedActorID != nil && *t.AssignedActorID == actorID {
-                return t, nil
-        }
-
-        // Soft coordination: don't take an already-assigned item unless explicitly requested.
-        if t.AssignedActorID != nil && strings.TrimSpace(*t.AssignedActorID) != "" && *t.AssignedActorID != actorID && !opts.TakeAssigned {
-                return nil, errors.New("item is already assigned; pass --take-assigned to take it anyway")
-        }
-
-        // Mirrors the behavior of items set-assign, but always targets the current actor.
-        isUnassigned := t.AssignedActorID == nil
-        if isUnassigned {
-                // Allow an agent to claim an unassigned item belonging to the same human user.
-                curHuman, ok1 := db.HumanUserIDForActor(actorID)
-                ownerHuman, ok2 := db.HumanUserIDForActor(t.OwnerActorID)
-                if ok1 && ok2 && curHuman == ownerHuman {
-                        tmp := actorID
-                        t.AssignedActorID = &tmp
-                        t.OwnerActorID = actorID
-                        t.OwnerDelegatedFrom = nil
-                        t.OwnerDelegatedAt = nil
-                } else if !canEditTask(db, actorID, t) {
-                        return nil, errorsOwnerOnly(actorID, t.OwnerActorID, itemID)
-                } else {
-                        // Owner can assign to self; transfer ownership to self with delegation.
-                        if actorID != t.OwnerActorID {
-                                now := time.Now().UTC()
-                                prev := t.OwnerActorID
-                                t.OwnerDelegatedFrom = &prev
-                                t.OwnerDelegatedAt = &now
-                                t.OwnerActorID = actorID
-                        }
-                        tmp := actorID
-                        t.AssignedActorID = &tmp
+        res, err := mutate.SetAssignedActor(db, actorID, itemID, &actorID, mutate.AssignOpts{TakeAssigned: opts.TakeAssigned})
+        if err != nil {
+                switch e := err.(type) {
+                case mutate.NotFoundError:
+                        return nil, errNotFound(e.Kind, e.ID)
+                case mutate.OwnerOnlyError:
+                        return nil, errorsOwnerOnly(actorID, e.OwnerActorID, itemID)
+                default:
+                        return nil, err
                 }
-        } else {
-                // Assigned to someone else; owner-only (or delegated) to reassign.
-                if !canEditTask(db, actorID, t) {
-                        return nil, errorsOwnerOnly(actorID, t.OwnerActorID, itemID)
-                }
-                if actorID != t.OwnerActorID {
-                        now := time.Now().UTC()
-                        prev := t.OwnerActorID
-                        t.OwnerDelegatedFrom = &prev
-                        t.OwnerDelegatedAt = &now
-                        t.OwnerActorID = actorID
-                }
-                tmp := actorID
-                t.AssignedActorID = &tmp
+        }
+        if !res.Changed {
+                return res.Item, nil
         }
 
-        t.UpdatedAt = time.Now().UTC()
+        res.Item.UpdatedAt = time.Now().UTC()
         if err := s.Save(db); err != nil {
                 return nil, err
         }
-        _ = s.AppendEvent(actorID, "item.set_assign", t.ID, map[string]any{"assignedActorId": t.AssignedActorID})
-        return t, nil
+        _ = s.AppendEvent(actorID, "item.set_assign", res.Item.ID, res.EventPayload)
+        return res.Item, nil
 }
 
 var _ = errors.New // keep imports stable if we tweak error paths later

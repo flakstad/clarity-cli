@@ -1,11 +1,17 @@
 package cli
 
-import "clarity-cli/internal/store"
+import (
+        "clarity-cli/internal/model"
+        "clarity-cli/internal/statusutil"
+        "clarity-cli/internal/store"
+)
 
 func isEndState(db *store.DB, outlineID, statusID string) bool {
-        if def, ok := db.StatusDef(outlineID, statusID); ok {
-                return def.IsEndState
+        if db != nil {
+                if o, ok := db.FindOutline(outlineID); ok && o != nil {
+                        return statusutil.IsEndState(*o, statusID)
+                }
         }
         // Fallback for older data / unknown outlines.
-        return statusID == "done"
+        return statusutil.IsEndState(model.Outline{}, statusID)
 }

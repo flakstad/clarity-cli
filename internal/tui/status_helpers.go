@@ -4,20 +4,11 @@ import (
         "strings"
 
         "clarity-cli/internal/model"
+        "clarity-cli/internal/statusutil"
 )
 
 func isEndState(outline model.Outline, statusID string) bool {
-        sid := strings.TrimSpace(statusID)
-        if sid == "" {
-                return false
-        }
-        for _, def := range outline.StatusDefs {
-                if def.ID == sid {
-                        return def.IsEndState
-                }
-        }
-        // Fallback for legacy outlines or stores without status defs.
-        return strings.ToLower(sid) == "done"
+        return statusutil.IsEndState(outline, statusID)
 }
 
 // countProgressChildren counts direct children used for the progress cookie.
@@ -32,7 +23,7 @@ func countProgressChildren(outline model.Outline, children []model.Item) (done i
                         continue
                 }
                 total++
-                if isEndState(outline, sid) {
+                if statusutil.IsEndState(outline, sid) {
                         done++
                 }
         }
