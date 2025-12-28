@@ -11,6 +11,7 @@ import (
 )
 
 var ErrInvalidStatus = errors.New("invalid status")
+var ErrStatusNoteRequired = errors.New("status note required")
 
 type SetStatusResult struct {
         Item         *model.Item
@@ -20,7 +21,7 @@ type SetStatusResult struct {
 
 // SetItemStatus sets item.StatusID, validating against the item's outline status defs (empty is allowed).
 // Callers are responsible for saving db and appending the item.set_status event.
-func SetItemStatus(db *store.DB, actorID, itemID, statusID string) (SetStatusResult, error) {
+func SetItemStatus(db *store.DB, actorID, itemID, statusID string, note *string) (SetStatusResult, error) {
         itemID = strings.TrimSpace(itemID)
         actorID = strings.TrimSpace(actorID)
         statusID = strings.TrimSpace(statusID)
@@ -50,16 +51,23 @@ func SetItemStatus(db *store.DB, actorID, itemID, statusID string) (SetStatusRes
                 if !statusutil.ValidateStatusID(*o, statusID) {
                         return SetStatusResult{}, ErrInvalidStatus
                 }
+                if statusutil.RequiresNote(*o, statusID) && note == nil {
+                        return SetStatusResult{}, ErrStatusNoteRequired
+                }
         }
 
         it.StatusID = statusID
+        payload := map[string]any{
+                "from":   prev,
+                "to":     strings.TrimSpace(it.StatusID),
+                "status": strings.TrimSpace(it.StatusID), // backwards-compat
+        }
+        if note != nil {
+                payload["note"] = *note
+        }
         return SetStatusResult{
-                Item:    it,
-                Changed: true,
-                EventPayload: map[string]any{
-                        "from":   prev,
-                        "to":     strings.TrimSpace(it.StatusID),
-                        "status": strings.TrimSpace(it.StatusID), // backwards-compat
-                },
+                Item:         it,
+                Changed:      true,
+                EventPayload: payload,
         }, nil
 }

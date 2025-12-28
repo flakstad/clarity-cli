@@ -459,11 +459,11 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                                 return mm, nil
                         },
                 }
-                actions["t"] = actionPanelAction{
-                        label: "Templates… (coming soon)",
+                actions["ctrl+t"] = actionPanelAction{
+                        label: "Capture templates…",
                         kind:  actionPanelActionExec,
                         handler: func(mm appModel) (appModel, tea.Cmd) {
-                                mm.showMinibuffer("Capture templates: coming soon")
+                                (&mm).openCaptureTemplatesModal()
                                 return mm, nil
                         },
                 }
@@ -1401,7 +1401,7 @@ func (m appModel) footerText() string {
                 return "rename outline: type, enter: save, esc: cancel"
         }
         if m.modal == modalEditOutlineStatuses {
-                return "outline statuses: a:add  r:rename  e:toggle end  d:delete  ctrl+k/j:move  esc:close"
+                return "outline statuses: a:add  r:rename  e:toggle end  n:toggle note  d:delete  ctrl+k/j:move  esc:close"
         }
         if m.modal == modalAddOutlineStatus {
                 return "add status: type label, enter: add, esc: cancel"
@@ -1432,19 +1432,22 @@ func (m appModel) footerText() string {
                         return "rename outline: type, enter/ctrl+s: save, esc/ctrl+g: cancel"
                 }
                 if m.modal == modalAddComment {
-                        return "comment: tab: focus  ctrl+s: save  esc/ctrl+g: cancel"
+                        return "comment: tab: focus  ctrl+o: editor  ctrl+s: save  esc/ctrl+g: cancel"
                 }
                 if m.modal == modalReplyComment {
-                        return "reply: tab: focus  ctrl+s: save  esc/ctrl+g: cancel"
+                        return "reply: tab: focus  ctrl+o: editor  ctrl+s: save  esc/ctrl+g: cancel"
                 }
                 if m.modal == modalAddWorklog {
-                        return "worklog: tab: focus  ctrl+s: save  esc/ctrl+g: cancel"
+                        return "worklog: tab: focus  ctrl+o: editor  ctrl+s: save  esc/ctrl+g: cancel"
                 }
                 if m.modal == modalEditDescription {
-                        return "description: tab: focus  ctrl+s: save  esc/ctrl+g: cancel"
+                        return "description: tab: focus  ctrl+o: editor  ctrl+s: save  esc/ctrl+g: cancel"
+                }
+                if m.modal == modalStatusNote {
+                        return "status note: tab: focus  ctrl+o: editor  ctrl+s: save  esc/ctrl+g: cancel"
                 }
                 if m.modal == modalEditOutlineDescription {
-                        return "outline description: tab: focus  ctrl+s: save  esc/ctrl+g: cancel"
+                        return "outline description: tab: focus  ctrl+o: editor  ctrl+s: save  esc/ctrl+g: cancel"
                 }
                 if m.modal == modalSetDue {
                         return "due: tab: focus  enter/ctrl+s: save  ctrl+c: clear  esc/ctrl+g: cancel"
@@ -3003,6 +3006,8 @@ func (m *appModel) renderModal() string {
                 return m.renderInputModal("Edit title")
         case modalEditDescription:
                 return m.renderTextAreaModal("Edit description")
+        case modalStatusNote:
+                return m.renderStatusNoteModal()
         case modalEditOutlineName:
                 return m.renderInputModal("Rename outline")
         case modalEditOutlineDescription:
@@ -3021,12 +3026,24 @@ func (m *appModel) renderModal() string {
                 return m.renderTagsModal()
         case modalPickWorkspace:
                 return renderModalBox(m.width, "Workspaces", m.workspaceList.View()+"\n\nenter: switch   n:new   r:rename   esc/ctrl+g: close")
+        case modalCaptureTemplates:
+                return m.renderCaptureTemplatesModal()
+        case modalCaptureTemplateName:
+                return m.renderInputModal("Capture template: name")
+        case modalCaptureTemplateKeys:
+                return m.renderInputModal("Capture template: keys")
+        case modalCaptureTemplatePickWorkspace:
+                return renderModalBox(m.width, "Capture template: workspace", m.captureTemplateWorkspaceList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
+        case modalCaptureTemplatePickOutline:
+                return renderModalBox(m.width, "Capture template: outline", m.captureTemplateOutlineList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
+        case modalConfirmDeleteCaptureTemplate:
+                return m.renderConfirmDeleteCaptureTemplateModal()
         case modalNewWorkspace:
                 return m.renderInputModal("New workspace")
         case modalRenameWorkspace:
                 return m.renderInputModal("Rename workspace")
         case modalEditOutlineStatuses:
-                return renderModalBox(m.width, "Outline statuses", m.outlineStatusDefsList.View()+"\n\na:add  r:rename  e:toggle end  d:delete  ctrl+k/j:move  esc/ctrl+g: close")
+                return renderModalBox(m.width, "Outline statuses", m.outlineStatusDefsList.View()+"\n\na:add  r:rename  e:toggle end  n:toggle note  d:delete  ctrl+k/j:move  esc/ctrl+g: close")
         case modalAddOutlineStatus:
                 return m.renderInputModal("Add status")
         case modalRenameOutlineStatus:
@@ -3193,9 +3210,64 @@ func (m *appModel) renderTextAreaModal(title string) string {
                 "",
                 controls,
                 "",
-                "ctrl+s: save    tab: focus    esc/ctrl+g: cancel",
+                "ctrl+o: editor    ctrl+s: save    tab: focus    esc/ctrl+g: cancel",
         }, "\n")
         return renderModalBox(m.width, title, body)
+}
+
+func (m *appModel) renderStatusNoteModal() string {
+        itemID := strings.TrimSpace(m.modalForID)
+        statusID := strings.TrimSpace(m.modalForKey)
+        statusLbl := statusID
+        if m.db != nil && itemID != "" {
+                if it, ok := m.db.FindItem(itemID); ok && it != nil {
+                        if o, ok := m.db.FindOutline(strings.TrimSpace(it.OutlineID)); ok && o != nil {
+                                lbl := strings.TrimSpace(statusLabel(*o, statusID))
+                                if lbl != "" {
+                                        statusLbl = lbl
+                                }
+                        }
+                }
+        }
+        statusLbl = strings.TrimSpace(statusLbl)
+        if statusLbl == "" {
+                statusLbl = "(no status)"
+        }
+
+        header := styleMuted().Render("Add note setting item to " + strings.ToUpper(statusLbl))
+
+        // Avoid borders here: some terminals show background artifacts when nesting bordered
+        // components inside a modal with a background color.
+        btnBase := lipgloss.NewStyle().
+                Padding(0, 1).
+                Foreground(colorSurfaceFg).
+                Background(colorControlBg)
+        btnActive := btnBase.
+                Foreground(colorSelectedFg).
+                Background(colorSelectedBg).
+                Bold(true)
+
+        save := btnBase.Render("Save")
+        cancel := btnBase.Render("Cancel")
+        if m.textFocus == textFocusSave {
+                save = btnActive.Render("Save")
+        }
+        if m.textFocus == textFocusCancel {
+                cancel = btnActive.Render("Cancel")
+        }
+
+        sep := lipgloss.NewStyle().Background(colorControlBg).Render(" ")
+        controls := lipgloss.JoinHorizontal(lipgloss.Top, save, sep, cancel)
+        body := strings.Join([]string{
+                header,
+                "",
+                m.textarea.View(),
+                "",
+                controls,
+                "",
+                "ctrl+o: editor    ctrl+s: save    tab: focus    esc/ctrl+g: cancel",
+        }, "\n")
+        return renderModalBox(m.width, "Status note", body)
 }
 
 func (m *appModel) renderReplyCommentModal() string {
@@ -3242,7 +3314,7 @@ func (m *appModel) renderReplyCommentModal() string {
                 "",
                 controls,
                 "",
-                "tab: focus   ctrl+s: save   esc/ctrl+g: cancel",
+                "ctrl+o: editor   tab: focus   ctrl+s: save   esc/ctrl+g: cancel",
         }, "\n")
         return renderModalBox(m.width, "Reply", body)
 }
@@ -3493,6 +3565,16 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                 m.refreshOutlineStatusDefsEditor(oid, strings.TrimSpace(it.def.ID))
                                                 return m, nil
                                         }
+                                case "n":
+                                        if it, ok := m.outlineStatusDefsList.SelectedItem().(outlineStatusDefItem); ok {
+                                                oid := strings.TrimSpace(m.modalForID)
+                                                if err := m.toggleOutlineStatusRequiresNote(oid, strings.TrimSpace(it.def.ID)); err != nil {
+                                                        m.showMinibuffer("Update failed: " + err.Error())
+                                                        return m, nil
+                                                }
+                                                m.refreshOutlineStatusDefsEditor(oid, strings.TrimSpace(it.def.ID))
+                                                return m, nil
+                                        }
                                 case "d":
                                         if it, ok := m.outlineStatusDefsList.SelectedItem().(outlineStatusDefItem); ok {
                                                 oid := strings.TrimSpace(m.modalForID)
@@ -3657,7 +3739,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                 m.dateFocus = dateFocusYear
                                                 return m, nil
                                         }
-                                case "up", "k":
+                                case "up", "k", "ctrl+p":
                                         if m.dateFocus == dateFocusTimeToggle {
                                                 // Toggle time on/off.
                                                 m.timeEnabled = !m.timeEnabled
@@ -3678,7 +3760,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         if m.bumpDateTimeField(+1) {
                                                 return m, nil
                                         }
-                                case "down", "j":
+                                case "down", "j", "ctrl+n":
                                         if m.dateFocus == dateFocusTimeToggle {
                                                 m.timeEnabled = !m.timeEnabled
                                                 if !m.timeEnabled {
@@ -3944,7 +4026,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, nil
                 }
 
-                if m.modal == modalAddComment || m.modal == modalReplyComment || m.modal == modalAddWorklog || m.modal == modalEditDescription || m.modal == modalEditOutlineDescription {
+                if m.modal == modalAddComment || m.modal == modalReplyComment || m.modal == modalAddWorklog || m.modal == modalEditDescription || m.modal == modalEditOutlineDescription || m.modal == modalStatusNote {
                         switch km := msg.(type) {
                         case tea.KeyMsg:
                                 switch km.String() {
@@ -3994,6 +4076,12 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                         if err := m.setDescriptionFromModal(body); err != nil {
                                                                 return m, m.reportError(itemID, err)
                                                         }
+                                                } else if m.modal == modalStatusNote {
+                                                        statusID := strings.TrimSpace(m.modalForKey)
+                                                        note := body // allow empty
+                                                        if err := (&m).setStatusForItemWithNote(itemID, statusID, &note); err != nil {
+                                                                return m, m.reportError(itemID, err)
+                                                        }
                                                 } else {
                                                         if body == "" {
                                                                 return m, nil
@@ -4033,6 +4121,12 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                 if err := m.setDescriptionFromModal(body); err != nil {
                                                         return m, m.reportError(itemID, err)
                                                 }
+                                        } else if m.modal == modalStatusNote {
+                                                statusID := strings.TrimSpace(m.modalForKey)
+                                                note := body // allow empty
+                                                if err := (&m).setStatusForItemWithNote(itemID, statusID, &note); err != nil {
+                                                        return m, m.reportError(itemID, err)
+                                                }
                                         } else if m.modal == modalEditOutlineDescription {
                                                 _ = m.setOutlineDescriptionFromModal(body)
                                         } else {
@@ -4056,6 +4150,20 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.textarea.Blur()
                                         m.textFocus = textFocusBody
                                         return m, nil
+                                case "ctrl+o":
+                                        // Open the current textarea content in $VISUAL/$EDITOR.
+                                        // Keep the modal open; ctrl+s/Save still commits changes to the store.
+                                        if m.textFocus != textFocusBody {
+                                                return m, nil
+                                        }
+                                        m.textarea.Blur()
+                                        cmd, err := m.openExternalEditorForTextarea()
+                                        if err != nil {
+                                                m.textarea.Focus()
+                                                m.showMinibuffer("Editor open failed: " + err.Error())
+                                                return m, nil
+                                        }
+                                        return m, cmd
                                 }
                         }
                         var cmd tea.Cmd
@@ -4142,19 +4250,33 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                         if err := m.moveItemToOutline(itemID, to, it.id, true); err != nil {
                                                                 return m, m.reportError(itemID, err)
                                                         }
-                                                } else {
-                                                        if err := m.setStatusForItem(itemID, it.id); err != nil {
-                                                                return m, m.reportError(itemID, err)
+                                                        m.modal = modalNone
+                                                        m.modalForID = ""
+                                                        return m, nil
+                                                }
+
+                                                if m.db != nil {
+                                                        if cur, ok := m.db.FindItem(itemID); ok && cur != nil {
+                                                                var outline model.Outline
+                                                                if o, ok := m.db.FindOutline(cur.OutlineID); ok && o != nil {
+                                                                        outline = *o
+                                                                }
+                                                                if statusutil.IsEndState(outline, it.id) {
+                                                                        if reason := explainCompletionBlockers(m.db, cur.ID); strings.TrimSpace(reason) != "" {
+                                                                                return m, m.reportError(itemID, completionBlockedError{taskID: cur.ID, reason: reason})
+                                                                        }
+                                                                }
+                                                                if statusutil.RequiresNote(outline, it.id) {
+                                                                        m.openTextModal(modalStatusNote, itemID, "Status note…", "")
+                                                                        m.modalForKey = strings.TrimSpace(it.id)
+                                                                        return m, nil
+                                                                }
                                                         }
                                                 }
-                                                lbl := strings.TrimSpace(it.label)
-                                                if lbl == "" {
-                                                        lbl = strings.TrimSpace(it.id)
+
+                                                if err := m.setStatusForItem(itemID, it.id); err != nil {
+                                                        return m, m.reportError(itemID, err)
                                                 }
-                                                if lbl == "" {
-                                                        lbl = "(no status)"
-                                                }
-                                                m.showMinibuffer("Status: " + lbl)
                                         }
                                         m.modal = modalNone
                                         m.modalForID = ""
@@ -4358,10 +4480,118 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, cmd
                 }
 
+                if m.modal == modalCaptureTemplates {
+                        return m.updateCaptureTemplatesModal(msg)
+                }
+
+                if m.modal == modalConfirmDeleteCaptureTemplate {
+                        if km, ok := msg.(tea.KeyMsg); ok {
+                                switch km.String() {
+                                case "esc", "n":
+                                        m.modal = modalCaptureTemplates
+                                        m.captureTemplateDeleteIdx = -1
+                                        m.modalForID = ""
+                                        m.modalForKey = ""
+                                        return m, nil
+                                case "enter", "y":
+                                        if err := m.confirmDeleteCaptureTemplate(); err != nil {
+                                                m.showMinibuffer("Delete failed: " + err.Error())
+                                        } else {
+                                                m.showMinibuffer("Template deleted")
+                                        }
+                                        m.modal = modalCaptureTemplates
+                                        m.modalForID = ""
+                                        m.modalForKey = ""
+                                        m.refreshCaptureTemplatesList("")
+                                        return m, nil
+                                }
+                        }
+                        return m, nil
+                }
+
+                if m.modal == modalCaptureTemplatePickWorkspace {
+                        switch km := msg.(type) {
+                        case tea.KeyMsg:
+                                switch km.String() {
+                                case "esc":
+                                        m.modal = modalCaptureTemplates
+                                        return m, nil
+                                case "enter":
+                                        if m.captureTemplateEdit == nil {
+                                                m.modal = modalCaptureTemplates
+                                                return m, nil
+                                        }
+                                        ws := ""
+                                        if it, ok := m.captureTemplateWorkspaceList.SelectedItem().(captureTemplateWorkspaceItem); ok {
+                                                ws = strings.TrimSpace(it.name)
+                                        }
+                                        if ws == "" {
+                                                return m, nil
+                                        }
+                                        m.captureTemplateEdit.tmpl.Target.Workspace = ws
+                                        m.captureTemplateEdit.stage = captureTemplateEditOutline
+                                        m.openCaptureTemplateOutlinePicker(ws, m.captureTemplateEdit.tmpl.Target.OutlineID)
+                                        return m, nil
+                                }
+                        }
+                        var cmd tea.Cmd
+                        m.captureTemplateWorkspaceList, cmd = m.captureTemplateWorkspaceList.Update(msg)
+                        return m, cmd
+                }
+
+                if m.modal == modalCaptureTemplatePickOutline {
+                        switch km := msg.(type) {
+                        case tea.KeyMsg:
+                                switch km.String() {
+                                case "esc":
+                                        m.modal = modalCaptureTemplates
+                                        return m, nil
+                                case "enter":
+                                        if m.captureTemplateEdit == nil {
+                                                m.modal = modalCaptureTemplates
+                                                return m, nil
+                                        }
+                                        oid := ""
+                                        if it, ok := m.captureTemplateOutlineList.SelectedItem().(captureTemplateOutlineItem); ok {
+                                                oid = strings.TrimSpace(it.outline.ID)
+                                        }
+                                        if oid == "" {
+                                                return m, nil
+                                        }
+                                        m.captureTemplateEdit.tmpl.Target.OutlineID = oid
+                                        if err := m.saveCaptureTemplateEdit(); err != nil {
+                                                m.showMinibuffer("Save failed: " + err.Error())
+                                                m.modal = modalCaptureTemplates
+                                                return m, nil
+                                        }
+                                        keys := strings.Join(m.captureTemplateEdit.tmpl.Keys, "")
+                                        m.captureTemplateEdit = nil
+                                        m.showMinibuffer("Template saved")
+                                        m.modal = modalCaptureTemplates
+                                        m.refreshCaptureTemplatesList(keys)
+                                        return m, nil
+                                }
+                        }
+                        var cmd tea.Cmd
+                        m.captureTemplateOutlineList, cmd = m.captureTemplateOutlineList.Update(msg)
+                        return m, cmd
+                }
+
                 switch km := msg.(type) {
                 case tea.KeyMsg:
                         switch km.String() {
                         case "esc", "ctrl+g":
+                                if m.modal == modalCaptureTemplateName || m.modal == modalCaptureTemplateKeys {
+                                        m.modal = modalCaptureTemplates
+                                        m.captureTemplateEdit = nil
+                                        m.modalForID = ""
+                                        m.modalForKey = ""
+                                        m.textFocus = textFocusBody
+                                        m.input.Placeholder = "Title"
+                                        m.input.SetValue("")
+                                        m.input.Blur()
+                                        return m, nil
+                                }
                                 m.modal = modalNone
                                 m.modalForID = ""
                                 m.modalForKey = ""
@@ -4415,6 +4645,32 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         case "ctrl+s":
                                 val := strings.TrimSpace(m.input.Value())
                                 switch m.modal {
+                                case modalCaptureTemplateName:
+                                        if m.captureTemplateEdit == nil {
+                                                m.modal = modalCaptureTemplates
+                                                return m, nil
+                                        }
+                                        if val == "" {
+                                                return m, nil
+                                        }
+                                        m.captureTemplateEdit.tmpl.Name = val
+                                        m.captureTemplateEdit.stage = captureTemplateEditKeys
+                                        m.openInputModal(modalCaptureTemplateKeys, "", "Keys (e.g. w i or wi)", strings.Join(m.captureTemplateEdit.tmpl.Keys, " "))
+                                        return m, nil
+                                case modalCaptureTemplateKeys:
+                                        if m.captureTemplateEdit == nil {
+                                                m.modal = modalCaptureTemplates
+                                                return m, nil
+                                        }
+                                        keys, err := parseCaptureKeysInput(val)
+                                        if err != nil {
+                                                m.showMinibuffer("Keys: " + err.Error())
+                                                return m, nil
+                                        }
+                                        m.captureTemplateEdit.tmpl.Keys = keys
+                                        m.captureTemplateEdit.stage = captureTemplateEditWorkspace
+                                        m.openCaptureTemplateWorkspacePicker(m.captureTemplateEdit.tmpl.Target.Workspace)
+                                        return m, nil
                                 case modalJumpToItem:
                                         val = normalizeJumpItemID(val)
                                         if val == "" {
@@ -4927,7 +5183,7 @@ func (m *appModel) updateOutlineColumns(msg tea.KeyMsg) (bool, tea.Cmd) {
                         selectListItemByID(&m.itemsList, strings.TrimSpace(it.Item.ID))
                 }
                 return true, nil
-        case "down", "j":
+        case "down", "j", "ctrl+n":
                 sel.ItemID = ""
                 sel.Item++
                 sel = board.clamp(sel)
@@ -4938,7 +5194,7 @@ func (m *appModel) updateOutlineColumns(msg tea.KeyMsg) (bool, tea.Cmd) {
                         selectListItemByID(&m.itemsList, strings.TrimSpace(it.Item.ID))
                 }
                 return true, nil
-        case "up", "k":
+        case "up", "k", "ctrl+p":
                 sel.ItemID = ""
                 sel.Item--
                 sel = board.clamp(sel)
@@ -7372,6 +7628,27 @@ func (m *appModel) toggleOutlineStatusEndState(outlineID, statusID string) error
         })
 }
 
+func (m *appModel) toggleOutlineStatusRequiresNote(outlineID, statusID string) error {
+        statusID = strings.TrimSpace(statusID)
+        if statusID == "" {
+                return errors.New("missing status id")
+        }
+        return m.mutateOutline(outlineID, func(db *store.DB, o *model.Outline) (bool, outlineMutationResult, error) {
+                for i := range o.StatusDefs {
+                        if strings.TrimSpace(o.StatusDefs[i].ID) != statusID {
+                                continue
+                        }
+                        o.StatusDefs[i].RequiresNote = !o.StatusDefs[i].RequiresNote
+                        return true, outlineMutationResult{
+                                eventType:    "outline.status.update",
+                                eventPayload: map[string]any{"id": statusID, "requiresNote": o.StatusDefs[i].RequiresNote, "ts": time.Now().UTC()},
+                                minibuffer:   "Updated status " + statusID,
+                        }, nil
+                }
+                return false, outlineMutationResult{}, errors.New("status not found")
+        })
+}
+
 func (m *appModel) removeOutlineStatusDef(outlineID, statusID string) error {
         statusID = strings.TrimSpace(statusID)
         if statusID == "" {
@@ -7706,10 +7983,25 @@ func (m *appModel) cycleItemStatus(outline model.Outline, itemID string, delta i
         if next < 0 {
                 next += len(opts)
         }
-        return m.setStatusForItem(itemID, opts[next])
+        nextStatus := opts[next]
+        if statusutil.IsEndState(outline, nextStatus) {
+                if reason := explainCompletionBlockers(m.db, itemID); strings.TrimSpace(reason) != "" {
+                        return completionBlockedError{taskID: itemID, reason: reason}
+                }
+        }
+        if statusutil.RequiresNote(outline, nextStatus) {
+                m.openTextModal(modalStatusNote, itemID, "Status note…", "")
+                m.modalForKey = strings.TrimSpace(nextStatus)
+                return nil
+        }
+        return m.setStatusForItem(itemID, nextStatus)
 }
 
 func (m *appModel) setStatusForItem(itemID, statusID string) error {
+        return m.setStatusForItemWithNote(itemID, statusID, nil)
+}
+
+func (m *appModel) setStatusForItemWithNote(itemID, statusID string, note *string) error {
         itemID = strings.TrimSpace(itemID)
         statusID = strings.TrimSpace(statusID)
         return m.mutateItem(itemID, func(db *store.DB, it *model.Item) (bool, itemMutationResult, error) {
@@ -7728,10 +8020,13 @@ func (m *appModel) setStatusForItem(itemID, statusID string) error {
                 if actorID == "" {
                         return false, itemMutationResult{}, errors.New("no current actor")
                 }
-                res, err := mutate.SetItemStatus(db, actorID, it.ID, statusID)
+                res, err := mutate.SetItemStatus(db, actorID, it.ID, statusID, note)
                 if err != nil {
                         if err == mutate.ErrInvalidStatus {
                                 return false, itemMutationResult{}, errors.New("invalid status")
+                        }
+                        if err == mutate.ErrStatusNoteRequired {
+                                return false, itemMutationResult{}, errors.New("status requires a note")
                         }
                         switch err.(type) {
                         case mutate.OwnerOnlyError:

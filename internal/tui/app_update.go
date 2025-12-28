@@ -13,6 +13,15 @@ import (
 
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
         switch msg := msg.(type) {
+        case externalEditorDoneMsg:
+                m.applyExternalEditorResult(msg)
+                // If we're still in a text modal, keep the body focused after returning from the editor.
+                if m.modal == modalAddComment || m.modal == modalReplyComment || m.modal == modalAddWorklog || m.modal == modalEditDescription || m.modal == modalEditOutlineDescription || m.modal == modalStatusNote {
+                        m.textFocus = textFocusBody
+                        m.textarea.Focus()
+                }
+                return m, nil
+
         case tea.WindowSizeMsg:
                 m.width = msg.Width
                 m.height = msg.Height
@@ -729,7 +738,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                 }
 
                 switch km.String() {
-                case "up", "k":
+                case "up", "k", "ctrl+p":
                         switch m.itemFocus {
                         case itemFocusChildren:
                                 if len(children) > 0 && m.itemChildIdx > 0 {
@@ -769,7 +778,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 }
                                 return m, nil
                         }
-                case "down", "j":
+                case "down", "j", "ctrl+n":
                         switch m.itemFocus {
                         case itemFocusChildren:
                                 if n := len(children); n > 0 && m.itemChildIdx < n-1 {

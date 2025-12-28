@@ -50,3 +50,31 @@ func TestNewList_GoToStartEnd_AlsoSupportsAngleBrackets(t *testing.T) {
                 t.Fatalf("expected GoToEnd to include end and G; got %v", l.KeyMap.GoToEnd.Keys())
         }
 }
+
+func TestNewList_CursorNavigation_AlsoSupportsCtrlNP(t *testing.T) {
+        l := newList("t", "h", nil)
+
+        has := func(keys []string, want string) bool {
+                for _, k := range keys {
+                        if k == want {
+                                return true
+                        }
+                }
+                return false
+        }
+
+        if !has(l.KeyMap.CursorDown.Keys(), "ctrl+n") {
+                t.Fatalf("expected CursorDown to include ctrl+n; got %v", l.KeyMap.CursorDown.Keys())
+        }
+        if !has(l.KeyMap.CursorUp.Keys(), "ctrl+p") {
+                t.Fatalf("expected CursorUp to include ctrl+p; got %v", l.KeyMap.CursorUp.Keys())
+        }
+
+        // Ensure we didn't accidentally drop Bubble's defaults.
+        if !has(l.KeyMap.CursorDown.Keys(), "down") || !has(l.KeyMap.CursorDown.Keys(), "j") {
+                t.Fatalf("expected CursorDown to include down and j; got %v", l.KeyMap.CursorDown.Keys())
+        }
+        if !has(l.KeyMap.CursorUp.Keys(), "up") || !has(l.KeyMap.CursorUp.Keys(), "k") {
+                t.Fatalf("expected CursorUp to include up and k; got %v", l.KeyMap.CursorUp.Keys())
+        }
+}

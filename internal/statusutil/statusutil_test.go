@@ -76,3 +76,19 @@ func TestIsEndState(t *testing.T) {
                 t.Fatalf("expected fallback done end-state")
         }
 }
+
+func TestRequiresNote(t *testing.T) {
+        o := model.Outline{StatusDefs: []model.OutlineStatusDef{
+                {ID: "todo", RequiresNote: false},
+                {ID: "blocked", RequiresNote: true},
+        }}
+        if RequiresNote(o, "") {
+                t.Fatalf("expected empty to not require note")
+        }
+        if RequiresNote(o, "todo") {
+                t.Fatalf("expected todo to not require note")
+        }
+        if !RequiresNote(o, "blocked") {
+                t.Fatalf("expected blocked to require note")
+        }
+}

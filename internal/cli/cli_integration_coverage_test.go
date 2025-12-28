@@ -247,6 +247,7 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
         run(t, invocation{name: "items set-title", cmdPath: "items set-title", args: []string{"--dir", dir, "--actor", humanID, "items", "set-title", itemA, "--title", "Item A (renamed)"}, expect: expectJSONEnvelope})
         run(t, invocation{name: "items set-description", cmdPath: "items set-description", args: []string{"--dir", dir, "--actor", humanID, "items", "set-description", itemA, "--description", "Updated description"}, expect: expectJSONEnvelope})
         run(t, invocation{name: "items set-status", cmdPath: "items set-status", args: []string{"--dir", dir, "--actor", humanID, "items", "set-status", itemA, "--status", "doing"}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "items set-status --note", cmdPath: "items set-status", args: []string{"--dir", dir, "--actor", humanID, "items", "set-status", itemA, "--status", "todo", "--note", "context"}, expect: expectJSONEnvelope})
         // Negative: invalid status id/label for outline.
         run(t, invocation{name: "items set-status (invalid)", cmdPath: "items set-status", args: []string{"--dir", dir, "--actor", humanID, "items", "set-status", itemA, "--status", "does-not-exist"}, expect: expectError})
 
@@ -345,8 +346,11 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
         run(t, invocation{name: "outlines status list", cmdPath: "outlines status list", args: []string{"--dir", dir, "--actor", humanID, "outlines", "status", "list", out1}, expect: expectJSONEnvelope})
         // Add a new status to out1 and capture its label for reorder/update/remove.
         run(t, invocation{name: "outlines status add --label --end", cmdPath: "outlines status add", args: []string{"--dir", dir, "--actor", humanID, "outlines", "status", "add", out1, "--label", "Blocked", "--end"}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "outlines status add --require-note", cmdPath: "outlines status add", args: []string{"--dir", dir, "--actor", humanID, "outlines", "status", "add", out1, "--label", "NeedsNote", "--require-note"}, expect: expectJSONEnvelope})
         run(t, invocation{name: "outlines status update --label --not-end", cmdPath: "outlines status update", args: []string{"--dir", dir, "--actor", humanID, "outlines", "status", "update", out1, "Blocked", "--label", "Blocked2", "--not-end"}, expect: expectJSONEnvelope})
         run(t, invocation{name: "outlines status update --end", cmdPath: "outlines status update", args: []string{"--dir", dir, "--actor", humanID, "outlines", "status", "update", out1, "Blocked2", "--end"}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "outlines status update --no-require-note", cmdPath: "outlines status update", args: []string{"--dir", dir, "--actor", humanID, "outlines", "status", "update", out1, "NeedsNote", "--no-require-note"}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "outlines status update --require-note", cmdPath: "outlines status update", args: []string{"--dir", dir, "--actor", humanID, "outlines", "status", "update", out1, "NeedsNote", "--require-note"}, expect: expectJSONEnvelope})
         // Reorder requires all labels exactly once. We can read them from `outlines show`.
         statusLabels := mustStatusLabels(t, run(t, invocation{name: "outlines show (for reorder)", cmdPath: "outlines show", args: []string{"--dir", dir, "--actor", humanID, "outlines", "show", out1}, expect: expectJSONEnvelope}).env)
         rev := append([]string{}, statusLabels...)
@@ -528,6 +532,10 @@ func assertCoverage(
         for _, leaf := range leafCmds {
                 if leaf == "" {
                         // Root TUI: intentionally excluded from integration tests.
+                        continue
+                }
+                if leaf == "capture" {
+                        // Interactive TUI (requires terminal); excluded from non-interactive integration tests.
                         continue
                 }
                 if !coveredCmds[leaf] {

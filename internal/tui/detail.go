@@ -625,8 +625,10 @@ func eventSummary(ev model.Event) string {
                 // Prefer explicit transitions if available.
                 from, _ := m["from"].(string)
                 to, _ := m["to"].(string)
+                note, _ := m["note"].(string)
                 from = strings.TrimSpace(from)
                 to = strings.TrimSpace(to)
+                note = strings.TrimSpace(note)
                 if from != "" || to != "" {
                         if from == "" {
                                 from = "none"
@@ -635,15 +637,31 @@ func eventSummary(ev model.Event) string {
                                 to = "none"
                         }
                         if from == to {
-                                return "set status: " + to
+                                out := "set status: " + to
+                                if note != "" {
+                                        out += " (note: " + truncateInline(note, 48) + ")"
+                                }
+                                return out
                         }
-                        return "set status: " + from + " -> " + to
+                        out := "set status: " + from + " -> " + to
+                        if note != "" {
+                                out += " (note: " + truncateInline(note, 48) + ")"
+                        }
+                        return out
                 }
                 if v, ok := m["status"].(string); ok {
                         if strings.TrimSpace(v) == "" {
-                                return "set status: none"
+                                out := "set status: none"
+                                if note != "" {
+                                        out += " (note: " + truncateInline(note, 48) + ")"
+                                }
+                                return out
                         }
-                        return "set status: " + v
+                        out := "set status: " + v
+                        if note != "" {
+                                out += " (note: " + truncateInline(note, 48) + ")"
+                        }
+                        return out
                 }
         case "item.set_description":
                 return "updated description"

@@ -33,13 +33,13 @@ func TestSetItemStatus_ValidatesAgainstOutline(t *testing.T) {
                 },
         }
 
-        if _, err := SetItemStatus(db, "act-human", "item-1", "nope"); err == nil {
+        if _, err := SetItemStatus(db, "act-human", "item-1", "nope", nil); err == nil {
                 t.Fatalf("expected error")
         } else if err != ErrInvalidStatus {
                 t.Fatalf("expected ErrInvalidStatus; got %v", err)
         }
 
-        res, err := SetItemStatus(db, "act-human", "item-1", "done")
+        res, err := SetItemStatus(db, "act-human", "item-1", "done", nil)
         if err != nil {
                 t.Fatalf("SetItemStatus error: %v", err)
         }
@@ -51,7 +51,7 @@ func TestSetItemStatus_ValidatesAgainstOutline(t *testing.T) {
         }
 
         // Allow clearing status.
-        res2, err := SetItemStatus(db, "act-human", "item-1", "")
+        res2, err := SetItemStatus(db, "act-human", "item-1", "", nil)
         if err != nil {
                 t.Fatalf("SetItemStatus clear error: %v", err)
         }
@@ -60,5 +60,51 @@ func TestSetItemStatus_ValidatesAgainstOutline(t *testing.T) {
         }
         if got := res2.Item.StatusID; got != "" {
                 t.Fatalf("expected status cleared; got %q", got)
+        }
+}
+
+func TestSetItemStatus_RequiresNote_WhenStatusDefRequiresNote(t *testing.T) {
+        db := &store.DB{
+                Actors: []model.Actor{
+                        {ID: "act-human", Kind: model.ActorKindHuman, Name: "Human", UserID: strPtr("act-human")},
+                },
+                Outlines: []model.Outline{
+                        {
+                                ID:        "out-1",
+                                ProjectID: "proj-1",
+                                StatusDefs: []model.OutlineStatusDef{
+                                        {ID: "todo"},
+                                        {ID: "blocked", RequiresNote: true},
+                                },
+                        },
+                },
+                Items: []model.Item{
+                        {
+                                ID:           "item-1",
+                                ProjectID:    "proj-1",
+                                OutlineID:    "out-1",
+                                StatusID:     "todo",
+                                OwnerActorID: "act-human",
+                        },
+                },
+        }
+
+        if _, err := SetItemStatus(db, "act-human", "item-1", "blocked", nil); err != ErrStatusNoteRequired {
+                t.Fatalf("expected ErrStatusNoteRequired; got %v", err)
+        }
+
+        note := ""
+        res, err := SetItemStatus(db, "act-human", "item-1", "blocked", &note)
+        if err != nil {
+                t.Fatalf("SetItemStatus error: %v", err)
+        }
+        if !res.Changed {
+                t.Fatalf("expected changed=true")
+        }
+        if got := res.Item.StatusID; got != "blocked" {
+                t.Fatalf("expected status blocked; got %q", got)
+        }
+        if got, ok := res.EventPayload["note"]; !ok || got.(string) != "" {
+                t.Fatalf("expected payload.note to be present (empty allowed); got %#v", res.EventPayload)
         }
 }

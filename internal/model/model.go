@@ -25,9 +25,10 @@ type Project struct {
 }
 
 type OutlineStatusDef struct {
-        ID         string `json:"id"`
-        Label      string `json:"label"`
-        IsEndState bool   `json:"isEndState"`
+        ID           string `json:"id"`
+        Label        string `json:"label"`
+        IsEndState   bool   `json:"isEndState"`
+        RequiresNote bool   `json:"requiresNote,omitempty"`
 }
 
 type Outline struct {

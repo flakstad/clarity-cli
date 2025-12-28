@@ -69,6 +69,7 @@ func NewRootCmd() *cobra.Command {
         cmd.AddCommand(newEventsCmd(app))
         cmd.AddCommand(newWorklogCmd(app))
         cmd.AddCommand(newAgentCmd(app))
+        cmd.AddCommand(newCaptureCmd(app))
 
         return cmd
 }

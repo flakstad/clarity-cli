@@ -64,19 +64,19 @@ func renderItemSidePanelWithEvents(db *store.DB, it model.Item, width, height in
         case itemSideComments:
                 comments := db.CommentsForItem(it.ID)
                 lines = append(lines, headerStyle.Render(fmt.Sprintf("Comments (%d)", len(comments))))
-                lines = append(lines, headerStyle.Render("up/down: select  home/end: jump  pgup/pgdown: scroll  R: reply"))
+                lines = append(lines, headerStyle.Render("up/down, j/k, ctrl+n/p: select  home/end: jump  pgup/pgdown: scroll  R: reply"))
                 lines = append(lines, "")
                 lines = append(lines, renderThreadedComments(db, comments, commentIdx, innerW, height-3, scroll, focusRowStyle, moreStyle)...)
         case itemSideWorklog:
                 worklog := db.WorklogForItem(it.ID)
                 lines = append(lines, headerStyle.Render(fmt.Sprintf("Worklog (%d)", len(worklog))))
-                lines = append(lines, headerStyle.Render("up/down: select  home/end: jump  pgup/pgdown: scroll"))
+                lines = append(lines, headerStyle.Render("up/down, j/k, ctrl+n/p: select  home/end: jump  pgup/pgdown: scroll"))
                 lines = append(lines, "")
                 lines = append(lines, renderAccordionWorklog(db, worklog, worklogIdx, innerW, height-3, scroll, focusRowStyle, moreStyle)...)
         case itemSideHistory:
                 evs := filterEventsForItem(db, events, it.ID)
                 lines = append(lines, headerStyle.Render(fmt.Sprintf("History (%d)", len(evs))))
-                lines = append(lines, headerStyle.Render("up/down: select  home/end: jump  pgup/pgdown: scroll"))
+                lines = append(lines, headerStyle.Render("up/down, j/k, ctrl+n/p: select  home/end: jump  pgup/pgdown: scroll"))
                 lines = append(lines, "")
                 lines = append(lines, renderAccordionHistory(db, events, it.ID, historyIdx, innerW, height-3, scroll, focusRowStyle, moreStyle)...)
         }

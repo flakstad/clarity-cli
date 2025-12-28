@@ -48,6 +48,7 @@ func newOutlinesStatusListCmd(app *App) *cobra.Command {
 func newOutlinesStatusAddCmd(app *App) *cobra.Command {
         var label string
         var end bool
+        var requireNote bool
 
         cmd := &cobra.Command{
                 Use:   "add <outline-id>",
@@ -78,17 +79,18 @@ func newOutlinesStatusAddCmd(app *App) *cobra.Command {
                         }
 
                         id := store.NewStatusIDFromLabel(o, label)
-                        o.StatusDefs = append(o.StatusDefs, model.OutlineStatusDef{ID: id, Label: label, IsEndState: end})
+                        o.StatusDefs = append(o.StatusDefs, model.OutlineStatusDef{ID: id, Label: label, IsEndState: end, RequiresNote: requireNote})
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "outline.status.add", oid, map[string]any{"id": id, "label": label, "isEndState": end})
+                        _ = s.AppendEvent(actorID, "outline.status.add", oid, map[string]any{"id": id, "label": label, "isEndState": end, "requiresNote": requireNote})
                         return writeOut(cmd, app, map[string]any{"data": o})
                 },
         }
 
         cmd.Flags().StringVar(&label, "label", "", "Status label (display)")
         cmd.Flags().BoolVar(&end, "end", false, "Mark as end-state")
+        cmd.Flags().BoolVar(&requireNote, "require-note", false, "Require a note when changing to this status")
         _ = cmd.MarkFlagRequired("label")
         return cmd
 }
@@ -97,6 +99,8 @@ func newOutlinesStatusUpdateCmd(app *App) *cobra.Command {
         var label string
         var end bool
         var notEnd bool
+        var requireNote bool
+        var noRequireNote bool
 
         cmd := &cobra.Command{
                 Use:   "update <outline-id> <status-id-or-label>",
@@ -123,6 +127,9 @@ func newOutlinesStatusUpdateCmd(app *App) *cobra.Command {
                         if end && notEnd {
                                 return writeErr(cmd, errors.New("use only one of --end or --not-end"))
                         }
+                        if requireNote && noRequireNote {
+                                return writeErr(cmd, errors.New("use only one of --require-note or --no-require-note"))
+                        }
 
                         // Enforce label uniqueness if changing it.
                         if label != "" {
@@ -148,6 +155,12 @@ func newOutlinesStatusUpdateCmd(app *App) *cobra.Command {
                                 if notEnd {
                                         o.StatusDefs[i].IsEndState = false
                                 }
+                                if requireNote {
+                                        o.StatusDefs[i].RequiresNote = true
+                                }
+                                if noRequireNote {
+                                        o.StatusDefs[i].RequiresNote = false
+                                }
                                 break
                         }
                         if !found {
@@ -157,7 +170,7 @@ func newOutlinesStatusUpdateCmd(app *App) *cobra.Command {
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "outline.status.update", oid, map[string]any{"key": key, "label": label, "end": end, "notEnd": notEnd, "ts": time.Now().UTC()})
+                        _ = s.AppendEvent(actorID, "outline.status.update", oid, map[string]any{"key": key, "label": label, "end": end, "notEnd": notEnd, "requireNote": requireNote, "noRequireNote": noRequireNote, "ts": time.Now().UTC()})
                         return writeOut(cmd, app, map[string]any{"data": o})
                 },
         }
@@ -165,6 +178,8 @@ func newOutlinesStatusUpdateCmd(app *App) *cobra.Command {
         cmd.Flags().StringVar(&label, "label", "", "New label (optional)")
         cmd.Flags().BoolVar(&end, "end", false, "Set end-state true")
         cmd.Flags().BoolVar(&notEnd, "not-end", false, "Set end-state false")
+        cmd.Flags().BoolVar(&requireNote, "require-note", false, "Set requires-note true")
+        cmd.Flags().BoolVar(&noRequireNote, "no-require-note", false, "Set requires-note false")
         return cmd
 }
 

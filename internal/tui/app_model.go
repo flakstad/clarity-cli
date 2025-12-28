@@ -45,6 +45,12 @@ type appModel struct {
         // outlineStatusDefsList is used in the outline statuses editor modal.
         outlineStatusDefsList list.Model
 
+        captureTemplatesList         list.Model
+        captureTemplateWorkspaceList list.Model
+        captureTemplateOutlineList   list.Model
+        captureTemplateEdit          *captureTemplateEditState
+        captureTemplateDeleteIdx     int
+
         selectedProjectID string
         selectedOutlineID string
         selectedOutline   *model.Outline
@@ -97,6 +103,11 @@ type appModel struct {
         tagsFocus    tagsModalFocus
         timeEnabled  bool
         replyQuoteMD string
+
+        // externalEditorPath is the temp file used when opening the current textarea
+        // content in $VISUAL/$EDITOR.
+        externalEditorPath   string
+        externalEditorBefore string
 
         // pendingMoveOutlineTo is set when a move-outline flow needs the user to pick a status
         // compatible with the target outline. While set, the status picker "enter" applies the move.
@@ -260,6 +271,29 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
         m.outlineStatusDefsList.SetShowHelp(false)
         m.outlineStatusDefsList.SetShowStatusBar(false)
         m.outlineStatusDefsList.SetShowPagination(false)
+
+        m.captureTemplatesList = newList("Capture templates", "Manage capture templates", []list.Item{})
+        m.captureTemplatesList.SetDelegate(newCompactItemDelegate())
+        m.captureTemplatesList.SetFilteringEnabled(true)
+        m.captureTemplatesList.SetShowFilter(true)
+
+        m.captureTemplateWorkspaceList = newList("Workspaces", "Select a workspace", []list.Item{})
+        m.captureTemplateWorkspaceList.SetDelegate(newCompactItemDelegate())
+        m.captureTemplateWorkspaceList.SetFilteringEnabled(true)
+        m.captureTemplateWorkspaceList.SetShowFilter(true)
+        m.captureTemplateWorkspaceList.SetShowHelp(false)
+        m.captureTemplateWorkspaceList.SetShowStatusBar(false)
+        m.captureTemplateWorkspaceList.SetShowPagination(false)
+
+        m.captureTemplateOutlineList = newList("Outlines", "Select an outline", []list.Item{})
+        m.captureTemplateOutlineList.SetDelegate(newCompactItemDelegate())
+        m.captureTemplateOutlineList.SetFilteringEnabled(true)
+        m.captureTemplateOutlineList.SetShowFilter(true)
+        m.captureTemplateOutlineList.SetShowHelp(false)
+        m.captureTemplateOutlineList.SetShowStatusBar(false)
+        m.captureTemplateOutlineList.SetShowPagination(false)
+
+        m.captureTemplateDeleteIdx = -1
 
         m.input = textinput.New()
         m.input.Placeholder = "Title"

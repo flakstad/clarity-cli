@@ -8,7 +8,7 @@ Bubble Tea (and TUIs in general) render to a terminal (TTY). So "a separate wind
 
 ## Recommended pattern (portable)
 
-- Provide a dedicated, fast entrypoint: `clarity capture` (future).
+- Provide a dedicated, fast entrypoint: `clarity capture`.
 - Configure a terminal/OS hotkey to toggle a *pre-existing* terminal window, then run `clarity capture` inside it.
 - On save/cancel, `clarity capture` exits immediately so the hotkey window can hide/close again.
 
@@ -26,9 +26,40 @@ If cold-start performance still matters, consider a future `clarity daemon` so `
 
 ## What `clarity capture` should do (proposal)
 
-- Launch a minimal capture UI (title/body/tags/target project+outline).
+- Launch a minimal capture UI (template selection + draft item editor).
 - Create the item on submit and print a stable JSON envelope to stdout (for scripting).
 - Exit `0` on success, non-zero on cancel/error.
+
+## Capture templates (v1)
+
+Capture templates are configured globally in `~/.clarity/config.json` so you can capture into other workspaces (e.g. personal workspace while working in a day job workspace).
+
+You can manage templates in the TUI (recommended): open the Action Panel (`x`), go to Capture (`c`), then open “Capture templates…” (`ctrl+t`).
+
+Templates are selected via a multi-key sequence (org-capture style). Each key in `keys` must be exactly one character.
+
+Example:
+
+```json
+{
+  "captureTemplates": [
+    {
+      "name": "Work inbox",
+      "keys": ["w", "i"],
+      "target": { "workspace": "Flakstad Software", "outlineId": "out-y2v74pgi" }
+    },
+    {
+      "name": "Personal inbox",
+      "keys": ["p", "i"],
+      "target": { "workspace": "Personal", "outlineId": "out-abc123" }
+    }
+  ]
+}
+```
+
+Notes:
+- `target` is stored as `(workspace name, outline id)` for stability, but the TUI shows outline names (users shouldn’t need to think about ids).
+- During capture you can change the target outline (move) before saving; if the destination outline has different status definitions, capture will prompt you to pick a valid status.
 
 ### Capturing while doing other work (agent-friendly)
 If you’re in the middle of working on an item and notice an unrelated issue, capture it as a new item and include where it came from:

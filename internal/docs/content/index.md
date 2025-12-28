@@ -11,6 +11,7 @@ For long-form docs:
 - `clarity docs <topic>` (show topic)
 
 Recommended starting topics:
+- `direction`
 - `getting-started`
 - `output-contract`
 - `identity-ownership`

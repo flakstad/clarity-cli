@@ -12,6 +12,10 @@ import (
 type GlobalConfig struct {
         CurrentWorkspace string `json:"currentWorkspace,omitempty"`
 
+        // CaptureTemplates define user-configured quick-capture targets and key sequences.
+        // Stored globally (not per-workspace) to allow capturing across workspaces.
+        CaptureTemplates []CaptureTemplate `json:"captureTemplates,omitempty"`
+
         // DeviceID is a stable per-machine identifier. It is used to derive per-workspace replica IDs
         // so that cloning a workspace directory to another machine yields a new replicaId automatically.
         DeviceID string `json:"deviceId,omitempty"`

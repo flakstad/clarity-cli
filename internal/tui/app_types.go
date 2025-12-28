@@ -98,6 +98,7 @@ const (
         modalNewOutline
         modalEditTitle
         modalEditDescription
+        modalStatusNote
         modalEditOutlineName
         modalEditOutlineDescription
         modalSetDue
@@ -117,6 +118,12 @@ const (
         modalRenameOutlineStatus
         modalJumpToItem
         modalActionPanel
+        modalCaptureTemplates
+        modalCaptureTemplateName
+        modalCaptureTemplateKeys
+        modalCaptureTemplatePickWorkspace
+        modalCaptureTemplatePickOutline
+        modalConfirmDeleteCaptureTemplate
 )
 
 type actionPanelKind int
@@ -198,6 +205,8 @@ func (m *appModel) closeAllModals() {
         m.modalForKey = ""
         m.replyQuoteMD = ""
         m.pendingMoveOutlineTo = ""
+        m.captureTemplateEdit = nil
+        m.captureTemplateDeleteIdx = -1
 
         m.textFocus = textFocusBody
         m.dateFocus = dateFocusYear

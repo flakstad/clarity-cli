@@ -614,6 +614,7 @@ func newItemsSetTitleCmd(app *App) *cobra.Command {
 
 func newItemsSetStatusCmd(app *App) *cobra.Command {
         var status string
+        var note string
         cmd := &cobra.Command{
                 Use:   "set-status <item-id>",
                 Short: "Set item status (owner-only)",
@@ -663,7 +664,18 @@ func newItemsSetStatusCmd(app *App) *cobra.Command {
                                         return writeErr(cmd, completionBlockedError{taskID: t.ID, reason: explainCompletionBlockers(db, t.ID)})
                                 }
                         }
-                        res, err := mutate.SetItemStatus(db, actorID, t.ID, st)
+                        var notePtr *string
+                        if cmd.Flags().Changed("note") {
+                                tmp := note
+                                notePtr = &tmp
+                        }
+                        if st != "" {
+                                if o, ok := db.FindOutline(t.OutlineID); ok && o != nil && statusutil.RequiresNote(*o, st) && notePtr == nil {
+                                        return writeErr(cmd, errors.New("status requires a note: provide --note (can be empty)"))
+                                }
+                        }
+
+                        res, err := mutate.SetItemStatus(db, actorID, t.ID, st, notePtr)
                         if err != nil {
                                 switch e := err.(type) {
                                 case mutate.NotFoundError:
@@ -673,6 +685,9 @@ func newItemsSetStatusCmd(app *App) *cobra.Command {
                                 default:
                                         if err == mutate.ErrInvalidStatus {
                                                 return writeErr(cmd, errors.New("invalid status for this outline"))
+                                        }
+                                        if err == mutate.ErrStatusNoteRequired {
+                                                return writeErr(cmd, errors.New("status requires a note: provide --note (can be empty)"))
                                         }
                                         return writeErr(cmd, err)
                                 }
@@ -691,6 +706,7 @@ func newItemsSetStatusCmd(app *App) *cobra.Command {
                 },
         }
         cmd.Flags().StringVar(&status, "status", "", "New status (status id, label, or 'none')")
+        cmd.Flags().StringVar(&note, "note", "", "Status change note (stored in event payload; required for statuses that require a note)")
         _ = cmd.MarkFlagRequired("status")
         return cmd
 }

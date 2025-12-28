@@ -53,3 +53,16 @@ func IsEndState(outline model.Outline, statusID string) bool {
         // Fallback for legacy outlines or stores without status defs.
         return strings.ToLower(sid) == "done"
 }
+
+func RequiresNote(outline model.Outline, statusID string) bool {
+        statusID = strings.TrimSpace(statusID)
+        if statusID == "" {
+                return false
+        }
+        for _, def := range outline.StatusDefs {
+                if strings.TrimSpace(def.ID) == statusID {
+                        return def.RequiresNote
+                }
+        }
+        return false
+}

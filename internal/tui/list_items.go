@@ -207,8 +207,15 @@ func (i outlineStatusDefItem) Title() string {
         if lbl == "" {
                 lbl = "(unnamed)"
         }
+        var flags []string
         if i.def.IsEndState {
-                return lbl + "  (end)"
+                flags = append(flags, "end")
+        }
+        if i.def.RequiresNote {
+                flags = append(flags, "note")
+        }
+        if len(flags) > 0 {
+                return lbl + "  (" + strings.Join(flags, ", ") + ")"
         }
         return lbl
 }
@@ -324,6 +331,14 @@ func newList(title, help string, items []list.Item) list.Model {
         l.SetStatusBarItemName("item", "items")
         // Bubble list defaults to quitting on ESC; in Clarity ESC is "back/cancel".
         l.KeyMap.Quit.SetKeys("q")
+        // Add Emacs-style navigation aliases (common muscle memory).
+        cursorUpKeys := append([]string{}, l.KeyMap.CursorUp.Keys()...)
+        cursorUpKeys = append(cursorUpKeys, "ctrl+p")
+        l.KeyMap.CursorUp.SetKeys(cursorUpKeys...)
+
+        cursorDownKeys := append([]string{}, l.KeyMap.CursorDown.Keys()...)
+        cursorDownKeys = append(cursorDownKeys, "ctrl+n")
+        l.KeyMap.CursorDown.SetKeys(cursorDownKeys...)
         // Add extra aliases for go-to-start/end to better support non-US keyboard muscle memory.
         // This complements existing defaults: GoToStart = home/g, GoToEnd = end/G.
         goToStartKeys := append([]string{}, l.KeyMap.GoToStart.Keys()...)

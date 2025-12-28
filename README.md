@@ -2,6 +2,18 @@
 
 This is a Go CLI + Bubble Tea TUI for Clarity V1: items + dependencies + projects, with strict attribution (actors) and lightweight communication.
 
+## Planned direction (product)
+
+Clarity is not trying to recreate Beads feature-for-feature.
+
+The target is closer to **Org Mode + Basecamp**:
+- **Communication-first project management**: tasks, decisions, and discussion live together with a clear history.
+- **Calm by default**: minimal notification pressure; updates are available when you seek them out.
+- **Humans use the TUI** (and later a web GUI); **agents use the CLI** (stable output contract for scripting).
+- **Agenda is the core power feature** (Org-style): cross-project views/filters/search over items and communication signals.
+
+Beads is a useful reference point specifically for agent ergonomics and operational UX, not as a parity checklist.
+
 ## Model: projects + outlines (one flexible container)
 
 In Clarity V1 we keep the grouping entity named **Projects**.

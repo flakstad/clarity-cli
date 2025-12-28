@@ -74,6 +74,7 @@ Status:
 - `space`: open status picker for selected item (includes `(no status)`)
 - `Shift+←/→`: cycle status backward/forward (includes `(no status)`)
   - `(no status)` renders as empty (no placeholder)
+- If a status requires a note, Clarity prompts for the note before applying the change.
 
 Creating items:
 - `n`: create a new sibling after the selected item (outline pane)
@@ -85,5 +86,6 @@ Notes:
 
 Comment/worklog editor:
 - `ctrl+s`: save
+- `ctrl+o`: open in `$VISUAL`/`$EDITOR`
 - `ctrl+g`: close (cancel)
 - `tab` / `shift+tab`: focus body/save/cancel, `enter` activates buttons

@@ -8,9 +8,9 @@ import (
 
 func DefaultOutlineStatusDefs() []model.OutlineStatusDef {
         return []model.OutlineStatusDef{
-                {ID: "todo", Label: "TODO", IsEndState: false},
-                {ID: "doing", Label: "DOING", IsEndState: false},
-                {ID: "done", Label: "DONE", IsEndState: true},
+                {ID: "todo", Label: "TODO", IsEndState: false, RequiresNote: false},
+                {ID: "doing", Label: "DOING", IsEndState: false, RequiresNote: false},
+                {ID: "done", Label: "DONE", IsEndState: true, RequiresNote: false},
         }
 }
 
