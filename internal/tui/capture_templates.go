@@ -74,7 +74,41 @@ func (m *appModel) openCaptureTemplatesModal() {
         m.modalForID = ""
         m.modalForKey = ""
         m.refreshCaptureTemplatesList("")
+        m.sizeCaptureTemplatesModalLists()
         m.modal = modalCaptureTemplates
+}
+
+func (m *appModel) sizeCaptureTemplatesModalLists() {
+        if m == nil {
+                return
+        }
+        modalW := m.width - 12
+        if modalW > m.width-4 {
+                modalW = m.width - 4
+        }
+        if modalW < 20 {
+                modalW = 20
+        }
+        if modalW > 96 {
+                modalW = 96
+        }
+        w := modalW - 6
+        if w < 20 {
+                w = 20
+        }
+        h := 14
+        if m.height > 0 {
+                h = m.height - 10
+                if h > 16 {
+                        h = 16
+                }
+        }
+        if h < 6 {
+                h = 6
+        }
+        m.captureTemplatesList.SetSize(w, h)
+        m.captureTemplateWorkspaceList.SetSize(w, h)
+        m.captureTemplateOutlineList.SetSize(w, h)
 }
 
 func (m *appModel) refreshCaptureTemplatesList(preferKeys string) {
@@ -103,6 +137,7 @@ func (m *appModel) refreshCaptureTemplatesList(preferKeys string) {
         }
 
         m.captureTemplatesList.SetItems(items)
+        m.sizeCaptureTemplatesModalLists()
         if len(items) > 0 {
                 if selected < 0 {
                         selected = 0
@@ -115,8 +150,9 @@ func (m *appModel) refreshCaptureTemplatesList(preferKeys string) {
 }
 
 func (m appModel) renderCaptureTemplatesModal() string {
+        desc := "Create, edit, and delete org-capture style templates (name + key sequence + target outline)."
         h := "\n\nenter/e: edit   n:new   d:delete   esc/ctrl+g: close"
-        return renderModalBox(m.width, "Capture templates", m.captureTemplatesList.View()+h)
+        return renderModalBox(m.width, "Capture templates", desc+"\n\n"+m.captureTemplatesList.View()+h)
 }
 
 func (m *appModel) startCaptureTemplateEditNew() {
@@ -175,15 +211,40 @@ func (m *appModel) openCaptureTemplateWorkspacePicker(selected string) {
                 m.showMinibuffer("Workspaces: " + err.Error())
                 return
         }
-        items := make([]list.Item, 0, len(wss))
+        // Ensure we always have at least the current/default workspace as an option.
+        cur := strings.TrimSpace(m.workspace)
+        if cur == "" {
+                if cfg, err := store.LoadConfig(); err == nil {
+                        cur = strings.TrimSpace(cfg.CurrentWorkspace)
+                }
+        }
+        if cur == "" {
+                cur = "default"
+        }
+        seen := map[string]bool{}
+        names := []string{}
+        for _, n := range wss {
+                n = strings.TrimSpace(n)
+                if n == "" || seen[n] {
+                        continue
+                }
+                seen[n] = true
+                names = append(names, n)
+        }
+        if !seen[cur] {
+                names = append([]string{cur}, names...)
+        }
+
+        items := make([]list.Item, 0, len(names))
         selectedIdx := 0
-        for i, name := range wss {
+        for i, name := range names {
                 items = append(items, captureTemplateWorkspaceItem{name: name})
                 if strings.TrimSpace(selected) != "" && name == selected {
                         selectedIdx = i
                 }
         }
         m.captureTemplateWorkspaceList.SetItems(items)
+        m.sizeCaptureTemplatesModalLists()
         if len(items) > 0 {
                 m.captureTemplateWorkspaceList.Select(selectedIdx)
         }
@@ -231,14 +292,18 @@ func (m *appModel) openCaptureTemplateOutlinePicker(workspace, selectedOutlineID
 
         items := make([]list.Item, 0, len(outs))
         selectedIdx := 0
-        for i, o := range outs {
+        for _, o := range outs {
+                if o.Archived {
+                        continue
+                }
                 label := strings.TrimSpace(projName[o.ProjectID]) + " / " + outlineDisplayName(o)
                 items = append(items, captureTemplateOutlineItem{outline: o, label: label})
                 if strings.TrimSpace(selectedOutlineID) != "" && o.ID == selectedOutlineID {
-                        selectedIdx = i
+                        selectedIdx = len(items) - 1
                 }
         }
         m.captureTemplateOutlineList.SetItems(items)
+        m.sizeCaptureTemplatesModalLists()
         if len(items) > 0 {
                 m.captureTemplateOutlineList.Select(selectedIdx)
         }
@@ -346,4 +411,87 @@ func (m *appModel) updateCaptureTemplatesModal(msg tea.Msg) (tea.Model, tea.Cmd)
         var cmd tea.Cmd
         m.captureTemplatesList, cmd = m.captureTemplatesList.Update(msg)
         return *m, cmd
+}
+
+func captureTemplateTargetLabel(workspace, outlineID string) string {
+        ws := strings.TrimSpace(workspace)
+        oid := strings.TrimSpace(outlineID)
+        if ws == "" || oid == "" {
+                return strings.TrimSpace(ws) + "/" + strings.TrimSpace(oid)
+        }
+        // Best-effort: resolve outline name (and project name) from the target workspace.
+        dir, err := store.WorkspaceDir(ws)
+        if err != nil {
+                return ws + "/" + oid
+        }
+        st := store.Store{Dir: dir}
+        db, err := st.Load()
+        if err != nil || db == nil {
+                return ws + "/" + oid
+        }
+        o, ok := db.FindOutline(oid)
+        if !ok || o == nil {
+                return ws + "/" + oid
+        }
+        pn := ""
+        if p, ok := db.FindProject(o.ProjectID); ok && p != nil {
+                pn = strings.TrimSpace(p.Name)
+        }
+        on := outlineDisplayName(*o)
+        if strings.TrimSpace(pn) != "" {
+                return ws + " / " + pn + " / " + on
+        }
+        return ws + " / " + on
+}
+
+func startCaptureItemFromTemplate(m appModel, t store.CaptureTemplate) (appModel, tea.Cmd) {
+        ws := strings.TrimSpace(t.Target.Workspace)
+        if ws == "" {
+                m.showMinibuffer("Capture: template target workspace is empty")
+                return m, nil
+        }
+
+        if strings.TrimSpace(m.workspace) != ws {
+                nm, err := m.switchWorkspaceTo(ws)
+                if err != nil {
+                        m.showMinibuffer("Workspace error: " + err.Error())
+                        return m, nil
+                }
+                m = nm
+        }
+
+        if m.db == nil {
+                m.showMinibuffer("Capture: no workspace loaded")
+                return m, nil
+        }
+
+        oid := strings.TrimSpace(t.Target.OutlineID)
+        if oid == "" {
+                m.showMinibuffer("Capture: template target outline is empty")
+                return m, nil
+        }
+        o, ok := m.db.FindOutline(oid)
+        if !ok || o == nil {
+                m.showMinibuffer("Capture: outline not found")
+                return m, nil
+        }
+        if o.Archived {
+                m.showMinibuffer("Capture: outline is archived")
+                return m, nil
+        }
+
+        m.view = viewOutline
+        m.pane = paneOutline
+        m.showPreview = false
+        m.openItemID = ""
+        m.itemArchivedReadOnly = false
+
+        m.selectedProjectID = o.ProjectID
+        m.selectedOutlineID = o.ID
+        m.selectedOutline = o
+        m.refreshItems(*o)
+
+        // Start a normal "new root item" flow in that outline.
+        m.openInputModal(modalNewSibling, "", "Title", "")
+        return m, nil
 }

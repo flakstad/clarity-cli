@@ -185,6 +185,11 @@ func (m *appModel) openActionPanel(kind actionPanelKind) {
         }
         m.modal = modalActionPanel
         m.actionPanelStack = []actionPanelKind{kind}
+        m.actionPanelSelectedKey = ""
+        if kind == actionPanelCapture {
+                m.captureKeySeq = nil
+        }
+        m.ensureActionPanelSelection()
         m.pendingEsc = false
 }
 
@@ -195,6 +200,7 @@ func (m *appModel) closeActionPanel() {
         if m.modal == modalActionPanel {
                 m.modal = modalNone
                 m.actionPanelStack = nil
+                m.actionPanelSelectedKey = ""
                 m.pendingEsc = false
         }
 }
@@ -207,6 +213,11 @@ func (m *appModel) pushActionPanel(kind actionPanelKind) {
                 return
         }
         m.actionPanelStack = append(m.actionPanelStack, kind)
+        m.actionPanelSelectedKey = ""
+        if kind == actionPanelCapture {
+                m.captureKeySeq = nil
+        }
+        m.ensureActionPanelSelection()
 }
 
 func (m *appModel) popActionPanel() {
@@ -221,6 +232,58 @@ func (m *appModel) popActionPanel() {
                 return
         }
         m.actionPanelStack = m.actionPanelStack[:len(m.actionPanelStack)-1]
+        m.actionPanelSelectedKey = ""
+        if m.curActionPanelKind() != actionPanelCapture {
+                m.captureKeySeq = nil
+        }
+        m.ensureActionPanelSelection()
+}
+
+func (m *appModel) ensureActionPanelSelection() {
+        if m == nil || m.modal != modalActionPanel {
+                return
+        }
+        entries := m.actionPanelEntries()
+        if len(entries) == 0 {
+                m.actionPanelSelectedKey = ""
+                return
+        }
+        cur := strings.TrimSpace(m.actionPanelSelectedKey)
+        if cur != "" {
+                for _, e := range entries {
+                        if e.key == cur {
+                                return
+                        }
+                }
+        }
+        m.actionPanelSelectedKey = entries[0].key
+}
+
+func (m *appModel) moveActionPanelSelection(delta int) {
+        if m == nil || m.modal != modalActionPanel {
+                return
+        }
+        entries := m.actionPanelEntries()
+        if len(entries) == 0 {
+                m.actionPanelSelectedKey = ""
+                return
+        }
+        cur := strings.TrimSpace(m.actionPanelSelectedKey)
+        idx := 0
+        for i, e := range entries {
+                if e.key == cur {
+                        idx = i
+                        break
+                }
+        }
+        next := idx + delta
+        for next < 0 {
+                next += len(entries)
+        }
+        for next >= len(entries) {
+                next -= len(entries)
+        }
+        m.actionPanelSelectedKey = entries[next].key
 }
 
 func (m appModel) curActionPanelKind() actionPanelKind {
@@ -450,15 +513,6 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                 }}
 
         case actionPanelCapture:
-                actions["g"] = actionPanelAction{label: "Go to…", kind: actionPanelActionNav, next: actionPanelNav}
-                actions["q"] = actionPanelAction{
-                        label: "Quick capture (coming soon)",
-                        kind:  actionPanelActionExec,
-                        handler: func(mm appModel) (appModel, tea.Cmd) {
-                                mm.showMinibuffer("Capture: coming soon")
-                                return mm, nil
-                        },
-                }
                 actions["ctrl+t"] = actionPanelAction{
                         label: "Capture templates…",
                         kind:  actionPanelActionExec,
@@ -1546,6 +1600,10 @@ func (m *appModel) showMinibuffer(text string) {
 }
 
 func (m appModel) renderActionPanel() string {
+        if m.curActionPanelKind() == actionPanelCapture {
+                return m.renderCaptureActionPanel()
+        }
+
         title := m.actionPanelTitle()
         entries := m.actionPanelEntries()
         if len(entries) == 0 {
@@ -1576,8 +1634,18 @@ func (m appModel) renderActionPanel() string {
                 ((m.view == viewOutline && (m.pane == paneOutline || (m.pane == paneDetail && m.splitPreviewVisible()))) ||
                         m.view == viewItem)
 
+        selectedKey := strings.TrimSpace(m.actionPanelSelectedKey)
+
         renderCell := func(k string, a actionPanelAction) string {
-                return fmt.Sprintf("%-12s %s", actionPanelDisplayKey(k), a.label)
+                line := fmt.Sprintf("%-12s %s", actionPanelDisplayKey(k), a.label)
+                if k == selectedKey {
+                        return lipgloss.NewStyle().
+                                Foreground(colorSelectedFg).
+                                Background(colorSelectedBg).
+                                Bold(true).
+                                Render(line)
+                }
+                return line
         }
 
         cutToWidth := func(s string, w int) string {
@@ -1974,6 +2042,151 @@ func (m appModel) renderActionPanel() string {
         body := strings.Join(lines, "\n")
         body += "\n\nbackspace/esc: back    ctrl+g: close"
         return renderModalBox(m.width, title, body)
+}
+
+func (m appModel) renderCaptureActionPanel() string {
+        title := "Capture"
+        desc := "Type a capture template key sequence (org-capture style). Backspace deletes a key. Enter selects when complete. ctrl+t manages templates."
+
+        cfg, err := store.LoadConfig()
+        if err != nil {
+                body := strings.TrimSpace(desc) + "\n\n" + "Error: " + err.Error()
+                return renderModalBox(m.width, title, body)
+        }
+        if err := store.ValidateCaptureTemplates(cfg); err != nil {
+                body := strings.TrimSpace(desc) + "\n\n" + "Error: " + err.Error()
+                return renderModalBox(m.width, title, body)
+        }
+        if cfg == nil || len(cfg.CaptureTemplates) == 0 {
+                body := strings.TrimSpace(desc) + "\n\n" + "No capture templates configured. Press ctrl+t to add one."
+                return renderModalBox(m.width, title, body)
+        }
+
+        prefix := append([]string{}, m.captureKeySeq...)
+        exact, next := captureTemplatesAtPrefix(cfg.CaptureTemplates, prefix)
+
+        lines := []string{strings.TrimSpace(desc), ""}
+        if len(prefix) == 0 {
+                lines = append(lines, "Prefix: (none)")
+        } else {
+                lines = append(lines, "Prefix: "+strings.Join(prefix, " "))
+        }
+        lines = append(lines, "")
+
+        // Prefer stable ordering.
+        nextKeys := make([]string, 0, len(next))
+        for k := range next {
+                nextKeys = append(nextKeys, k)
+        }
+        sort.Strings(nextKeys)
+
+        // Ensure selection points at a visible key when possible.
+        selected := strings.TrimSpace(m.actionPanelSelectedKey)
+        if selected != "" {
+                found := false
+                for _, k := range nextKeys {
+                        if k == selected {
+                                found = true
+                                break
+                        }
+                }
+                if !found {
+                        selected = ""
+                }
+        }
+        if selected == "" && len(nextKeys) > 0 {
+                selected = nextKeys[0]
+        }
+
+        if exact != nil && len(nextKeys) == 0 {
+                // Completed sequence.
+                name := strings.TrimSpace(exact.Name)
+                if name == "" {
+                        name = "(unnamed)"
+                }
+                lines = append(lines, "Selected: "+name)
+                lines = append(lines, "")
+                lines = append(lines, "Press Enter to start capture.")
+                return renderModalBox(m.width, title, strings.Join(lines, "\n"))
+        }
+
+        lines = append(lines, "Options:")
+        if len(nextKeys) == 0 {
+                lines = append(lines, "  (no matches)")
+        } else {
+                for _, k := range nextKeys {
+                        lbl := next[k]
+                        line := fmt.Sprintf("%-3s %s", k, lbl)
+                        if k == selected {
+                                line = lipgloss.NewStyle().
+                                        Foreground(colorSelectedFg).
+                                        Background(colorSelectedBg).
+                                        Bold(true).
+                                        Render(line)
+                        }
+                        lines = append(lines, line)
+                }
+        }
+
+        if exact != nil {
+                name := strings.TrimSpace(exact.Name)
+                if name == "" {
+                        name = "(unnamed)"
+                }
+                lines = append(lines, "")
+                lines = append(lines, "Enter also works now: "+name)
+        }
+
+        return renderModalBox(m.width, title, strings.Join(lines, "\n"))
+}
+
+func captureTemplatesAtPrefix(templates []store.CaptureTemplate, prefix []string) (*store.CaptureTemplate, map[string]string) {
+        var exact *store.CaptureTemplate
+        next := map[string]string{} // next key -> label
+
+        for i := range templates {
+                t := templates[i]
+                keys, err := store.NormalizeCaptureTemplateKeys(t.Keys)
+                if err != nil {
+                        continue
+                }
+                if len(prefix) > len(keys) {
+                        continue
+                }
+                match := true
+                for j := 0; j < len(prefix); j++ {
+                        if keys[j] != prefix[j] {
+                                match = false
+                                break
+                        }
+                }
+                if !match {
+                        continue
+                }
+
+                if len(keys) == len(prefix) {
+                        // Exact match at this prefix.
+                        exact = &templates[i]
+                        continue
+                }
+
+                k := keys[len(prefix)]
+                // Only compute label once; prefer a leaf template label when unambiguous.
+                if _, ok := next[k]; ok {
+                        continue
+                }
+                if len(keys) == len(prefix)+1 {
+                        name := strings.TrimSpace(t.Name)
+                        if name == "" {
+                                name = "(unnamed)"
+                        }
+                        next[k] = name + "  →  " + captureTemplateTargetLabel(t.Target.Workspace, t.Target.OutlineID)
+                } else {
+                        next[k] = "(prefix)"
+                }
+        }
+
+        return exact, next
 }
 
 func (m *appModel) reportError(itemID string, err error) tea.Cmd {
@@ -3029,13 +3242,13 @@ func (m *appModel) renderModal() string {
         case modalCaptureTemplates:
                 return m.renderCaptureTemplatesModal()
         case modalCaptureTemplateName:
-                return m.renderInputModal("Capture template: name")
+                return m.renderInputModalWithDescription("Capture template: name", "Name shown in pickers (e.g. \"Work inbox\").")
         case modalCaptureTemplateKeys:
-                return m.renderInputModal("Capture template: keys")
+                return m.renderInputModalWithDescription("Capture template: keys", "Enter a multi-key sequence (e.g. \"w i\" or \"wi\"). Each key is one character.")
         case modalCaptureTemplatePickWorkspace:
-                return renderModalBox(m.width, "Capture template: workspace", m.captureTemplateWorkspaceList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
+                return renderModalBox(m.width, "Capture template: workspace", "Pick the target workspace for this template.\n\n"+m.captureTemplateWorkspaceList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
         case modalCaptureTemplatePickOutline:
-                return renderModalBox(m.width, "Capture template: outline", m.captureTemplateOutlineList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
+                return renderModalBox(m.width, "Capture template: outline", "Pick the target outline (archived outlines are hidden).\n\n"+m.captureTemplateOutlineList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
         case modalConfirmDeleteCaptureTemplate:
                 return m.renderConfirmDeleteCaptureTemplateModal()
         case modalNewWorkspace:
@@ -3369,6 +3582,54 @@ func (m *appModel) renderInputModal(title string) string {
         return renderModalBox(m.width, title, body)
 }
 
+func (m *appModel) renderInputModalWithDescription(title, desc string) string {
+        btnBase := lipgloss.NewStyle().
+                Padding(0, 1).
+                Foreground(colorSurfaceFg).
+                Background(colorControlBg)
+        btnActive := btnBase.
+                Foreground(colorSelectedFg).
+                Background(colorSelectedBg).
+                Bold(true)
+
+        save := btnBase.Render("Save")
+        cancel := btnBase.Render("Cancel")
+        if m.textFocus == textFocusSave {
+                save = btnActive.Render("Save")
+        }
+        if m.textFocus == textFocusCancel {
+                cancel = btnActive.Render("Cancel")
+        }
+
+        sep := lipgloss.NewStyle().Background(colorControlBg).Render(" ")
+        controls := lipgloss.JoinHorizontal(lipgloss.Top, save, sep, cancel)
+
+        bodyW := modalBodyWidth(m.width)
+        inputW := bodyW - 2 // one space padding on each side
+        if inputW < 10 {
+                inputW = 10
+        }
+        m.input.Width = inputW
+        inputLine := lipgloss.PlaceHorizontal(
+                bodyW,
+                lipgloss.Left,
+                " "+m.input.View()+" ",
+                lipgloss.WithWhitespaceChars(" "),
+                lipgloss.WithWhitespaceBackground(colorInputBg),
+        )
+        descLine := styleMuted().Width(bodyW).Render(strings.TrimSpace(desc))
+        body := strings.Join([]string{
+                descLine,
+                "",
+                inputLine,
+                "",
+                controls,
+                "",
+                "ctrl+s: save    tab: focus    esc: cancel    ctrl+g: close",
+        }, "\n")
+        return renderModalBox(m.width, title, body)
+}
+
 func (m *appModel) renderTagsModal() string {
         bodyW := modalBodyWidth(m.width)
         inputW := bodyW - 2 // one space padding on each side
@@ -3503,11 +3764,113 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         (&m).closeActionPanel()
                                         return m, nil
                                 case "esc", "backspace":
+                                        // Special-case capture: backspace edits the key sequence, not panel navigation.
+                                        if m.curActionPanelKind() == actionPanelCapture && km.String() == "backspace" {
+                                                if len(m.captureKeySeq) > 0 {
+                                                        m.captureKeySeq = m.captureKeySeq[:len(m.captureKeySeq)-1]
+                                                        m.actionPanelSelectedKey = ""
+                                                        m.ensureActionPanelSelection()
+                                                        return m, nil
+                                                }
+                                        }
                                         (&m).popActionPanel()
+                                        return m, nil
+                                case "tab":
+                                        (&m).moveActionPanelSelection(+1)
+                                        return m, nil
+                                case "shift+tab", "backtab":
+                                        (&m).moveActionPanelSelection(-1)
+                                        return m, nil
+                                case "up", "k", "ctrl+p":
+                                        (&m).moveActionPanelSelection(-1)
+                                        return m, nil
+                                case "down", "j", "ctrl+n":
+                                        (&m).moveActionPanelSelection(+1)
                                         return m, nil
                                 }
 
                                 actions := m.actionPanelActions()
+                                // Capture panel: org-capture style typed selection.
+                                if m.curActionPanelKind() == actionPanelCapture {
+                                        if km.String() == "ctrl+t" {
+                                                (&m).closeActionPanel()
+                                                (&m).openCaptureTemplatesModal()
+                                                return m, nil
+                                        }
+
+                                        cfg, err := store.LoadConfig()
+                                        if err != nil {
+                                                m.showMinibuffer("Capture templates: " + err.Error())
+                                                return m, nil
+                                        }
+                                        if err := store.ValidateCaptureTemplates(cfg); err != nil {
+                                                m.showMinibuffer("Capture templates: " + err.Error())
+                                                return m, nil
+                                        }
+                                        exact, next := captureTemplatesAtPrefix(cfg.CaptureTemplates, m.captureKeySeq)
+
+                                        chooseKey := func(k string) (appModel, bool) {
+                                                k = strings.TrimSpace(k)
+                                                if k == "" {
+                                                        return m, false
+                                                }
+                                                if _, ok := next[k]; !ok {
+                                                        return m, false
+                                                }
+                                                m.captureKeySeq = append(m.captureKeySeq, k)
+                                                m.actionPanelSelectedKey = ""
+                                                m.ensureActionPanelSelection()
+
+                                                ex2, next2 := captureTemplatesAtPrefix(cfg.CaptureTemplates, m.captureKeySeq)
+                                                if ex2 != nil && len(next2) == 0 {
+                                                        (&m).closeActionPanel()
+                                                        m2, cmd := startCaptureItemFromTemplate(m, *ex2)
+                                                        _ = cmd
+                                                        return m2, true
+                                                }
+                                                return m, true
+                                        }
+
+                                        switch km.String() {
+                                        case "enter":
+                                                if exact != nil {
+                                                        (&m).closeActionPanel()
+                                                        m2, cmd := startCaptureItemFromTemplate(m, *exact)
+                                                        _ = cmd
+                                                        return m2, nil
+                                                }
+                                                if k := strings.TrimSpace(m.actionPanelSelectedKey); k != "" {
+                                                        if m2, ok := chooseKey(k); ok {
+                                                                return m2, nil
+                                                        }
+                                                }
+                                                return m, nil
+                                        }
+                                        if km.Type == tea.KeyRunes && len(km.Runes) == 1 {
+                                                if m2, ok := chooseKey(string(km.Runes[0])); ok {
+                                                        return m2, nil
+                                                }
+                                        }
+                                        // Fall through to normal key handling (e.g. ctrl+g/backspace handled above).
+                                }
+                                // If the current panel has no explicit "enter" binding, allow Enter to execute
+                                // the currently selected action key.
+                                if km.String() == "enter" {
+                                        if _, ok := actions["enter"]; !ok {
+                                                k := strings.TrimSpace(m.actionPanelSelectedKey)
+                                                if k != "" {
+                                                        if a, ok := actions[k]; ok {
+                                                                (&m).closeActionPanel()
+                                                                if a.handler != nil {
+                                                                        m2, cmd := a.handler(m)
+                                                                        return m2, cmd
+                                                                }
+                                                                return m, nil
+                                                        }
+                                                }
+                                                return m, nil
+                                        }
+                                }
                                 if a, ok := actions[km.String()]; ok {
                                         switch a.kind {
                                         case actionPanelActionNav:
@@ -3518,6 +3881,11 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                 } else {
                                                         m.actionPanelStack[len(m.actionPanelStack)-1] = a.next
                                                 }
+                                                if a.next == actionPanelCapture {
+                                                        m.captureKeySeq = nil
+                                                }
+                                                m.actionPanelSelectedKey = ""
+                                                m.ensureActionPanelSelection()
                                                 return m, nil
                                         default:
                                                 // Execute and close (panel takes over keys; only listed keys run).

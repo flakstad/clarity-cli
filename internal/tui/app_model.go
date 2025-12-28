@@ -114,6 +114,10 @@ type appModel struct {
         pendingMoveOutlineTo string
 
         actionPanelStack []actionPanelKind
+        // actionPanelSelectedKey is the current selection in the action panel (for tab/enter navigation).
+        actionPanelSelectedKey string
+        // captureKeySeq stores the currently-entered org-capture style key sequence while in the Capture panel.
+        captureKeySeq []string
 
         pendingEsc bool
 

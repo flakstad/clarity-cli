@@ -642,13 +642,16 @@ func (m *captureModel) openOutlinePicker(selectedOutlineID string) {
 
         items := make([]list.Item, 0, len(outs))
         selected := 0
-        for i, o := range outs {
+        for _, o := range outs {
+                if o.Archived {
+                        continue
+                }
                 pn := strings.TrimSpace(projNameByID[o.ProjectID])
                 on := captureOutlineDisplayName(o)
                 label := pn + " / " + on
                 items = append(items, captureOutlineItem{outline: o, label: label})
                 if strings.TrimSpace(selectedOutlineID) != "" && o.ID == selectedOutlineID {
-                        selected = i
+                        selected = len(items) - 1
                 }
         }
         m.outlinePickList.SetItems(items)
