@@ -20,8 +20,15 @@ type Status struct {
 
         Head string `json:"head,omitempty"`
 
-        Dirty    bool `json:"dirty"`
-        Unmerged bool `json:"unmerged"`
+        Dirty bool `json:"dirty"`
+        // DirtyTracked is like Dirty, but ignores untracked files (??).
+        // This is typically what you want for safe pull/rebase operations, since Clarity's
+        // derived SQLite index is local-only and often untracked.
+        DirtyTracked bool `json:"dirtyTracked"`
+        Unmerged     bool `json:"unmerged"`
+
+        InProgress     bool   `json:"inProgress"`
+        InProgressKind string `json:"inProgressKind,omitempty"` // merge|rebase|cherry-pick|revert
 
         Ahead  int `json:"ahead,omitempty"`
         Behind int `json:"behind,omitempty"`
@@ -44,6 +51,10 @@ func GetStatus(ctx context.Context, dir string) (Status, error) {
 
         porcelain, _ := git(ctx, dir, "status", "--porcelain=v1")
         dirty, unmerged := parsePorcelain(porcelain)
+        porcelainTracked, _ := git(ctx, dir, "status", "--porcelain=v1", "--untracked-files=no")
+        dirtyTracked, _ := parsePorcelain(porcelainTracked)
+
+        inProgress, inProgressKind := detectInProgress(ctx, dir)
 
         ahead, behind := 0, 0
         if strings.TrimSpace(upstream) != "" {
@@ -63,10 +74,15 @@ func GetStatus(ctx context.Context, dir string) (Status, error) {
                 Upstream: strings.TrimSpace(upstream),
                 Head:     strings.TrimSpace(head),
 
-                Dirty:    dirty,
-                Unmerged: unmerged,
-                Ahead:    ahead,
-                Behind:   behind,
+                Dirty:        dirty,
+                DirtyTracked: dirtyTracked,
+                Unmerged:     unmerged,
+
+                InProgress:     inProgress,
+                InProgressKind: inProgressKind,
+
+                Ahead:  ahead,
+                Behind: behind,
         }, nil
 }
 
@@ -106,6 +122,31 @@ func parsePorcelain(out string) (dirty bool, unmerged bool) {
                 }
         }
         return dirty, unmerged
+}
+
+func detectInProgress(ctx context.Context, dir string) (bool, string) {
+        switch {
+        case gitRefExists(ctx, dir, "MERGE_HEAD"):
+                return true, "merge"
+        case gitRefExists(ctx, dir, "REBASE_HEAD"):
+                return true, "rebase"
+        case gitRefExists(ctx, dir, "CHERRY_PICK_HEAD"):
+                return true, "cherry-pick"
+        case gitRefExists(ctx, dir, "REVERT_HEAD"):
+                return true, "revert"
+        default:
+                return false, ""
+        }
+}
+
+func gitRefExists(ctx context.Context, dir string, ref string) bool {
+        ref = strings.TrimSpace(ref)
+        if ref == "" {
+                return false
+        }
+        cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", "-q", ref)
+        cmd.Dir = dir
+        return cmd.Run() == nil
 }
 
 func isUnmergedXY(xy string) bool {

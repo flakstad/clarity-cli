@@ -373,6 +373,9 @@ func (s Store) NextID(db *DB, prefix string) string {
 func (s Store) AppendEvent(actorID, typ, entityID string, payload any) error {
         switch s.eventLogBackend() {
         case EventLogBackendJSONL:
+                if err := s.ensureWritableForAppend(context.Background()); err != nil {
+                        return err
+                }
                 return s.appendEventJSONL(context.Background(), actorID, typ, entityID, payload)
         default:
                 return s.appendEventSQLite(context.Background(), actorID, typ, entityID, payload)

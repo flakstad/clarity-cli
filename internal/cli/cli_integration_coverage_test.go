@@ -465,6 +465,9 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
         run(t, invocation{name: "reindex (--dir)", cmdPath: "reindex", args: []string{"--dir", dir, "reindex"}, expect: expectJSONEnvelope})
         run(t, invocation{name: "doctor --fail (--dir)", cmdPath: "doctor", args: []string{"--dir", dir, "doctor", "--fail"}, expect: expectJSONEnvelope})
         run(t, invocation{name: "sync status (--dir)", cmdPath: "sync status", args: []string{"--dir", dir, "sync", "status"}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "sync pull (non-repo error, --dir)", cmdPath: "sync pull", args: []string{"--dir", dir, "sync", "pull"}, expect: expectError})
+        run(t, invocation{name: "sync push (non-repo error, --message, --pull=false, --dir)", cmdPath: "sync push", args: []string{"--dir", dir, "sync", "push", "--message", "test", "--pull=false"}, expect: expectError})
+        run(t, invocation{name: "sync resolve (non-repo error, --dir)", cmdPath: "sync resolve", args: []string{"--dir", dir, "sync", "resolve"}, expect: expectError})
 
         // --- Coverage assertions ---
         leafCmds, rootPersistentFlags, localFlagsByCmd := buildCoverageIndex()

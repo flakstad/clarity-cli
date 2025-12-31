@@ -55,6 +55,9 @@ func TestGetStatus_DirtyAndUnmerged(t *testing.T) {
         if !st.Dirty {
                 t.Fatalf("expected dirty=true: %+v", st)
         }
+        if st.DirtyTracked {
+                t.Fatalf("expected dirtyTracked=false for untracked-only changes: %+v", st)
+        }
 
         // Create a merge conflict to ensure unmerged detection works.
         run(t, repo, "git", "checkout", "-b", "feature")
@@ -76,6 +79,9 @@ func TestGetStatus_DirtyAndUnmerged(t *testing.T) {
         }
         if !st.Unmerged {
                 t.Fatalf("expected unmerged=true: %+v", st)
+        }
+        if !st.InProgress || st.InProgressKind != "merge" {
+                t.Fatalf("expected inProgress merge=true: %+v", st)
         }
 }
 
