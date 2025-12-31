@@ -128,10 +128,12 @@ func ensureAgentIdentity(app *App, db *store.DB, s store.Store, opts ensureAgent
                         if opts.Use {
                                 db.CurrentActorID = a.ID
                                 app.ActorID = a.ID
+                                if err := s.AppendEvent(a.ID, "identity.use", a.ID, map[string]any{"actorId": a.ID}); err != nil {
+                                        return model.Actor{}, false, "", err
+                                }
                                 if err := s.Save(db); err != nil {
                                         return model.Actor{}, false, "", err
                                 }
-                                _ = s.AppendEvent(a.ID, "identity.use", a.ID, map[string]any{"actorId": a.ID})
                         }
                         return a, false, tag, nil
                 }
@@ -154,17 +156,19 @@ func ensureAgentIdentity(app *App, db *store.DB, s store.Store, opts ensureAgent
                 db.CurrentActorID = a.ID
                 app.ActorID = a.ID
         }
-        if err := s.Save(db); err != nil {
-                return model.Actor{}, false, "", err
-        }
-        _ = s.AppendEvent(a.ID, "identity.create", a.ID, map[string]any{
+        if err := s.AppendEvent(a.ID, "identity.create", a.ID, map[string]any{
                 "name":    a.Name,
                 "kind":    "agent",
                 "use":     opts.Use,
                 "userId":  humanID,
                 "session": session,
                 "ts":      time.Now().UTC(),
-        })
+        }); err != nil {
+                return model.Actor{}, false, "", err
+        }
+        if err := s.Save(db); err != nil {
+                return model.Actor{}, false, "", err
+        }
         return a, true, tag, nil
 }
 

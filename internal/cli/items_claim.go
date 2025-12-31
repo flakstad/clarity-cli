@@ -87,10 +87,12 @@ func claimItemAsCurrentActor(app *App, db *store.DB, s store.Store, itemID strin
         }
 
         res.Item.UpdatedAt = time.Now().UTC()
+        if err := s.AppendEvent(actorID, "item.set_assign", res.Item.ID, res.EventPayload); err != nil {
+                return nil, err
+        }
         if err := s.Save(db); err != nil {
                 return nil, err
         }
-        _ = s.AppendEvent(actorID, "item.set_assign", res.Item.ID, res.EventPayload)
         return res.Item, nil
 }
 

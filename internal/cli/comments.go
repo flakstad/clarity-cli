@@ -54,10 +54,12 @@ func newCommentsAddCmd(app *App) *cobra.Command {
                                 CreatedAt: time.Now().UTC(),
                         }
                         db.Comments = append(db.Comments, c)
+                        if err := s.AppendEvent(actorID, "comment.add", c.ID, c); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "comment.add", c.ID, c)
                         return writeOut(cmd, app, map[string]any{"data": c})
                 },
         }

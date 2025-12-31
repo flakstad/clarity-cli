@@ -52,10 +52,12 @@ func newProjectsCreateCmd(app *App) *cobra.Command {
                         if use {
                                 db.CurrentProjectID = p.ID
                         }
+                        if err := s.AppendEvent(actorID, "project.create", p.ID, p); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "project.create", p.ID, p)
                         return writeOut(cmd, app, map[string]any{"data": p})
                 },
         }
@@ -109,10 +111,12 @@ func newProjectsArchiveCmd(app *App) *cobra.Command {
                         if db.CurrentProjectID == pid && p.Archived {
                                 db.CurrentProjectID = ""
                         }
+                        if err := s.AppendEvent(actorID, "project.archive", p.ID, map[string]any{"archived": p.Archived}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "project.archive", p.ID, map[string]any{"archived": p.Archived})
                         return writeOut(cmd, app, map[string]any{"data": p})
                 },
         }

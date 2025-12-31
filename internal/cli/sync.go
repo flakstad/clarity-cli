@@ -179,8 +179,17 @@ func newSyncPushCmd(app *App) *cobra.Command {
                         pushed := false
                         if _, err := runGit(dir, "push"); err == nil {
                                 pushed = true
+                        } else if doPull && !pulled && isNonFastForwardPushErr(err) {
+                                // Retry once: pull --rebase + push.
+                                if _, pullErr := runGit(dir, "pull", "--rebase"); pullErr != nil {
+                                        return writeErr(cmd, pullErr)
+                                }
+                                pulled = true
+                                if _, pushErr := runGit(dir, "push"); pushErr != nil {
+                                        return writeErr(cmd, pushErr)
+                                }
+                                pushed = true
                         } else {
-                                // If we couldn't push (no remote, offline, auth), still return state details.
                                 return writeErr(cmd, err)
                         }
 
@@ -258,6 +267,24 @@ func runGit(dir string, args ...string) (string, error) {
 // execCommand is a small seam for tests (if needed later).
 var execCommand = func(name string, args ...string) *exec.Cmd {
         return exec.Command(name, args...)
+}
+
+func isNonFastForwardPushErr(err error) bool {
+        if err == nil {
+                return false
+        }
+        msg := strings.ToLower(err.Error())
+        for _, needle := range []string{
+                "non-fast-forward",
+                "fetch first",
+                "rejected",
+                "updates were rejected",
+        } {
+                if strings.Contains(msg, needle) {
+                        return true
+                }
+        }
+        return false
 }
 
 func stageWorkspaceCanonical(workspaceDir string, repoRoot string) (bool, error) {

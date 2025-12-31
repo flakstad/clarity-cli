@@ -188,10 +188,12 @@ func newItemsCreateCmd(app *App) *cobra.Command {
                                 UpdatedAt:          now,
                         }
                         db.Items = append(db.Items, t)
+                        if err := s.AppendEvent(actorID, "item.create", t.ID, t); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.create", t.ID, t)
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }
@@ -600,10 +602,12 @@ func newItemsSetTitleCmd(app *App) *cobra.Command {
                         }
                         t.Title = strings.TrimSpace(title)
                         t.UpdatedAt = time.Now().UTC()
+                        if err := s.AppendEvent(actorID, "item.set_title", t.ID, map[string]any{"title": t.Title}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.set_title", t.ID, map[string]any{"title": t.Title})
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }
@@ -698,10 +702,12 @@ func newItemsSetStatusCmd(app *App) *cobra.Command {
 
                         t = res.Item
                         t.UpdatedAt = time.Now().UTC()
+                        if err := s.AppendEvent(actorID, "item.set_status", t.ID, res.EventPayload); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.set_status", t.ID, res.EventPayload)
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }

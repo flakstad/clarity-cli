@@ -59,10 +59,12 @@ func newWorklogAddCmd(app *App) *cobra.Command {
                                 CreatedAt: time.Now().UTC(),
                         }
                         db.Worklog = append(db.Worklog, w)
+                        if err := s.AppendEvent(actorID, "worklog.add", w.ID, w); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "worklog.add", w.ID, w)
                         return writeOut(cmd, app, map[string]any{"data": w})
                 },
         }

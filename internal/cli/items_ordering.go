@@ -99,10 +99,6 @@ func newItemsMoveCmd(app *App) *cobra.Command {
                                 it.UpdatedAt = now
                         }
 
-                        if err := s.Save(db); err != nil {
-                                return writeErr(cmd, err)
-                        }
-
                         payload := map[string]any{"before": before, "after": after, "rank": strings.TrimSpace(t.Rank)}
                         if res.UsedFallback && len(res.RankByID) > 1 {
                                 rebalance := map[string]string{}
@@ -117,7 +113,12 @@ func newItemsMoveCmd(app *App) *cobra.Command {
                                         payload["rebalanceCount"] = len(rebalance)
                                 }
                         }
-                        _ = s.AppendEvent(actorID, "item.move", t.ID, payload)
+                        if err := s.AppendEvent(actorID, "item.move", t.ID, payload); err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if err := s.Save(db); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }
@@ -223,9 +224,6 @@ func newItemsSetParentCmd(app *App) *cobra.Command {
                         t.ParentID = newParentID
                         t.UpdatedAt = now
 
-                        if err := s.Save(db); err != nil {
-                                return writeErr(cmd, err)
-                        }
                         payload := map[string]any{"parent": parent, "before": before, "after": after, "rank": strings.TrimSpace(t.Rank)}
                         if res.UsedFallback && len(res.RankByID) > 1 {
                                 rebalance := map[string]string{}
@@ -240,7 +238,12 @@ func newItemsSetParentCmd(app *App) *cobra.Command {
                                         payload["rebalanceCount"] = len(rebalance)
                                 }
                         }
-                        _ = s.AppendEvent(actorID, "item.set_parent", t.ID, payload)
+                        if err := s.AppendEvent(actorID, "item.set_parent", t.ID, payload); err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if err := s.Save(db); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }

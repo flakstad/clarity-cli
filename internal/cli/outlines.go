@@ -64,10 +64,12 @@ func newOutlinesCreateCmd(app *App) *cobra.Command {
                                 CreatedAt:  time.Now().UTC(),
                         }
                         db.Outlines = append(db.Outlines, o)
+                        if err := s.AppendEvent(actorID, "outline.create", o.ID, o); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "outline.create", o.ID, o)
                         return writeOut(cmd, app, map[string]any{"data": o})
                 },
         }
@@ -153,10 +155,12 @@ func newOutlinesArchiveCmd(app *App) *cobra.Command {
                                 return writeErr(cmd, errNotFound("outline", oid))
                         }
                         o.Archived = !unarchive
+                        if err := s.AppendEvent(actorID, "outline.archive", o.ID, map[string]any{"archived": o.Archived}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "outline.archive", o.ID, map[string]any{"archived": o.Archived})
                         return writeOut(cmd, app, map[string]any{"data": o})
                 },
         }

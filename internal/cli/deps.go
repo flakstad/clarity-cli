@@ -78,10 +78,12 @@ func newDepsAddCmd(app *App) *cobra.Command {
                                 CreatedAt:  time.Now().UTC(),
                         }
                         db.Deps = append(db.Deps, d)
+                        if err := s.AppendEvent(actorID, "dep.add", d.ID, d); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "dep.add", d.ID, d)
                         return writeOut(cmd, app, map[string]any{"data": d})
                 },
         }

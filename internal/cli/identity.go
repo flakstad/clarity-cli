@@ -71,10 +71,12 @@ func newIdentityCreateCmd(app *App) *cobra.Command {
                                 db.CurrentActorID = actor.ID
                                 app.ActorID = actor.ID
                         }
+                        if err := s.AppendEvent(actor.ID, "identity.create", actor.ID, map[string]any{"name": name, "kind": kind, "use": use, "ts": time.Now().UTC()}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actor.ID, "identity.create", actor.ID, map[string]any{"name": name, "kind": kind, "use": use, "ts": time.Now().UTC()})
 
                         return writeOut(cmd, app, map[string]any{"data": actor})
                 },
@@ -105,10 +107,12 @@ func newIdentityUseCmd(app *App) *cobra.Command {
                         }
                         db.CurrentActorID = id
                         app.ActorID = id
+                        if err := s.AppendEvent(id, "identity.use", id, map[string]any{"actorId": id}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(id, "identity.use", id, map[string]any{"actorId": id})
                         return writeOut(cmd, app, map[string]any{"data": map[string]any{"currentActorId": id}})
                 },
         }

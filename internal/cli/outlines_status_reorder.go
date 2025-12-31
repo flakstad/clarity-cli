@@ -58,10 +58,12 @@ func newOutlinesStatusReorderCmd(app *App) *cobra.Command {
                         }
 
                         o.StatusDefs = next
+                        if err := s.AppendEvent(actorID, "outline.status.reorder", oid, map[string]any{"labels": labels}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "outline.status.reorder", oid, map[string]any{"labels": labels})
                         return writeOut(cmd, app, map[string]any{"data": o})
                 },
         }

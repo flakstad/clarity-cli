@@ -39,10 +39,12 @@ func newItemsSetDescriptionCmd(app *App) *cobra.Command {
 
                         it.Description = strings.TrimSpace(description)
                         it.UpdatedAt = time.Now().UTC()
+                        if err := s.AppendEvent(actorID, "item.set_description", it.ID, map[string]any{"description": it.Description}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.set_description", it.ID, map[string]any{"description": it.Description})
                         return writeOut(cmd, app, map[string]any{"data": it})
                 },
         }

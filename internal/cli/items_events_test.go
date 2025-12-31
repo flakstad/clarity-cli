@@ -113,9 +113,15 @@ func TestItemsEvents_FiltersByItem(t *testing.T) {
                 t.Fatalf("seed store: %v", err)
         }
 
-        _ = st.AppendEvent(actorID, "item.set_title", "item-a", map[string]any{"title": "A2"})
-        _ = st.AppendEvent(actorID, "item.set_status", "item-a", map[string]any{"from": "todo", "to": "doing", "status": "doing"})
-        _ = st.AppendEvent(actorID, "item.set_title", "item-b", map[string]any{"title": "B2"})
+        if err := st.AppendEvent(actorID, "item.set_title", "item-a", map[string]any{"title": "A2"}); err != nil {
+                t.Fatalf("append event: %v", err)
+        }
+        if err := st.AppendEvent(actorID, "item.set_status", "item-a", map[string]any{"from": "todo", "to": "doing", "status": "doing"}); err != nil {
+                t.Fatalf("append event: %v", err)
+        }
+        if err := st.AppendEvent(actorID, "item.set_title", "item-b", map[string]any{"title": "B2"}); err != nil {
+                t.Fatalf("append event: %v", err)
+        }
 
         out, errOut, err := runCLI(t, []string{"--dir", dir, "--actor", actorID, "items", "events", "item-a", "--limit", "0"})
         if err != nil {

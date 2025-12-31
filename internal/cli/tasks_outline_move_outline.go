@@ -63,10 +63,12 @@ func newItemsMoveOutlineCmd(app *App) *cobra.Command {
                         t.Rank = nextSiblingRank(db, o.ID, nil)
                         t.UpdatedAt = time.Now().UTC()
 
+                        if err := s.AppendEvent(actorID, "item.move_outline", t.ID, map[string]any{"to": o.ID, "status": t.StatusID}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.move_outline", t.ID, map[string]any{"to": o.ID, "status": t.StatusID})
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }

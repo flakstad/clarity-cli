@@ -3,7 +3,6 @@ package store
 import (
         "os"
         "path/filepath"
-        "strings"
         "testing"
 )
 
@@ -45,13 +44,21 @@ func TestDoctorEventsV1_ReportsParseErrorsWithFileLine(t *testing.T) {
         }
 
         r := DoctorEventsV1(dir)
-        if len(r.Issues) != 1 {
-                t.Fatalf("expected 1 issue; got %#v", r.Issues)
+        if len(r.Issues) == 0 {
+                t.Fatalf("expected issues; got %#v", r.Issues)
         }
-        if r.Issues[0].Code != "events_read_failed" {
-                t.Fatalf("expected events_read_failed; got %#v", r.Issues[0])
+        found := false
+        for _, it := range r.Issues {
+                if it.Code != "malformed_json" {
+                        continue
+                }
+                if it.Path != path || it.Line != 1 {
+                        t.Fatalf("expected path+line on malformed_json; got %#v", it)
+                }
+                found = true
+                break
         }
-        if !strings.Contains(r.Issues[0].Message, "events.rep-a.jsonl:1") {
-                t.Fatalf("expected file:line in message; got %q", r.Issues[0].Message)
+        if !found {
+                t.Fatalf("expected malformed_json issue; got %#v", r.Issues)
         }
 }

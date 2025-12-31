@@ -53,10 +53,12 @@ func newItemsSetPriorityCmd(app *App) *cobra.Command {
                         }
 
                         t.UpdatedAt = time.Now().UTC()
+                        if err := s.AppendEvent(actorID, "item.set_priority", t.ID, map[string]any{"priority": t.Priority}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.set_priority", t.ID, map[string]any{"priority": t.Priority})
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }
@@ -108,10 +110,12 @@ func newItemsSetOnHoldCmd(app *App) *cobra.Command {
                         }
 
                         t.UpdatedAt = time.Now().UTC()
+                        if err := s.AppendEvent(actorID, "item.set_on_hold", t.ID, map[string]any{"onHold": t.OnHold}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.set_on_hold", t.ID, map[string]any{"onHold": t.OnHold})
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }
@@ -163,10 +167,12 @@ func newItemsSetDueCmd(app *App) *cobra.Command {
                         }
 
                         t.UpdatedAt = time.Now().UTC()
+                        if err := s.AppendEvent(actorID, "item.set_due", t.ID, map[string]any{"due": t.Due}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.set_due", t.ID, map[string]any{"due": t.Due})
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }
@@ -218,10 +224,12 @@ func newItemsSetScheduleCmd(app *App) *cobra.Command {
                         }
 
                         t.UpdatedAt = time.Now().UTC()
+                        if err := s.AppendEvent(actorID, "item.set_schedule", t.ID, map[string]any{"schedule": t.Schedule}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.set_schedule", t.ID, map[string]any{"schedule": t.Schedule})
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }
@@ -278,10 +286,12 @@ func newItemsSetAssignCmd(app *App) *cobra.Command {
                         }
 
                         res.Item.UpdatedAt = time.Now().UTC()
+                        if err := s.AppendEvent(actorID, "item.set_assign", res.Item.ID, res.EventPayload); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.set_assign", res.Item.ID, res.EventPayload)
                         return writeOut(cmd, app, map[string]any{"data": res.Item})
                 },
         }
@@ -324,10 +334,12 @@ func newItemsArchiveCmd(app *App) *cobra.Command {
 
                         t := res.Item
                         t.UpdatedAt = time.Now().UTC()
+                        if err := s.AppendEvent(actorID, "item.archive", t.ID, res.EventPayload); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.archive", t.ID, res.EventPayload)
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }
@@ -377,10 +389,12 @@ func newItemsTagsAddCmd(app *App) *cobra.Command {
                                 t.Tags = append(t.Tags, tag)
                         }
                         t.UpdatedAt = time.Now().UTC()
+                        if err := s.AppendEvent(actorID, "item.tags_add", t.ID, map[string]any{"tag": tag}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.tags_add", t.ID, map[string]any{"tag": tag})
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }
@@ -418,10 +432,12 @@ func newItemsTagsRemoveCmd(app *App) *cobra.Command {
                         }
                         t.Tags = removeString(t.Tags, tag)
                         t.UpdatedAt = time.Now().UTC()
+                        if err := s.AppendEvent(actorID, "item.tags_remove", t.ID, map[string]any{"tag": tag}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.tags_remove", t.ID, map[string]any{"tag": tag})
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }
@@ -465,10 +481,12 @@ func newItemsTagsSetCmd(app *App) *cobra.Command {
                         }
                         t.Tags = cleaned
                         t.UpdatedAt = time.Now().UTC()
+                        if err := s.AppendEvent(actorID, "item.tags_set", t.ID, map[string]any{"tags": t.Tags}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "item.tags_set", t.ID, map[string]any{"tags": t.Tags})
                         return writeOut(cmd, app, map[string]any{"data": t})
                 },
         }

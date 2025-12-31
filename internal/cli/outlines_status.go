@@ -80,10 +80,12 @@ func newOutlinesStatusAddCmd(app *App) *cobra.Command {
 
                         id := store.NewStatusIDFromLabel(o, label)
                         o.StatusDefs = append(o.StatusDefs, model.OutlineStatusDef{ID: id, Label: label, IsEndState: end, RequiresNote: requireNote})
+                        if err := s.AppendEvent(actorID, "outline.status.add", oid, map[string]any{"id": id, "label": label, "isEndState": end, "requiresNote": requireNote}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "outline.status.add", oid, map[string]any{"id": id, "label": label, "isEndState": end, "requiresNote": requireNote})
                         return writeOut(cmd, app, map[string]any{"data": o})
                 },
         }
@@ -167,10 +169,12 @@ func newOutlinesStatusUpdateCmd(app *App) *cobra.Command {
                                 return writeErr(cmd, errNotFound("status", key))
                         }
 
+                        if err := s.AppendEvent(actorID, "outline.status.update", oid, map[string]any{"key": key, "label": label, "end": end, "notEnd": notEnd, "requireNote": requireNote, "noRequireNote": noRequireNote, "ts": time.Now().UTC()}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "outline.status.update", oid, map[string]any{"key": key, "label": label, "end": end, "notEnd": notEnd, "requireNote": requireNote, "noRequireNote": noRequireNote, "ts": time.Now().UTC()})
                         return writeOut(cmd, app, map[string]any{"data": o})
                 },
         }
@@ -234,10 +238,12 @@ func newOutlinesStatusRemoveCmd(app *App) *cobra.Command {
                                 return writeErr(cmd, errNotFound("status", sid))
                         }
                         o.StatusDefs = next
+                        if err := s.AppendEvent(actorID, "outline.status.remove", oid, map[string]any{"id": sid}); err != nil {
+                                return writeErr(cmd, err)
+                        }
                         if err := s.Save(db); err != nil {
                                 return writeErr(cmd, err)
                         }
-                        _ = s.AppendEvent(actorID, "outline.status.remove", oid, map[string]any{"id": sid})
                         return writeOut(cmd, app, map[string]any{"data": o})
                 },
         }

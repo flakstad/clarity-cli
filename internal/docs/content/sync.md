@@ -45,6 +45,8 @@ clarity doctor --fail
 
 Stages canonical workspace paths, commits, optionally pulls/rebases, then pushes.
 
+If pushing fails due to a non-fast-forward update, Clarity retries once by pulling with `--rebase` and pushing again.
+
 Examples:
 
 ```bash

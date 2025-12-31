@@ -1,9 +1,18 @@
 package store
 
 import (
+        "bufio"
+        "bytes"
+        "context"
+        "encoding/json"
         "errors"
         "fmt"
+        "os"
+        "path/filepath"
+        "sort"
         "strings"
+
+        "clarity-cli/internal/gitrepo"
 )
 
 type DoctorIssueLevel string
@@ -42,8 +51,57 @@ func (r DoctorReport) HasErrors() bool {
 }
 
 func DoctorEventsV1(dir string) DoctorReport {
-        lines, err := ReadEventsV1Lines(dir)
+        st := Store{Dir: dir}
+        wsRoot := st.workspaceRoot()
+
+        var issues []DoctorIssue
+
+        // If this workspace lives in a Git repo, report in-progress/conflict state.
+        if gs, err := gitrepo.GetStatus(context.Background(), wsRoot); err == nil && gs.IsRepo {
+                if gs.Unmerged || gs.InProgress {
+                        issues = append(issues, DoctorIssue{
+                                Level:   DoctorIssueLevelError,
+                                Code:    "git_in_progress",
+                                Message: "git merge/rebase in progress; resolve conflicts before writing events",
+                        })
+                }
+        }
+
+        // Load committed workspaceId from meta/workspace.json (if present) for consistency checks.
+        metaWorkspaceID := ""
+        metaPath := filepath.Join(wsRoot, "meta", "workspace.json")
+        if b, err := os.ReadFile(metaPath); err == nil && len(bytes.TrimSpace(b)) > 0 {
+                var m WorkspaceMetaFile
+                if err := json.Unmarshal(b, &m); err != nil {
+                        issues = append(issues, DoctorIssue{
+                                Level:   DoctorIssueLevelError,
+                                Code:    "workspace_meta_invalid_json",
+                                Message: err.Error(),
+                                Path:    metaPath,
+                                Line:    1,
+                        })
+                } else {
+                        metaWorkspaceID = strings.TrimSpace(m.WorkspaceID)
+                        if metaWorkspaceID == "" {
+                                issues = append(issues, DoctorIssue{
+                                        Level:   DoctorIssueLevelError,
+                                        Code:    "workspace_meta_missing_id",
+                                        Message: "meta/workspace.json: empty workspaceId",
+                                        Path:    metaPath,
+                                        Line:    1,
+                                })
+                        }
+                }
+        }
+
+        // Scan events JSONL files, capturing parse errors as issues (not as a hard failure).
+        lines := []EventV1Line{}
+        eventsDir := st.eventsDir()
+        entries, err := os.ReadDir(eventsDir)
         if err != nil {
+                if errors.Is(err, os.ErrNotExist) {
+                        return DoctorReport{Issues: issuesOrEmpty(issues)}
+                }
                 return DoctorReport{
                         Issues: []DoctorIssue{{
                                 Level:   DoctorIssueLevelError,
@@ -52,11 +110,108 @@ func DoctorEventsV1(dir string) DoctorReport {
                         }},
                 }
         }
-        if len(lines) == 0 {
-                return DoctorReport{Issues: []DoctorIssue{}}
+        var paths []string
+        for _, ent := range entries {
+                if ent.IsDir() {
+                        continue
+                }
+                name := ent.Name()
+                if !strings.HasPrefix(name, "events") || !strings.HasSuffix(name, ".jsonl") {
+                        continue
+                }
+                paths = append(paths, filepath.Join(eventsDir, name))
         }
+        sort.Strings(paths)
 
-        var issues []DoctorIssue
+        for _, p := range paths {
+                replicaFromFile := replicaIDFromShardFilename(filepath.Base(p))
+
+                f, err := os.Open(p)
+                if err != nil {
+                        issues = append(issues, DoctorIssue{
+                                Level:   DoctorIssueLevelError,
+                                Code:    "events_open_failed",
+                                Message: err.Error(),
+                                Path:    p,
+                        })
+                        continue
+                }
+
+                sc := bufio.NewScanner(f)
+                sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+
+                lineNo := 0
+                for sc.Scan() {
+                        lineNo++
+                        b := bytes.TrimSpace(sc.Bytes())
+                        if len(b) == 0 {
+                                continue
+                        }
+
+                        // Common merge markers.
+                        if bytes.HasPrefix(b, []byte("<<<<<<<")) || bytes.HasPrefix(b, []byte("=======")) || bytes.HasPrefix(b, []byte(">>>>>>>")) {
+                                issues = append(issues, DoctorIssue{
+                                        Level:   DoctorIssueLevelError,
+                                        Code:    "merge_marker",
+                                        Message: "git merge conflict marker in events log",
+                                        Path:    p,
+                                        Line:    lineNo,
+                                })
+                                continue
+                        }
+
+                        var ev EventV1
+                        if err := json.Unmarshal(b, &ev); err != nil {
+                                issues = append(issues, DoctorIssue{
+                                        Level:   DoctorIssueLevelError,
+                                        Code:    "malformed_json",
+                                        Message: err.Error(),
+                                        Path:    p,
+                                        Line:    lineNo,
+                                })
+                                continue
+                        }
+
+                        if replicaFromFile != "" && strings.TrimSpace(ev.ReplicaID) != "" && strings.TrimSpace(ev.ReplicaID) != replicaFromFile {
+                                issues = append(issues, DoctorIssue{
+                                        Level:     DoctorIssueLevelError,
+                                        Code:      "replica_id_mismatch",
+                                        Message:   fmt.Sprintf("replicaId %q does not match shard filename %q", strings.TrimSpace(ev.ReplicaID), replicaFromFile),
+                                        Path:      p,
+                                        Line:      lineNo,
+                                        EventID:   strings.TrimSpace(ev.EventID),
+                                        ReplicaID: strings.TrimSpace(ev.ReplicaID),
+                                        Type:      strings.TrimSpace(ev.Type),
+                                })
+                        }
+                        if metaWorkspaceID != "" && strings.TrimSpace(ev.WorkspaceID) != "" && strings.TrimSpace(ev.WorkspaceID) != metaWorkspaceID {
+                                issues = append(issues, DoctorIssue{
+                                        Level:       DoctorIssueLevelError,
+                                        Code:        "workspace_id_mismatch",
+                                        Message:     fmt.Sprintf("workspaceId %q does not match meta/workspace.json %q", strings.TrimSpace(ev.WorkspaceID), metaWorkspaceID),
+                                        Path:        p,
+                                        Line:        lineNo,
+                                        EventID:     strings.TrimSpace(ev.EventID),
+                                        WorkspaceID: strings.TrimSpace(ev.WorkspaceID),
+                                        Type:        strings.TrimSpace(ev.Type),
+                                })
+                        }
+
+                        lines = append(lines, EventV1Line{Path: p, Line: lineNo, Event: ev})
+                }
+                _ = f.Close()
+                if err := sc.Err(); err != nil {
+                        issues = append(issues, DoctorIssue{
+                                Level:   DoctorIssueLevelError,
+                                Code:    "events_scan_failed",
+                                Message: err.Error(),
+                                Path:    p,
+                        })
+                }
+        }
+        if len(lines) == 0 {
+                return DoctorReport{Issues: issuesOrEmpty(issues)}
+        }
 
         seen := map[string]EventV1Line{}
         for _, l := range lines {
@@ -196,10 +351,27 @@ func DoctorEventsV1(dir string) DoctorReport {
                 }
         }
 
-        if issues == nil {
-                issues = []DoctorIssue{}
-        }
-        return DoctorReport{Issues: issues}
+        return DoctorReport{Issues: issuesOrEmpty(issues)}
 }
 
 var ErrDoctorIssuesFound = errors.New("doctor: issues found")
+
+func issuesOrEmpty(xs []DoctorIssue) []DoctorIssue {
+        if xs == nil {
+                return []DoctorIssue{}
+        }
+        return xs
+}
+
+func replicaIDFromShardFilename(name string) string {
+        name = strings.TrimSpace(name)
+        if name == "" || name == "events.jsonl" {
+                return ""
+        }
+        // events.<replica>.jsonl
+        if !strings.HasPrefix(name, "events.") || !strings.HasSuffix(name, ".jsonl") {
+                return ""
+        }
+        core := strings.TrimSuffix(strings.TrimPrefix(name, "events."), ".jsonl")
+        return strings.TrimSpace(core)
+}

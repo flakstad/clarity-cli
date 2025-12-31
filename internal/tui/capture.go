@@ -516,10 +516,12 @@ func (m *captureModel) createDraftItem() (string, error) {
         }
 
         db.Items = append(db.Items, newItem)
+        if err := m.st.AppendEvent(actorID, "item.create", newItem.ID, newItem); err != nil {
+                return "", err
+        }
         if err := m.st.Save(db); err != nil {
                 return "", err
         }
-        _ = m.st.AppendEvent(actorID, "item.create", newItem.ID, newItem)
         return newItem.ID, nil
 }
 
