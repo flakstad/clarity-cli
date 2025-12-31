@@ -6021,7 +6021,7 @@ func (m *appModel) archiveItemTree(rootID string) (int, error) {
                         continue
                 }
                 res.Item.UpdatedAt = now
-                if err := m.store.AppendEvent(actorID, "item.archive", res.Item.ID, res.EventPayload); err != nil {
+                if err := m.appendEvent(actorID, "item.archive", res.Item.ID, res.EventPayload); err != nil {
                         return archived, err
                 }
                 archived++
@@ -6072,14 +6072,14 @@ func (m *appModel) archiveOutlineTree(outlineID string) (int, error) {
                         continue
                 }
                 res.Item.UpdatedAt = now
-                if err := m.store.AppendEvent(actorID, "item.archive", res.Item.ID, res.EventPayload); err != nil {
+                if err := m.appendEvent(actorID, "item.archive", res.Item.ID, res.EventPayload); err != nil {
                         return itemsArchived, err
                 }
                 itemsArchived++
         }
 
         o.Archived = true
-        if err := m.store.AppendEvent(actorID, "outline.archive", o.ID, map[string]any{"archived": true}); err != nil {
+        if err := m.appendEvent(actorID, "outline.archive", o.ID, map[string]any{"archived": true}); err != nil {
                 return itemsArchived, err
         }
 
@@ -6126,7 +6126,7 @@ func (m *appModel) archiveProjectTree(projectID string) (int, int, error) {
                         continue
                 }
                 o.Archived = true
-                if err := m.store.AppendEvent(actorID, "outline.archive", o.ID, map[string]any{"archived": true}); err != nil {
+                if err := m.appendEvent(actorID, "outline.archive", o.ID, map[string]any{"archived": true}); err != nil {
                         return outlinesArchived, 0, err
                 }
                 outlinesArchived++
@@ -6144,14 +6144,14 @@ func (m *appModel) archiveProjectTree(projectID string) (int, int, error) {
                         continue
                 }
                 res.Item.UpdatedAt = now
-                if err := m.store.AppendEvent(actorID, "item.archive", res.Item.ID, res.EventPayload); err != nil {
+                if err := m.appendEvent(actorID, "item.archive", res.Item.ID, res.EventPayload); err != nil {
                         return outlinesArchived, itemsArchived, err
                 }
                 itemsArchived++
         }
 
         p.Archived = true
-        if err := m.store.AppendEvent(actorID, "project.archive", p.ID, map[string]any{"archived": true}); err != nil {
+        if err := m.appendEvent(actorID, "project.archive", p.ID, map[string]any{"archived": true}); err != nil {
                 return outlinesArchived, itemsArchived, err
         }
 
@@ -6842,7 +6842,7 @@ func (m *appModel) createItemFromModal(title string) error {
         }
         m.db.Items = append(m.db.Items, newItem)
 
-        if err := m.store.AppendEvent(actorID, "item.create", newItem.ID, newItem); err != nil {
+        if err := m.appendEvent(actorID, "item.create", newItem.ID, newItem); err != nil {
                 return err
         }
         if err := m.store.Save(m.db); err != nil {
@@ -6921,7 +6921,7 @@ func (m *appModel) mutateItem(itemID string, mutate func(db *store.DB, it *model
 
         it.UpdatedAt = time.Now().UTC()
         if strings.TrimSpace(res.eventType) != "" {
-                if err := m.store.AppendEvent(actorID, res.eventType, it.ID, res.eventPayload); err != nil {
+                if err := m.appendEvent(actorID, res.eventType, it.ID, res.eventPayload); err != nil {
                         return err
                 }
                 // Keep in-memory history fresh for the item detail "History" section.
@@ -6989,7 +6989,7 @@ func (m *appModel) mutateProject(projectID string, mutate func(db *store.DB, p *
         }
 
         if strings.TrimSpace(res.eventType) != "" {
-                if err := m.store.AppendEvent(actorID, res.eventType, p.ID, res.eventPayload); err != nil {
+                if err := m.appendEvent(actorID, res.eventType, p.ID, res.eventPayload); err != nil {
                         return err
                 }
                 m.refreshEventsTail()
@@ -7052,7 +7052,7 @@ func (m *appModel) mutateOutline(outlineID string, mutate func(db *store.DB, o *
         }
 
         if strings.TrimSpace(res.eventType) != "" {
-                if err := m.store.AppendEvent(actorID, res.eventType, o.ID, res.eventPayload); err != nil {
+                if err := m.appendEvent(actorID, res.eventType, o.ID, res.eventPayload); err != nil {
                         return err
                 }
                 m.refreshEventsTail()
@@ -7414,7 +7414,7 @@ func (m *appModel) createProjectFromModal(name string) error {
         }
         m.db.Projects = append(m.db.Projects, p)
         m.db.CurrentProjectID = p.ID
-        if err := m.store.AppendEvent(actorID, "project.create", p.ID, p); err != nil {
+        if err := m.appendEvent(actorID, "project.create", p.ID, p); err != nil {
                 return err
         }
         if err := m.store.Save(m.db); err != nil {
@@ -7492,7 +7492,7 @@ func (m *appModel) createOutlineFromModal(name string) error {
                 CreatedAt:  time.Now().UTC(),
         }
         m.db.Outlines = append(m.db.Outlines, o)
-        if err := m.store.AppendEvent(actorID, "outline.create", o.ID, o); err != nil {
+        if err := m.appendEvent(actorID, "outline.create", o.ID, o); err != nil {
                 return err
         }
         if err := m.store.Save(m.db); err != nil {
@@ -8586,7 +8586,7 @@ func (m *appModel) reorderItem(t *model.Item, afterID, beforeID string) error {
                         payload["rebalanceCount"] = len(rebalance)
                 }
         }
-        if err := m.store.AppendEvent(actorID, "item.move", t.ID, payload); err != nil {
+        if err := m.appendEvent(actorID, "item.move", t.ID, payload); err != nil {
                 return err
         }
         if err := m.store.Save(m.db); err != nil {
@@ -8639,7 +8639,7 @@ func (m *appModel) indentSelected() error {
         t.ParentID = &tmp
         t.Rank = nextSiblingRank(m.db, t.OutlineID, t.ParentID)
         t.UpdatedAt = time.Now().UTC()
-        if err := m.store.AppendEvent(actorID, "item.set_parent", t.ID, map[string]any{"parent": newParentID, "rank": t.Rank}); err != nil {
+        if err := m.appendEvent(actorID, "item.set_parent", t.ID, map[string]any{"parent": newParentID, "rank": t.Rank}); err != nil {
                 return err
         }
         if err := m.store.Save(m.db); err != nil {
@@ -8722,7 +8722,7 @@ func (m *appModel) outdentSelected() error {
         } else {
                 payload["parent"] = *destParentID
         }
-        if err := m.store.AppendEvent(actorID, "item.set_parent", t.ID, payload); err != nil {
+        if err := m.appendEvent(actorID, "item.set_parent", t.ID, payload); err != nil {
                 return err
         }
         if err := m.store.Save(m.db); err != nil {
@@ -9043,7 +9043,7 @@ func (m *appModel) addComment(itemID, body string, replyToCommentID *string) (st
                 CreatedAt:        time.Now().UTC(),
         }
         m.db.Comments = append(m.db.Comments, c)
-        if err := m.store.AppendEvent(actorID, "comment.add", c.ID, c); err != nil {
+        if err := m.appendEvent(actorID, "comment.add", c.ID, c); err != nil {
                 return "", err
         }
         if err := m.store.Save(m.db); err != nil {
@@ -9099,7 +9099,7 @@ func (m *appModel) addWorklog(itemID, body string) error {
                 CreatedAt: time.Now().UTC(),
         }
         m.db.Worklog = append(m.db.Worklog, w)
-        if err := m.store.AppendEvent(actorID, "worklog.add", w.ID, w); err != nil {
+        if err := m.appendEvent(actorID, "worklog.add", w.ID, w); err != nil {
                 return err
         }
         if err := m.store.Save(m.db); err != nil {

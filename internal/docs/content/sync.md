@@ -60,3 +60,17 @@ clarity sync push --pull=false
 Shows conflict status and suggested resolution steps.
 
 Clarity blocks writes while a Git merge/rebase is in progress.
+
+## Reducing merge conflicts (recommended)
+
+Clarity v1 is designed so Git conflicts are rare:
+
+- Prefer **sharded event logs** (`events/events.<replicaId>.jsonl`) so different people usually append to different files.
+- Keep canonical history append-only and let `clarity doctor` catch malformed JSON or merge markers.
+
+Optional `.gitattributes` (repo root) to make event log merges more “boring”:
+
+```gitattributes
+# Treat JSONL event logs as append-only under merges.
+events/*.jsonl merge=union
+```

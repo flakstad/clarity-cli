@@ -89,3 +89,14 @@ Comment/worklog editor:
 - `ctrl+o`: open in `$VISUAL`/`$EDITOR`
 - `ctrl+g`: close (cancel)
 - `tab` / `shift+tab`: focus body/save/cancel, `enter` activates buttons
+
+## Git auto-commit (experimental)
+
+For Git-backed workspaces, the TUI can optionally stage+commit canonical workspace changes after you stop editing for a short while (debounced).
+
+Enable with:
+- `CLARITY_AUTOCOMMIT=1` (or `CLARITY_GIT_AUTOCOMMIT=1`)
+
+Notes:
+- Commits include canonical paths only (`events/`, `meta/workspace.json`, `resources/`).
+- This does not push to a remote; use `clarity sync push` (or `git push`) for that.

@@ -6,6 +6,7 @@ import (
         "strings"
         "time"
 
+        "clarity-cli/internal/gitrepo"
         "clarity-cli/internal/model"
         "clarity-cli/internal/store"
 
@@ -144,6 +145,8 @@ type appModel struct {
         lastEventsModTime time.Time
 
         minibufferText string
+
+        autoCommit *gitrepo.DebouncedCommitter
 }
 
 const (
@@ -201,6 +204,14 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
                 db:        db,
                 view:      viewProjects,
                 pane:      paneOutline,
+        }
+
+        if strings.TrimSpace(os.Getenv("CLARITY_AUTOCOMMIT")) != "" || strings.TrimSpace(os.Getenv("CLARITY_GIT_AUTOCOMMIT")) != "" {
+                m.autoCommit = gitrepo.NewDebouncedCommitter(gitrepo.DebouncedCommitterOpts{
+                        WorkspaceDir: dir,
+                        Debounce:     2 * time.Second,
+                        Message:      func() string { return "clarity: auto-commit (tui)" },
+                })
         }
         m.columnsSel = map[string]outlineColumnsSelection{}
         m.tagsListActive = new(bool)

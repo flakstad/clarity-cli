@@ -3,10 +3,12 @@ package tui
 import (
         "errors"
         "fmt"
+        "os"
         "sort"
         "strings"
         "time"
 
+        "clarity-cli/internal/gitrepo"
         "clarity-cli/internal/model"
         "clarity-cli/internal/store"
 
@@ -105,6 +107,8 @@ type captureModel struct {
 
         canceled bool
         result   CaptureResult
+
+        autoCommit *gitrepo.DebouncedCommitter
 }
 
 type captureOptionItem struct {
@@ -417,6 +421,13 @@ func (m *captureModel) startDraftFromTemplate(t store.CaptureTemplate) error {
         m.dir = dir
         m.st = st
         m.db = db
+        if strings.TrimSpace(os.Getenv("CLARITY_AUTOCOMMIT")) != "" || strings.TrimSpace(os.Getenv("CLARITY_GIT_AUTOCOMMIT")) != "" {
+                m.autoCommit = gitrepo.NewDebouncedCommitter(gitrepo.DebouncedCommitterOpts{
+                        WorkspaceDir: dir,
+                        Debounce:     2 * time.Second,
+                        Message:      func() string { return "clarity: auto-commit (capture)" },
+                })
+        }
         m.draftOutlineID = o.ID
         m.draftStatusID = store.FirstStatusID(o.StatusDefs)
         m.draftTitle = ""
@@ -424,6 +435,16 @@ func (m *captureModel) startDraftFromTemplate(t store.CaptureTemplate) error {
         m.phase = capturePhaseEditDraft
         m.modal = captureModalEditTitle
         m.openTitleModal("")
+        return nil
+}
+
+func (m captureModel) appendEvent(actorID string, eventType string, entityID string, payload any) error {
+        if err := m.st.AppendEvent(actorID, eventType, entityID, payload); err != nil {
+                return err
+        }
+        if m.autoCommit != nil {
+                m.autoCommit.Notify()
+        }
         return nil
 }
 
@@ -516,7 +537,7 @@ func (m *captureModel) createDraftItem() (string, error) {
         }
 
         db.Items = append(db.Items, newItem)
-        if err := m.st.AppendEvent(actorID, "item.create", newItem.ID, newItem); err != nil {
+        if err := m.appendEvent(actorID, "item.create", newItem.ID, newItem); err != nil {
                 return "", err
         }
         if err := m.st.Save(db); err != nil {
