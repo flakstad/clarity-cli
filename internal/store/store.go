@@ -1,10 +1,7 @@
 package store
 
 import (
-        "bufio"
         "context"
-        "encoding/json"
-        "errors"
         "fmt"
         "os"
         "path/filepath"
@@ -360,8 +357,12 @@ func (s Store) NextID(db *DB, prefix string) string {
 }
 
 func (s Store) AppendEvent(actorID, typ, entityID string, payload any) error {
-        // SQLite-only: never write events.jsonl.
-        return s.appendEventSQLite(context.Background(), actorID, typ, entityID, payload)
+        switch s.eventLogBackend() {
+        case EventLogBackendJSONL:
+                return s.appendEventJSONL(context.Background(), actorID, typ, entityID, payload)
+        default:
+                return s.appendEventSQLite(context.Background(), actorID, typ, entityID, payload)
+        }
 }
 
 func (db *DB) FindActor(id string) (*model.Actor, bool) {
@@ -513,36 +514,10 @@ func ParseStatusID(s string) (string, error) {
 
 func ReadEvents(dir string, limit int) ([]model.Event, error) {
         st := Store{Dir: dir}
-        // SQLite-only by default. Keep legacy JSONL reader for back-compat/forensics if explicitly requested.
-        if st.eventLogBackend() != EventLogBackendJSONL {
-                return st.readEventsSQLite(context.Background(), limit)
+        if st.eventLogBackend() == EventLogBackendJSONL {
+                return st.readEventsJSONL(limit)
         }
-        path := filepath.Join(dir, eventsFileName)
-        f, err := os.Open(path)
-        if err != nil {
-                if errors.Is(err, os.ErrNotExist) {
-                        return []model.Event{}, nil
-                }
-                return nil, err
-        }
-        defer f.Close()
-
-        var out []model.Event
-        sc := bufio.NewScanner(f)
-        for sc.Scan() {
-                var ev model.Event
-                if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
-                        return nil, err
-                }
-                out = append(out, ev)
-                if limit > 0 && len(out) >= limit {
-                        break
-                }
-        }
-        if err := sc.Err(); err != nil {
-                return nil, err
-        }
-        return out, nil
+        return st.readEventsSQLite(context.Background(), limit)
 }
 
 // ReadEventsTail reads the last N events from the append-only events log.
@@ -550,67 +525,15 @@ func ReadEvents(dir string, limit int) ([]model.Event, error) {
 // The returned slice is in chronological order (oldest-first within the returned window).
 // If limit <= 0, this behaves like ReadEvents(dir, 0) and returns all events.
 func ReadEventsTail(dir string, limit int) ([]model.Event, error) {
-        st := Store{Dir: dir}
-        if st.eventLogBackend() != EventLogBackendJSONL {
-                // Simple implementation: read all and take tail. We can optimize later.
-                // This preserves existing behavior while we transition the store.
-                evs, err := st.readEventsSQLite(context.Background(), 0)
-                if err != nil {
-                        return nil, err
-                }
-                if limit <= 0 || len(evs) <= limit {
-                        return evs, nil
-                }
-                return evs[len(evs)-limit:], nil
-        }
-        if limit <= 0 {
-                return ReadEvents(dir, 0)
-        }
-
-        path := filepath.Join(dir, eventsFileName)
-        f, err := os.Open(path)
+        // Simple implementation: read all and take tail. We can optimize later.
+        evs, err := ReadEvents(dir, 0)
         if err != nil {
-                if errors.Is(err, os.ErrNotExist) {
-                        return []model.Event{}, nil
-                }
                 return nil, err
         }
-        defer f.Close()
-
-        // Ring buffer for the last `limit` events.
-        ring := make([]model.Event, limit)
-        start := 0
-        size := 0
-
-        sc := bufio.NewScanner(f)
-        for sc.Scan() {
-                var ev model.Event
-                if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
-                        return nil, err
-                }
-                if size < limit {
-                        ring[size] = ev
-                        size++
-                } else {
-                        ring[start] = ev
-                        start = (start + 1) % limit
-                }
+        if limit <= 0 || len(evs) <= limit {
+                return evs, nil
         }
-        if err := sc.Err(); err != nil {
-                return nil, err
-        }
-
-        if size == 0 {
-                return []model.Event{}, nil
-        }
-        if size < limit {
-                return ring[:size], nil
-        }
-
-        out := make([]model.Event, 0, limit)
-        out = append(out, ring[start:]...)
-        out = append(out, ring[:start]...)
-        return out, nil
+        return evs[len(evs)-limit:], nil
 }
 
 // ReadEventsForEntity returns events matching entityID from the append-only events log.
@@ -623,75 +546,8 @@ func ReadEventsForEntity(dir, entityID string, limit int) ([]model.Event, error)
                 return []model.Event{}, nil
         }
         st := Store{Dir: dir}
-        if st.eventLogBackend() != EventLogBackendJSONL {
-                return st.readEventsForEntitySQLite(context.Background(), entityID, limit)
+        if st.eventLogBackend() == EventLogBackendJSONL {
+                return st.readEventsForEntityJSONL(entityID, limit)
         }
-
-        path := filepath.Join(dir, eventsFileName)
-        f, err := os.Open(path)
-        if err != nil {
-                if errors.Is(err, os.ErrNotExist) {
-                        return []model.Event{}, nil
-                }
-                return nil, err
-        }
-        defer f.Close()
-
-        // If limit <= 0, return all matches.
-        if limit <= 0 {
-                var out []model.Event
-                sc := bufio.NewScanner(f)
-                for sc.Scan() {
-                        var ev model.Event
-                        if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
-                                return nil, err
-                        }
-                        if strings.TrimSpace(ev.EntityID) != entityID {
-                                continue
-                        }
-                        out = append(out, ev)
-                }
-                if err := sc.Err(); err != nil {
-                        return nil, err
-                }
-                return out, nil
-        }
-
-        // Ring buffer for the last `limit` matching events.
-        ring := make([]model.Event, limit)
-        start := 0
-        size := 0
-
-        sc := bufio.NewScanner(f)
-        for sc.Scan() {
-                var ev model.Event
-                if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
-                        return nil, err
-                }
-                if strings.TrimSpace(ev.EntityID) != entityID {
-                        continue
-                }
-                if size < limit {
-                        ring[size] = ev
-                        size++
-                } else {
-                        ring[start] = ev
-                        start = (start + 1) % limit
-                }
-        }
-        if err := sc.Err(); err != nil {
-                return nil, err
-        }
-
-        if size == 0 {
-                return []model.Event{}, nil
-        }
-        if size < limit {
-                return ring[:size], nil
-        }
-
-        out := make([]model.Event, 0, limit)
-        out = append(out, ring[start:]...)
-        out = append(out, ring[:start]...)
-        return out, nil
+        return st.readEventsForEntitySQLite(context.Background(), entityID, limit)
 }
