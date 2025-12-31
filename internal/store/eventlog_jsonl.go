@@ -17,6 +17,17 @@ import (
         "clarity-cli/internal/model"
 )
 
+type EventV1Line struct {
+        Path  string
+        Line  int
+        Event EventV1
+}
+
+func ReadEventsV1Lines(dir string) ([]EventV1Line, error) {
+        st := Store{Dir: dir}
+        return st.readEventsV1LinesJSONL()
+}
+
 func (s Store) workspaceRoot() string {
         dir := filepath.Clean(s.Dir)
         if filepath.Base(dir) == ".clarity" {
@@ -57,23 +68,18 @@ func (s Store) appendEventJSONL(ctx context.Context, actorID, typ, entityID stri
                 return formatErrEventContract("missing actor id")
         }
 
-        // Temporary bridge: allocate (workspaceId, replicaId) and (entitySeq, parents) via the existing
-        // SQLite meta tables. As we pivot fully to Git+JSONL canonical storage, this becomes derived state
-        // rebuilt during reindex/doctor operations.
-        db, err := s.openSQLite(ctx)
+        // V1 Git-backed mode: workspaceId is committed (meta/workspace.json); replicaId is local-only
+        // (.clarity/device.json, gitignored). This keeps the canonical log append-only and merge-friendly.
+        wsMeta, _, err := s.loadOrInitWorkspaceMeta()
         if err != nil {
                 return err
         }
-        defer db.Close()
-
-        wsID, err := ensureMetaUUID(ctx, db, "workspace_id")
+        device, _, err := s.loadOrInitDeviceFile()
         if err != nil {
                 return err
         }
-        repID, err := ensureMetaUUID(ctx, db, "replica_id")
-        if err != nil {
-                return err
-        }
+        wsID := strings.TrimSpace(wsMeta.WorkspaceID)
+        repID := strings.TrimSpace(device.ReplicaID)
 
         now := time.Now().UTC()
 
@@ -86,12 +92,6 @@ func (s Store) appendEventJSONL(ctx context.Context, actorID, typ, entityID stri
                 return err
         }
 
-        // Allocate seq + parent via the same logic as appendEventSQLite, but without inserting into sqlite events.
-        seq, parents, err := allocateEntitySeqAndParents(ctx, db, kind, entityID, eventID)
-        if err != nil {
-                return err
-        }
-
         ev := EventV1{
                 EventID:     eventID,
                 WorkspaceID: wsID,
@@ -99,10 +99,10 @@ func (s Store) appendEventJSONL(ctx context.Context, actorID, typ, entityID stri
 
                 EntityKind: kind,
                 EntityID:   entityID,
-                EntitySeq:  seq,
+                EntitySeq:  0,
 
                 Type:    typ,
-                Parents: parents,
+                Parents: nil,
 
                 IssuedAt: now,
                 ActorID:  actorID,
@@ -203,19 +203,22 @@ func allocateEntitySeqAndParents(ctx context.Context, db *sql.DB, kind EntityKin
 }
 
 func (s Store) readEventsJSONL(limit int) ([]model.Event, error) {
-        evs, err := s.readEventsV1JSONL()
+        evs, err := s.readEventsV1LinesJSONL()
         if err != nil {
                 return nil, err
         }
         sort.Slice(evs, func(i, j int) bool {
-                if evs[i].IssuedAt.Equal(evs[j].IssuedAt) {
-                        return evs[i].EventID < evs[j].EventID
+                a := evs[i].Event
+                b := evs[j].Event
+                if a.IssuedAt.Equal(b.IssuedAt) {
+                        return a.EventID < b.EventID
                 }
-                return evs[i].IssuedAt.Before(evs[j].IssuedAt)
+                return a.IssuedAt.Before(b.IssuedAt)
         })
 
         out := make([]model.Event, 0, len(evs))
-        for _, e := range evs {
+        for _, l := range evs {
+                e := l.Event
                 var payload any
                 _ = json.Unmarshal(e.Payload, &payload)
                 out = append(out, model.Event{
@@ -241,29 +244,32 @@ func (s Store) readEventsForEntityJSONL(entityID string, limit int) ([]model.Eve
         if entityID == "" {
                 return []model.Event{}, nil
         }
-        evs, err := s.readEventsV1JSONL()
+        evs, err := s.readEventsV1LinesJSONL()
         if err != nil {
                 return nil, err
         }
         // Keep v1 semantics: per-entity order is seq, then timestamp/id tie-break.
         sort.Slice(evs, func(i, j int) bool {
-                if strings.TrimSpace(evs[i].EntityID) != entityID && strings.TrimSpace(evs[j].EntityID) == entityID {
+                a := evs[i].Event
+                b := evs[j].Event
+                if strings.TrimSpace(a.EntityID) != entityID && strings.TrimSpace(b.EntityID) == entityID {
                         return false
                 }
-                if strings.TrimSpace(evs[i].EntityID) == entityID && strings.TrimSpace(evs[j].EntityID) != entityID {
+                if strings.TrimSpace(a.EntityID) == entityID && strings.TrimSpace(b.EntityID) != entityID {
                         return true
                 }
-                if evs[i].EntitySeq != evs[j].EntitySeq {
-                        return evs[i].EntitySeq < evs[j].EntitySeq
+                if a.EntitySeq != b.EntitySeq {
+                        return a.EntitySeq < b.EntitySeq
                 }
-                if evs[i].IssuedAt.Equal(evs[j].IssuedAt) {
-                        return evs[i].EventID < evs[j].EventID
+                if a.IssuedAt.Equal(b.IssuedAt) {
+                        return a.EventID < b.EventID
                 }
-                return evs[i].IssuedAt.Before(evs[j].IssuedAt)
+                return a.IssuedAt.Before(b.IssuedAt)
         })
 
         var out []model.Event
-        for _, e := range evs {
+        for _, l := range evs {
+                e := l.Event
                 if strings.TrimSpace(e.EntityID) != entityID {
                         continue
                 }
@@ -287,7 +293,7 @@ func (s Store) readEventsForEntityJSONL(entityID string, limit int) ([]model.Eve
         return out, nil
 }
 
-func (s Store) readEventsV1JSONL() ([]EventV1, error) {
+func (s Store) readEventsV1LinesJSONL() ([]EventV1Line, error) {
         // Support both:
         // - sharded logs: events/events.<replica-id>.jsonl (preferred)
         // - legacy single log: events/events.jsonl
@@ -295,7 +301,7 @@ func (s Store) readEventsV1JSONL() ([]EventV1, error) {
         entries, err := os.ReadDir(dir)
         if err != nil {
                 if errors.Is(err, os.ErrNotExist) {
-                        return []EventV1{}, nil
+                        return []EventV1Line{}, nil
                 }
                 return nil, err
         }
@@ -312,7 +318,7 @@ func (s Store) readEventsV1JSONL() ([]EventV1, error) {
         }
         sort.Strings(paths)
 
-        var out []EventV1
+        var out []EventV1Line
         for _, p := range paths {
                 evs, err := readEventV1Lines(p)
                 if err != nil {
@@ -321,16 +327,16 @@ func (s Store) readEventsV1JSONL() ([]EventV1, error) {
                 out = append(out, evs...)
         }
         if out == nil {
-                out = []EventV1{}
+                out = []EventV1Line{}
         }
         return out, nil
 }
 
-func readEventV1Lines(path string) ([]EventV1, error) {
+func readEventV1Lines(path string) ([]EventV1Line, error) {
         f, err := os.Open(path)
         if err != nil {
                 if errors.Is(err, os.ErrNotExist) {
-                        return []EventV1{}, nil
+                        return []EventV1Line{}, nil
                 }
                 return nil, err
         }
@@ -339,23 +345,25 @@ func readEventV1Lines(path string) ([]EventV1, error) {
         sc := bufio.NewScanner(f)
         sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
-        var out []EventV1
+        var out []EventV1Line
+        lineNo := 0
         for sc.Scan() {
+                lineNo++
                 b := bytes.TrimSpace(sc.Bytes())
                 if len(b) == 0 {
                         continue
                 }
                 var ev EventV1
                 if err := json.Unmarshal(b, &ev); err != nil {
-                        return nil, err
+                        return nil, fmt.Errorf("%s:%d: %w", path, lineNo, err)
                 }
-                out = append(out, ev)
+                out = append(out, EventV1Line{Path: path, Line: lineNo, Event: ev})
         }
         if err := sc.Err(); err != nil {
                 return nil, err
         }
         if out == nil {
-                out = []EventV1{}
+                out = []EventV1Line{}
         }
         return out, nil
 }

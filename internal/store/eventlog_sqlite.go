@@ -17,12 +17,29 @@ import (
         _ "modernc.org/sqlite"
 )
 
-const sqliteFileName = "clarity.sqlite"
-
 func getenv(k string) string { return os.Getenv(k) }
 
 func (s Store) sqlitePath() string {
-        return filepath.Join(s.Dir, sqliteFileName)
+        // V1: derived index location (preferred).
+        preferred := filepath.Join(s.localDir(), "index.sqlite")
+        if _, err := os.Stat(preferred); err == nil {
+                return preferred
+        }
+
+        // Legacy: single-file workspace db.
+        legacy := filepath.Join(s.localDir(), "clarity.sqlite")
+        if _, err := os.Stat(legacy); err == nil {
+                return legacy
+        }
+
+        // Legacy: store-root sqlite (pre ".clarity/index.sqlite" era).
+        legacyRoot := filepath.Join(filepath.Clean(s.Dir), "clarity.sqlite")
+        if _, err := os.Stat(legacyRoot); err == nil {
+                return legacyRoot
+        }
+
+        // Default to preferred, creating it if missing.
+        return preferred
 }
 
 func (s Store) openSQLite(ctx context.Context) (*sql.DB, error) {

@@ -51,3 +51,12 @@ clarity <item-id>
 clarity --dir ./.clarity init
 clarity --dir ./.clarity identity create --kind human --name "me" --use
 ```
+
+## Doctor + reindex (Git-backed workflows)
+
+If your workspace uses JSONL events as the canonical history (e.g. `events/events*.jsonl`), these commands help keep the derived state healthy:
+
+```bash
+clarity doctor --fail
+clarity reindex
+```

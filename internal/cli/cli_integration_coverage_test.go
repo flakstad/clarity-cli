@@ -460,6 +460,12 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
         // Also cover CLARITY_WORKSPACE env (without --workspace).
         run(t, invocation{name: "status (env CLARITY_WORKSPACE)", cmdPath: "status", args: []string{"status"}, env: map[string]string{"CLARITY_WORKSPACE": wsName2, "CLARITY_ACTOR": wsHuman}, expect: expectJSONEnvelope, markEnvFlags: []string{"workspace", "actor"}})
 
+        // Canonical JSONL + derived SQLite maintenance commands.
+        // Use --dir to keep this self-contained and avoid touching ~/.clarity.
+        run(t, invocation{name: "reindex (--dir)", cmdPath: "reindex", args: []string{"--dir", dir, "reindex"}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "doctor --fail (--dir)", cmdPath: "doctor", args: []string{"--dir", dir, "doctor", "--fail"}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "sync status (--dir)", cmdPath: "sync status", args: []string{"--dir", dir, "sync", "status"}, expect: expectJSONEnvelope})
+
         // --- Coverage assertions ---
         leafCmds, rootPersistentFlags, localFlagsByCmd := buildCoverageIndex()
         assertCoverage(t, coveredCmds, coveredFlags, coveredLocalFlagsByCmd, leafCmds, rootPersistentFlags, localFlagsByCmd)

@@ -69,10 +69,13 @@ func TestSQLiteStateStore_ImportsLegacyDBJSONOnce(t *testing.T) {
                         if err != nil {
                                 t.Fatalf("marshal legacy: %v", err)
                         }
-                        if err := os.WriteFile(filepathJoin(dir, "db.json"), b, 0o644); err != nil {
+                        if err := os.MkdirAll(filepathJoin(dir, ".clarity"), 0o755); err != nil {
+                                t.Fatalf("mkdir .clarity: %v", err)
+                        }
+                        if err := os.WriteFile(filepathJoin(filepathJoin(dir, ".clarity"), "db.json"), b, 0o644); err != nil {
                                 t.Fatalf("write db.json: %v", err)
                         }
-                        if _, err := os.Stat(filepathJoin(dir, "db.json")); err != nil {
+                        if _, err := os.Stat(filepathJoin(filepathJoin(dir, ".clarity"), "db.json")); err != nil {
                                 t.Fatalf("expected db.json: %v", err)
                         }
 

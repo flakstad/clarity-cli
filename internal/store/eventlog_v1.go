@@ -3,6 +3,8 @@ package store
 import (
         "encoding/json"
         "fmt"
+        "os"
+        "sort"
         "strings"
         "time"
 )
@@ -67,10 +69,37 @@ func (s Store) eventLogBackend() EventLogBackend {
         switch v {
         case string(EventLogBackendJSONL):
                 return EventLogBackendJSONL
+        case string(EventLogBackendSQLite):
+                return EventLogBackendSQLite
         default:
-                // Default: SQLite event log (durable, ordered, sync-ready).
+                // Auto-detect: if a Git-backed events directory exists, prefer JSONL.
+                // Otherwise default to SQLite (current stable behavior).
+                if s.hasJSONLEvents() {
+                        return EventLogBackendJSONL
+                }
                 return EventLogBackendSQLite
         }
+}
+
+func (s Store) hasJSONLEvents() bool {
+        dir := s.eventsDir()
+        entries, err := os.ReadDir(dir)
+        if err != nil {
+                return false
+        }
+        var names []string
+        for _, ent := range entries {
+                if ent.IsDir() {
+                        continue
+                }
+                name := ent.Name()
+                if !strings.HasPrefix(name, "events") || !strings.HasSuffix(name, ".jsonl") {
+                        continue
+                }
+                names = append(names, name)
+        }
+        sort.Strings(names)
+        return len(names) > 0
 }
 
 // inferEntityKindFromType maps existing event type prefixes to v1 entity kinds.

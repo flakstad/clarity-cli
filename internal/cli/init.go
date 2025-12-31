@@ -1,7 +1,9 @@
 package cli
 
 import (
+        "os"
         "path/filepath"
+        "strings"
 
         "clarity-cli/internal/store"
 
@@ -33,10 +35,36 @@ func newInitCmd(app *App) *cobra.Command {
                                 }
                         }
 
+                        // If we're initializing inside a Git repo (or already have v1 files),
+                        // also bootstrap the Git-backed JSONL v1 layout.
+                        //
+                        // This is intentionally best-effort; even if this fails, the legacy
+                        // SQLite-based store remains usable.
+                        var v1Init *store.GitBackedV1InitResult
+                        shouldInitV1 := false
+                        if v := strings.ToLower(strings.TrimSpace(os.Getenv("CLARITY_EVENTLOG"))); v == "jsonl" {
+                                shouldInitV1 = true
+                        }
+                        if _, err := os.Stat(filepath.Join(app.Dir, "meta", "workspace.json")); err == nil {
+                                shouldInitV1 = true
+                        }
+                        if _, err := os.Stat(filepath.Join(app.Dir, "events")); err == nil {
+                                shouldInitV1 = true
+                        }
+                        if _, err := os.Stat(filepath.Join(app.Dir, ".git")); err == nil {
+                                shouldInitV1 = true
+                        }
+                        if shouldInitV1 {
+                                if res, err := store.EnsureGitBackedV1Layout(app.Dir); err == nil {
+                                        v1Init = &res
+                                }
+                        }
+
                         return writeOut(cmd, app, map[string]any{
                                 "data": map[string]any{
-                                        "dir":        app.Dir,
-                                        "sqlitePath": filepath.Join(app.Dir, "clarity.sqlite"),
+                                        "dir":         app.Dir,
+                                        "sqlitePath":  filepath.Join(app.Dir, ".clarity", "index.sqlite"),
+                                        "gitBackedV1": v1Init,
                                 },
                         })
                 },

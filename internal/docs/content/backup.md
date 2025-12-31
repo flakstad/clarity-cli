@@ -1,6 +1,6 @@
 # Backup + restore (portable export/import)
 
-Clarity is **local-first** and stores workspace data in a local SQLite database (`clarity.sqlite`).
+Clarity is **local-first** and stores a rebuildable local index in a SQLite database (`.clarity/index.sqlite`).
 For peace of mind (and for moving between machines), Clarity supports a **portable backup format**
 that is easy to store elsewhere (cloud drive, external disk, git, etc).
 

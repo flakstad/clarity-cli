@@ -58,6 +58,8 @@ func NewRootCmd() *cobra.Command {
 
         cmd.AddCommand(newInitCmd(app))
         cmd.AddCommand(newDocsCmd(app))
+        cmd.AddCommand(newDoctorCmd(app))
+        cmd.AddCommand(newReindexCmd(app))
         cmd.AddCommand(newStatusCmd(app))
         cmd.AddCommand(newWorkspaceCmd(app))
         cmd.AddCommand(newIdentityCmd(app))
@@ -67,6 +69,7 @@ func NewRootCmd() *cobra.Command {
         cmd.AddCommand(newDepsCmd(app))
         cmd.AddCommand(newCommentsCmd(app))
         cmd.AddCommand(newEventsCmd(app))
+        cmd.AddCommand(newSyncCmd(app))
         cmd.AddCommand(newWorklogCmd(app))
         cmd.AddCommand(newAgentCmd(app))
         cmd.AddCommand(newCaptureCmd(app))

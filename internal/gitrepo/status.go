@@ -1,0 +1,137 @@
+package gitrepo
+
+import (
+        "bytes"
+        "context"
+        "errors"
+        "fmt"
+        "os/exec"
+        "strconv"
+        "strings"
+)
+
+type Status struct {
+        IsRepo bool `json:"isRepo"`
+
+        Root string `json:"root,omitempty"`
+
+        Branch   string `json:"branch,omitempty"`
+        Upstream string `json:"upstream,omitempty"`
+
+        Head string `json:"head,omitempty"`
+
+        Dirty    bool `json:"dirty"`
+        Unmerged bool `json:"unmerged"`
+
+        Ahead  int `json:"ahead,omitempty"`
+        Behind int `json:"behind,omitempty"`
+}
+
+func GetStatus(ctx context.Context, dir string) (Status, error) {
+        root, err := git(ctx, dir, "rev-parse", "--show-toplevel")
+        if err != nil {
+                // "not a git repository" is common; treat as non-repo rather than error.
+                return Status{IsRepo: false}, nil
+        }
+        root = strings.TrimSpace(root)
+        if root == "" {
+                return Status{}, errors.New("git rev-parse returned empty root")
+        }
+
+        branch, _ := git(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")
+        head, _ := git(ctx, dir, "rev-parse", "--short", "HEAD")
+        upstream, _ := git(ctx, dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+
+        porcelain, _ := git(ctx, dir, "status", "--porcelain=v1")
+        dirty, unmerged := parsePorcelain(porcelain)
+
+        ahead, behind := 0, 0
+        if strings.TrimSpace(upstream) != "" {
+                if counts, err := git(ctx, dir, "rev-list", "--left-right", "--count", "HEAD...@{u}"); err == nil {
+                        a, b, ok := parseAheadBehind(counts)
+                        if ok {
+                                ahead, behind = a, b
+                        }
+                }
+        }
+
+        return Status{
+                IsRepo: true,
+                Root:   strings.TrimSpace(root),
+
+                Branch:   strings.TrimSpace(branch),
+                Upstream: strings.TrimSpace(upstream),
+                Head:     strings.TrimSpace(head),
+
+                Dirty:    dirty,
+                Unmerged: unmerged,
+                Ahead:    ahead,
+                Behind:   behind,
+        }, nil
+}
+
+func git(ctx context.Context, dir string, args ...string) (string, error) {
+        cmd := exec.CommandContext(ctx, "git", args...)
+        cmd.Dir = dir
+
+        var stdout bytes.Buffer
+        var stderr bytes.Buffer
+        cmd.Stdout = &stdout
+        cmd.Stderr = &stderr
+
+        if err := cmd.Run(); err != nil {
+                msg := strings.TrimSpace(stderr.String())
+                if msg == "" {
+                        msg = err.Error()
+                }
+                return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+        }
+        return stdout.String(), nil
+}
+
+func parsePorcelain(out string) (dirty bool, unmerged bool) {
+        lines := strings.Split(out, "\n")
+        for _, ln := range lines {
+                ln = strings.TrimRight(ln, "\r")
+                if len(ln) < 2 {
+                        continue
+                }
+                xy := ln[:2]
+                if strings.TrimSpace(xy) == "" {
+                        continue
+                }
+                dirty = true
+                if isUnmergedXY(xy) {
+                        unmerged = true
+                }
+        }
+        return dirty, unmerged
+}
+
+func isUnmergedXY(xy string) bool {
+        if len(xy) != 2 {
+                return false
+        }
+        switch xy {
+        case "DD", "AU", "UD", "UA", "DU", "AA", "UU":
+                return true
+        }
+        // "U?" and "?U" variants.
+        return xy[0] == 'U' || xy[1] == 'U'
+}
+
+func parseAheadBehind(out string) (ahead int, behind int, ok bool) {
+        // git rev-list --left-right --count HEAD...@{u}
+        // => "<ahead>\t<behind>\n"
+        out = strings.TrimSpace(out)
+        fields := strings.Fields(out)
+        if len(fields) != 2 {
+                return 0, 0, false
+        }
+        a, err1 := strconv.Atoi(fields[0])
+        b, err2 := strconv.Atoi(fields[1])
+        if err1 != nil || err2 != nil {
+                return 0, 0, false
+        }
+        return a, b, true
+}

@@ -3661,15 +3661,33 @@ func tickReload() tea.Cmd {
 }
 
 func (m *appModel) captureStoreModTimes() {
-        // SQLite-only: use the sqlite file mtime as the single change indicator.
-        mt := fileModTime(filepath.Join(m.dir, "clarity.sqlite"))
-        m.lastDBModTime = mt
-        m.lastEventsModTime = mt
+        dbMt, evMt := m.storeModTimes()
+        m.lastDBModTime = dbMt
+        m.lastEventsModTime = evMt
 }
 
 func (m *appModel) storeChanged() bool {
-        mt := fileModTime(filepath.Join(m.dir, "clarity.sqlite"))
-        return mt.After(m.lastDBModTime)
+        dbMt, evMt := m.storeModTimes()
+        return dbMt.After(m.lastDBModTime) || evMt.After(m.lastEventsModTime)
+}
+
+func (m *appModel) storeModTimes() (dbMt time.Time, eventsMt time.Time) {
+        // Derived index (preferred).
+        dbMt = fileModTime(filepath.Join(m.dir, ".clarity", "index.sqlite"))
+        // Legacy sqlite.
+        if dbMt.IsZero() {
+                dbMt = fileModTime(filepath.Join(m.dir, ".clarity", "clarity.sqlite"))
+        }
+        if dbMt.IsZero() {
+                dbMt = fileModTime(filepath.Join(m.dir, "clarity.sqlite"))
+        }
+
+        // Canonical events dir (Git-backed) or legacy monolith.
+        eventsMt = fileModTime(filepath.Join(m.dir, "events"))
+        if eventsMt.IsZero() {
+                eventsMt = fileModTime(filepath.Join(m.dir, "events.jsonl"))
+        }
+        return dbMt, eventsMt
 }
 
 func fileModTime(path string) time.Time {

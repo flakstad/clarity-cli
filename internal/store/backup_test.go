@@ -16,7 +16,7 @@ func TestBackupEventsJSONLRoundTripAndRestore(t *testing.T) {
                 t.Fatalf("save state: %v", err)
         }
 
-        if err := s1.AppendEvent("actor-1", "item.created", "item-1", map[string]any{"title": "hello"}); err != nil {
+        if err := s1.AppendEvent("actor-1", "item.create", "item-1", map[string]any{"id": "item-1"}); err != nil {
                 t.Fatalf("append event: %v", err)
         }
 

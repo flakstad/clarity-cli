@@ -43,12 +43,22 @@ type Store struct {
         Dir string
 }
 
+func (s Store) localDir() string {
+        clean := filepath.Clean(s.Dir)
+        if filepath.Base(clean) == ".clarity" {
+                // Legacy shape where the store root was the ".clarity" directory itself.
+                return clean
+        }
+        return filepath.Join(clean, ".clarity")
+}
+
 func DiscoverDir(start string) (string, bool) {
         dir := start
         for {
                 candidate := filepath.Join(dir, ".clarity")
                 if st, err := os.Stat(candidate); err == nil && st.IsDir() {
-                        return candidate, true
+                        // The presence of a ".clarity" directory marks the workspace root.
+                        return dir, true
                 }
                 parent := filepath.Dir(dir)
                 if parent == dir {
@@ -66,7 +76,8 @@ func DefaultDir() (string, error) {
         if found, ok := DiscoverDir(cwd); ok {
                 return found, nil
         }
-        return filepath.Join(cwd, ".clarity"), nil
+        // Default to the current directory as the workspace root.
+        return cwd, nil
 }
 
 func WorkspaceDir(name string) (string, error) {
@@ -82,11 +93,14 @@ func WorkspaceDir(name string) (string, error) {
 }
 
 func (s Store) Ensure() error {
-        return os.MkdirAll(s.Dir, 0o755)
+        if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+                return err
+        }
+        return os.MkdirAll(s.localDir(), 0o755)
 }
 
 func (s Store) dbPath() string {
-        return filepath.Join(s.Dir, dbFileName)
+        return filepath.Join(s.localDir(), dbFileName)
 }
 
 func (s Store) Load() (*DB, error) {

@@ -13,7 +13,8 @@ import (
         "clarity-cli/internal/model"
 )
 
-// LoadSQLite loads the workspace state from clarity.sqlite. If the SQLite state is empty but a legacy db.json exists,
+// LoadSQLite loads the workspace state from the workspace SQLite db (preferred: .clarity/index.sqlite).
+// If the SQLite state is empty but a legacy db.json exists,
 // it imports db.json into SQLite once (preserving your existing data) and then loads from SQLite.
 func (s Store) LoadSQLite(ctx context.Context) (*DB, error) {
         db, err := s.openSQLite(ctx)

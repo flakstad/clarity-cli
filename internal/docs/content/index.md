@@ -16,6 +16,8 @@ Recommended starting topics:
 - `output-contract`
 - `identity-ownership`
 - `items-outlines`
+- `doctor-reindex`
+- `sync`
 - `deps`
 - `backup`
 - `tui`
