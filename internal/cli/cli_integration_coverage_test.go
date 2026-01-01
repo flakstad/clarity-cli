@@ -471,6 +471,8 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
         // workspace migrate: migrate the sqlite-based temp store `dir` into a fresh workspace dir (and init+commit).
         migrateTo := t.TempDir()
         run(t, invocation{name: "workspace migrate (--from --to --git-init --git-commit --message)", cmdPath: "workspace migrate", args: []string{"workspace", "migrate", "--from", dir, "--to", migrateTo, "--git-init", "--git-commit", "--message", "clarity: migrate (test)"}, expect: expectJSONEnvelope})
+        migrateTo2 := t.TempDir()
+        run(t, invocation{name: "workspace migrate (--register --use --name)", cmdPath: "workspace migrate", args: []string{"workspace", "migrate", "--from", dir, "--to", migrateTo2, "--register", "--use", "--name", "ws-migrated"}, expect: expectJSONEnvelope})
 
         // Also cover CLARITY_WORKSPACE env (without --workspace).
         run(t, invocation{name: "status (env CLARITY_WORKSPACE)", cmdPath: "status", args: []string{"status"}, env: map[string]string{"CLARITY_WORKSPACE": wsName2, "CLARITY_ACTOR": wsHuman}, expect: expectJSONEnvelope, markEnvFlags: []string{"workspace", "actor"}})
@@ -483,6 +485,8 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
         run(t, invocation{name: "sync pull (non-repo error, --dir)", cmdPath: "sync pull", args: []string{"--dir", dir, "sync", "pull"}, expect: expectError})
         run(t, invocation{name: "sync push (non-repo error, --message, --pull=false, --dir)", cmdPath: "sync push", args: []string{"--dir", dir, "sync", "push", "--message", "test", "--pull=false"}, expect: expectError})
         run(t, invocation{name: "sync resolve (non-repo error, --dir)", cmdPath: "sync resolve", args: []string{"--dir", dir, "sync", "resolve"}, expect: expectError})
+        run(t, invocation{name: "sync setup (--dir)", cmdPath: "sync setup", args: []string{"--dir", dir, "sync", "setup", "--commit=false", "--push=false"}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "sync setup (--remote-url/--remote-name/--message)", cmdPath: "sync setup", args: []string{"--dir", dir, "sync", "setup", "--remote-name", "origin", "--remote-url", "https://example.com/repo.git", "--message", "clarity: setup (test)", "--commit=false", "--push=false"}, expect: expectJSONEnvelope})
 
         // web: long-running server command; cover flags via --help (no server start).
         run(t, invocation{name: "web --help (--addr --read-only --auth)", cmdPath: "web", args: []string{"--dir", dir, "web", "--addr", "127.0.0.1:0", "--read-only=false", "--auth", "magic", "--help"}, expect: expectRawText})

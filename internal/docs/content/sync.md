@@ -6,6 +6,25 @@ Clarity v1 workspaces can be **Git-backed**:
 - Derived state: `.clarity/index.sqlite` (local, rebuildable)
 - Recommended ignore: `.clarity/` (Clarity can add this to `.gitignore` during `clarity init`)
 
+## `clarity sync setup`
+
+Initializes Git for the workspace and (optionally) connects it to a remote.
+
+Use this when you want Git-backed sync but don’t want to learn Git first.
+
+Examples:
+
+```bash
+# Initialize a local repo (no remote)
+clarity sync setup
+
+# Set/update origin URL (still no push unless you ask for it)
+clarity sync setup --remote-url git@github.com:ORG/REPO.git
+
+# Set/update origin, commit canonical files, and push (sets upstream)
+clarity sync setup --remote-url git@github.com:ORG/REPO.git --push
+```
+
 ## `clarity sync status`
 
 Shows the Git working tree status for the current workspace directory.

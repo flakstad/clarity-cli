@@ -5,10 +5,12 @@ import (
         "errors"
         "fmt"
         "os/exec"
+        "path/filepath"
         "strings"
         "time"
 
         "clarity-cli/internal/gitrepo"
+        "clarity-cli/internal/store"
 
         "github.com/spf13/cobra"
 )
@@ -20,9 +22,121 @@ func newSyncCmd(app *App) *cobra.Command {
         }
 
         cmd.AddCommand(newSyncStatusCmd(app))
+        cmd.AddCommand(newSyncSetupCmd(app))
         cmd.AddCommand(newSyncPullCmd(app))
         cmd.AddCommand(newSyncPushCmd(app))
         cmd.AddCommand(newSyncResolveCmd(app))
+        return cmd
+}
+
+func newSyncSetupCmd(app *App) *cobra.Command {
+        var remoteURL string
+        var remoteName string
+        var push bool
+        var commit bool
+        var message string
+
+        cmd := &cobra.Command{
+                Use:   "setup",
+                Short: "Initialize Git + optionally set remote + push (recommended for teams)",
+                RunE: func(cmd *cobra.Command, args []string) error {
+                        dir, err := resolveDir(app)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        ctx := context.Background()
+
+                        // Ensure Clarity ignores exist (derived/local-only).
+                        if _, err := store.EnsureGitignoreHasClarityIgnores(filepath.Join(dir, ".gitignore")); err != nil {
+                                return writeErr(cmd, err)
+                        }
+
+                        before, err := gitrepo.GetStatus(ctx, dir)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if !before.IsRepo {
+                                if err := gitrepo.Init(ctx, dir); err != nil {
+                                        return writeErr(cmd, err)
+                                }
+                        }
+
+                        afterInit, err := gitrepo.GetStatus(ctx, dir)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if !afterInit.IsRepo {
+                                return writeErr(cmd, errors.New("sync setup: failed to initialize git repo"))
+                        }
+                        if afterInit.Unmerged || afterInit.InProgress {
+                                return writeErr(cmd, errors.New("sync setup: repo has an in-progress merge/rebase; resolve first"))
+                        }
+
+                        committed := false
+                        if commit {
+                                committed, err = gitrepo.CommitWorkspaceCanonical(ctx, dir, message)
+                                if err != nil {
+                                        return writeErr(cmd, err)
+                                }
+                        }
+
+                        remoteSet := false
+                        if strings.TrimSpace(remoteURL) != "" {
+                                if err := gitrepo.SetRemoteURL(ctx, dir, remoteName, remoteURL); err != nil {
+                                        return writeErr(cmd, err)
+                                }
+                                remoteSet = true
+                        }
+
+                        pushed := false
+                        if push {
+                                st, err := gitrepo.GetStatus(ctx, dir)
+                                if err != nil {
+                                        return writeErr(cmd, err)
+                                }
+                                // Only attempt push when a remote exists (either already configured or newly set).
+                                if remoteSet || strings.TrimSpace(st.Upstream) != "" {
+                                        branch := st.Branch
+                                        if strings.TrimSpace(branch) == "" || strings.TrimSpace(branch) == "HEAD" {
+                                                branch = "HEAD"
+                                        }
+                                        if err := gitrepo.PushSetUpstream(ctx, dir, remoteName, branch); err != nil {
+                                                return writeErr(cmd, err)
+                                        }
+                                        pushed = true
+                                }
+                        }
+
+                        final, _ := gitrepo.GetStatus(ctx, dir)
+                        hints := []string{"git status"}
+                        if strings.TrimSpace(remoteURL) == "" && strings.TrimSpace(final.Upstream) == "" {
+                                hints = append(hints, "git remote add origin <url>")
+                        }
+                        if strings.TrimSpace(final.Upstream) == "" {
+                                hints = append(hints, "git push -u origin HEAD")
+                        }
+                        hints = append(hints, "clarity sync status", "clarity reindex", "clarity doctor --fail")
+
+                        return writeOut(cmd, app, map[string]any{
+                                "data": map[string]any{
+                                        "before":    before,
+                                        "afterInit": afterInit,
+                                        "final":     final,
+                                        "committed": committed,
+                                        "remoteSet": remoteSet,
+                                        "pushed":    pushed,
+                                },
+                                "_hints": hints,
+                        })
+                },
+        }
+
+        cmd.Flags().StringVar(&remoteURL, "remote-url", "", "Remote URL (if set, configures origin)")
+        cmd.Flags().StringVar(&remoteName, "remote-name", "origin", "Remote name (default: origin)")
+        cmd.Flags().BoolVar(&push, "push", false, "After setup, run `git push -u` (requires remote)")
+        cmd.Flags().BoolVar(&commit, "commit", true, "Create an initial commit (recommended)")
+        cmd.Flags().StringVar(&message, "message", "", "Commit message for initial commit (optional)")
+
         return cmd
 }
 

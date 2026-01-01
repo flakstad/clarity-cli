@@ -1,6 +1,9 @@
 package cli
 
 import (
+        "context"
+        "strings"
+
         "clarity-cli/internal/store"
 
         "github.com/spf13/cobra"
@@ -16,12 +19,49 @@ func newReindexCmd(app *App) *cobra.Command {
                                 return writeErr(cmd, err)
                         }
 
+                        s := store.Store{Dir: dir}
+
+                        // Preserve local UI/session meta across reindex.
+                        // This meta is not part of the canonical event stream, so it must be carried forward
+                        // from the existing derived state.
+                        prevActorID := ""
+                        prevProjectID := ""
+                        if existing, err := s.LoadSQLite(context.Background()); err == nil && existing != nil {
+                                prevActorID = strings.TrimSpace(existing.CurrentActorID)
+                                prevProjectID = strings.TrimSpace(existing.CurrentProjectID)
+                        }
+
                         res, err := store.ReplayEventsV1(dir)
                         if err != nil {
                                 return writeErr(cmd, err)
                         }
 
-                        s := store.Store{Dir: dir}
+                        if strings.TrimSpace(prevActorID) != "" {
+                                if _, ok := res.DB.FindActor(prevActorID); ok {
+                                        res.DB.CurrentActorID = prevActorID
+                                }
+                        }
+                        if strings.TrimSpace(res.DB.CurrentActorID) == "" {
+                                // First-time bootstrap convenience: if there's exactly one human actor (common for
+                                // personal workspaces and migrations), pick it.
+                                pick := ""
+                                for _, a := range res.DB.Actors {
+                                        if a.Kind == "human" && strings.TrimSpace(a.ID) != "" {
+                                                pick = strings.TrimSpace(a.ID)
+                                                break
+                                        }
+                                }
+                                if pick == "" && len(res.DB.Actors) > 0 {
+                                        pick = strings.TrimSpace(res.DB.Actors[0].ID)
+                                }
+                                res.DB.CurrentActorID = pick
+                        }
+
+                        if strings.TrimSpace(prevProjectID) != "" {
+                                if _, ok := res.DB.FindProject(prevProjectID); ok {
+                                        res.DB.CurrentProjectID = prevProjectID
+                                }
+                        }
                         if err := s.Save(res.DB); err != nil {
                                 return writeErr(cmd, err)
                         }

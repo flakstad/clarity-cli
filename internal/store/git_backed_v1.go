@@ -55,7 +55,7 @@ func EnsureGitBackedV1Layout(dir string) (GitBackedV1InitResult, error) {
         }
 
         gitignorePath := filepath.Join(dir, ".gitignore")
-        gitignoreUpdated, err := ensureGitignoreHasClarityIgnores(gitignorePath)
+        gitignoreUpdated, err := EnsureGitignoreHasClarityIgnores(gitignorePath)
         if err != nil {
                 return GitBackedV1InitResult{}, err
         }
@@ -92,7 +92,7 @@ func EnsureGitBackedV1Layout(dir string) (GitBackedV1InitResult, error) {
         }, nil
 }
 
-func ensureGitignoreHasClarityIgnores(path string) (updated bool, err error) {
+func EnsureGitignoreHasClarityIgnores(path string) (updated bool, err error) {
         path = filepath.Clean(strings.TrimSpace(path))
         if path == "" {
                 return false, errors.New("empty gitignore path")

@@ -19,6 +19,13 @@ func TestMigrateSQLiteToGitBackedV1_WritesMetaDeviceAndEvents(t *testing.T) {
         to = filepath.Join(to, "out")
 
         src := Store{Dir: from}
+        // Seed a legacy pre-sqlite events.jsonl entry (workspace-root).
+        legacyPath := filepath.Join(from, "events.jsonl")
+        legacyLine := `{"id":"evt-1","ts":"2025-12-19T20:45:17.610874Z","actorId":"act-a","type":"identity.create","entityId":"act-a","payload":{"id":"act-a","kind":"human","name":"Legacy"}}` + "\n"
+        if err := os.WriteFile(legacyPath, []byte(legacyLine), 0o644); err != nil {
+                t.Fatalf("write legacy events.jsonl: %v", err)
+        }
+
         // Create at least one event in SQLite.
         if err := src.AppendEvent("act-a", "identity.create", "act-a", map[string]any{"id": "act-a"}); err != nil {
                 t.Fatalf("AppendEvent: %v", err)
@@ -35,8 +42,8 @@ func TestMigrateSQLiteToGitBackedV1_WritesMetaDeviceAndEvents(t *testing.T) {
         if err != nil {
                 t.Fatalf("MigrateSQLiteToGitBackedV1: %v", err)
         }
-        if res.EventsWritten != len(evs) {
-                t.Fatalf("EventsWritten=%d want %d", res.EventsWritten, len(evs))
+        if res.EventsWritten != len(evs)+1 {
+                t.Fatalf("EventsWritten=%d want %d", res.EventsWritten, len(evs)+1)
         }
         if strings.TrimSpace(res.WorkspaceID) == "" || strings.TrimSpace(res.ReplicaID) == "" {
                 t.Fatalf("expected workspaceId/replicaId")
@@ -88,11 +95,27 @@ func TestMigrateSQLiteToGitBackedV1_WritesMetaDeviceAndEvents(t *testing.T) {
         if err := sc.Err(); err != nil {
                 t.Fatalf("scan shard: %v", err)
         }
-        if len(got) != len(evs) {
-                t.Fatalf("shard events=%d want %d", len(got), len(evs))
+        if len(got) != len(evs)+1 {
+                t.Fatalf("shard events=%d want %d", len(got), len(evs)+1)
         }
-        if got[0].EventID != evs[0].EventID {
-                t.Fatalf("first eventId=%q want %q", got[0].EventID, evs[0].EventID)
+        // The legacy event should be present.
+        foundLegacy := false
+        for _, ev := range got {
+                if strings.TrimSpace(ev.EventID) == "evt-1" {
+                        foundLegacy = true
+                        if strings.TrimSpace(ev.WorkspaceID) != strings.TrimSpace(res.WorkspaceID) {
+                                t.Fatalf("legacy workspaceId=%q want %q", ev.WorkspaceID, res.WorkspaceID)
+                        }
+                        if strings.TrimSpace(ev.ReplicaID) != strings.TrimSpace(res.ReplicaID) {
+                                t.Fatalf("legacy replicaId=%q want %q", ev.ReplicaID, res.ReplicaID)
+                        }
+                        if strings.TrimSpace(ev.Type) != "identity.create" {
+                                t.Fatalf("legacy type=%q", ev.Type)
+                        }
+                }
+        }
+        if !foundLegacy {
+                t.Fatalf("expected legacy event to be migrated")
         }
 
         // .gitignore should include .clarity/

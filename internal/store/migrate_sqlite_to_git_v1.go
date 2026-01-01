@@ -1,6 +1,8 @@
 package store
 
 import (
+        "bufio"
+        "bytes"
         "context"
         "database/sql"
         "encoding/json"
@@ -9,6 +11,7 @@ import (
         "io"
         "os"
         "path/filepath"
+        "sort"
         "strings"
         "time"
 )
@@ -65,6 +68,24 @@ func MigrateSQLiteToGitBackedV1(ctx context.Context, fromDir, toDir string) (Mig
                 return MigrateSQLiteToGitBackedV1Result{}, err
         }
 
+        // Also include legacy JSONL events (pre-SQLite flip) if present.
+        // Some long-lived workspaces have early history only in workspace-root events.jsonl.
+        legacyPath := filepath.Join(src.workspaceRoot(), "events.jsonl")
+        legacy, err := readLegacyEventsJSONL(legacyPath, wsID, repID)
+        if err != nil {
+                return MigrateSQLiteToGitBackedV1Result{}, err
+        }
+
+        merged := mergeEventsV1BySemanticKey(legacy, evs)
+        sort.SliceStable(merged, func(i, j int) bool {
+                a := merged[i]
+                b := merged[j]
+                if !a.IssuedAt.Equal(b.IssuedAt) {
+                        return a.IssuedAt.Before(b.IssuedAt)
+                }
+                return strings.TrimSpace(a.EventID) < strings.TrimSpace(b.EventID)
+        })
+
         dst := Store{Dir: toDir}
         if err := os.MkdirAll(filepath.Join(dst.workspaceRoot(), "meta"), 0o755); err != nil {
                 return MigrateSQLiteToGitBackedV1Result{}, err
@@ -94,7 +115,7 @@ func MigrateSQLiteToGitBackedV1(ctx context.Context, fromDir, toDir string) (Mig
         }
 
         shardPath := dst.shardPath(repID)
-        n, err := writeEventsJSONL(shardPath, evs)
+        n, err := writeEventsJSONL(shardPath, merged)
         if err != nil {
                 return MigrateSQLiteToGitBackedV1Result{}, err
         }
@@ -103,7 +124,7 @@ func MigrateSQLiteToGitBackedV1(ctx context.Context, fromDir, toDir string) (Mig
         _ = copyDirIfExists(filepath.Join(src.workspaceRoot(), "resources"), filepath.Join(dst.workspaceRoot(), "resources"))
 
         gitignorePath := filepath.Join(dst.workspaceRoot(), ".gitignore")
-        if _, err := ensureGitignoreHasClarityIgnores(gitignorePath); err != nil {
+        if _, err := EnsureGitignoreHasClarityIgnores(gitignorePath); err != nil {
                 return MigrateSQLiteToGitBackedV1Result{}, err
         }
 
@@ -121,6 +142,136 @@ func MigrateSQLiteToGitBackedV1(ctx context.Context, fromDir, toDir string) (Mig
                 ShardPath:         shardPath,
                 GitignorePath:     gitignorePath,
         }, nil
+}
+
+type legacyEventLine struct {
+        ID       string          `json:"id"`
+        TS       time.Time       `json:"ts"`
+        ActorID  string          `json:"actorId"`
+        Type     string          `json:"type"`
+        EntityID string          `json:"entityId"`
+        Payload  json.RawMessage `json:"payload"`
+}
+
+func readLegacyEventsJSONL(path, workspaceID, replicaID string) ([]EventV1, error) {
+        path = filepath.Clean(strings.TrimSpace(path))
+        if path == "" {
+                return nil, errors.New("empty legacy events path")
+        }
+        f, err := os.Open(path)
+        if err != nil {
+                if errors.Is(err, os.ErrNotExist) {
+                        return []EventV1{}, nil
+                }
+                return nil, err
+        }
+        defer f.Close()
+
+        sc := bufio.NewScanner(f)
+        // Allow larger payloads (default 64K can be too small for long descriptions).
+        sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+
+        workspaceID = strings.TrimSpace(workspaceID)
+        replicaID = strings.TrimSpace(replicaID)
+        if workspaceID == "" || replicaID == "" {
+                return nil, errors.New("missing workspaceId/replicaId for legacy conversion")
+        }
+
+        seqByEnt := map[string]int64{}
+        out := []EventV1{}
+        for lineNo := 1; sc.Scan(); lineNo++ {
+                raw := bytes.TrimSpace(sc.Bytes())
+                if len(raw) == 0 {
+                        continue
+                }
+                var l legacyEventLine
+                if err := json.Unmarshal(raw, &l); err != nil {
+                        return nil, fmt.Errorf("%s:%d: %w", path, lineNo, err)
+                }
+                typ := strings.TrimSpace(l.Type)
+                entID := strings.TrimSpace(l.EntityID)
+                actorID := strings.TrimSpace(l.ActorID)
+                evID := strings.TrimSpace(l.ID)
+                if typ == "" || entID == "" || actorID == "" || evID == "" {
+                        // Be strict: missing core fields implies we might silently lose state.
+                        return nil, fmt.Errorf("%s:%d: legacy event missing required fields", path, lineNo)
+                }
+                kind := inferEntityKindFromType(typ)
+                if !kind.valid() {
+                        return nil, fmt.Errorf("%s:%d: legacy event invalid kind for type %q", path, lineNo, typ)
+                }
+
+                key := kind.String() + ":" + entID
+                seqByEnt[key]++
+                seq := seqByEnt[key]
+                if seq <= 0 {
+                        seq = 1
+                }
+
+                payload := l.Payload
+                if len(bytes.TrimSpace(payload)) == 0 {
+                        payload = []byte(`{}`)
+                }
+
+                out = append(out, EventV1{
+                        EventID:     evID,
+                        WorkspaceID: workspaceID,
+                        ReplicaID:   replicaID,
+
+                        EntityKind: kind,
+                        EntityID:   entID,
+                        EntitySeq:  seq,
+
+                        Type:    typ,
+                        Parents: nil,
+
+                        IssuedAt: l.TS.UTC(),
+                        ActorID:  actorID,
+                        Payload:  payload,
+
+                        LocalStatus:  "local",
+                        ServerStatus: "pending",
+                })
+        }
+        if err := sc.Err(); err != nil {
+                return nil, err
+        }
+        if out == nil {
+                out = []EventV1{}
+        }
+        return out, nil
+}
+
+func mergeEventsV1BySemanticKey(a, b []EventV1) []EventV1 {
+        seen := map[string]bool{}
+        out := make([]EventV1, 0, len(a)+len(b))
+        for _, ev := range append(append([]EventV1{}, a...), b...) {
+                k := semanticDedupeKeyV1(ev)
+                if k == "" {
+                        // Fallback: always include (doctor will report missing fields).
+                        out = append(out, ev)
+                        continue
+                }
+                if seen[k] {
+                        continue
+                }
+                seen[k] = true
+                out = append(out, ev)
+        }
+        return out
+}
+
+func semanticDedupeKeyV1(ev EventV1) string {
+        typ := strings.TrimSpace(ev.Type)
+        kind := strings.TrimSpace(ev.EntityKind.String())
+        entID := strings.TrimSpace(ev.EntityID)
+        actorID := strings.TrimSpace(ev.ActorID)
+        if typ == "" || kind == "" || entID == "" || actorID == "" {
+                return ""
+        }
+        ts := ev.IssuedAt.UTC().UnixMilli()
+        payload := strings.TrimSpace(string(ev.Payload))
+        return fmt.Sprintf("%s|%s|%s|%d|%s|%s", typ, kind, entID, ts, actorID, payload)
 }
 
 func ensureDirEmptyOrNew(dir string) error {

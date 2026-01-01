@@ -47,6 +47,12 @@ Optionally initialize a new repo and create the first commit:
 clarity workspace migrate --from /path/to/old --to /path/to/new --git-init --git-commit --message "clarity: migrate"
 ```
 
+Optionally register the migrated workspace (and make it current):
+
+```bash
+clarity workspace migrate --from /path/to/old --to /path/to/new --register --name "Team workspace" --use
+```
+
 ## Projects (set context)
 
 ```bash
