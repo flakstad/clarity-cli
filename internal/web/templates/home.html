@@ -1,0 +1,84 @@
+{{define "home.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Clarity Web</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin: 24px; max-width: 980px; }
+    h1 { margin: 0 0 8px; }
+    .meta { opacity: 0.75; font-size: 14px; margin: 0 0 16px; }
+    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .col { flex: 1 1 340px; }
+    code { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 0.95em; }
+    ul { margin: 8px 0 0 18px; }
+    .badge { display: inline-block; padding: 1px 8px; border: 1px solid rgba(127,127,127,.35); border-radius: 999px; font-size: 12px; margin-left: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Clarity Web <span class="badge">v1 experimental</span></h1>
+  <p class="meta">
+    <a href="/projects">Projects</a>
+    · <a href="/agenda">Agenda</a>
+    · <a href="/sync">Sync</a>
+    · now={{.Now}}
+    {{if eq .AuthMode "dev"}}
+      {{if .ActorID}}
+        · <form method="post" action="/logout" style="display:inline;"><button type="submit">Logout</button></form>
+      {{else}}
+        · <a href="/login">Login</a>
+      {{end}}
+    {{end}}
+  </p>
+
+  <div class="card">
+    <div><strong>Workspace</strong>: {{if .Workspace}}{{.Workspace}}{{else}}(auto){{end}}</div>
+    <div><strong>Dir</strong>: <code>{{.Dir}}</code></div>
+    <div><strong>Actor</strong>: {{if .ActorID}}<code>{{.ActorID}}</code>{{else}}(none){{end}}</div>
+    <div><strong>Mode</strong>: {{if .ReadOnly}}read-only{{else}}read-write{{end}}</div>
+  </div>
+
+  <div class="row">
+    <div class="col card">
+      <div><strong>Git</strong></div>
+      {{if .Git.IsRepo}}
+        <div>upstream: <code>{{.Git.Upstream}}</code></div>
+        <div>ahead: {{.Git.Ahead}} behind: {{.Git.Behind}}</div>
+        <div>dirty: {{.Git.Dirty}} unmerged: {{.Git.Unmerged}} inProgress: {{.Git.InProgress}}</div>
+      {{else}}
+        <div>(not a git repo)</div>
+      {{end}}
+    </div>
+
+    <div class="col card">
+    <div><strong>Projects</strong> ({{len .Projects}})</div>
+    {{if .Projects}}
+      <ul>
+        {{range .Projects}}
+            <li><a href="/projects/{{.ID}}"><code>{{.ID}}</code></a> — {{.Name}}</li>
+          {{end}}
+      </ul>
+    {{else}}
+      <div>(none)</div>
+    {{end}}
+    </div>
+  </div>
+
+  <div class="card">
+    <div><strong>Ready</strong> ({{len .Ready}})</div>
+    {{if .Ready}}
+      <ul>
+        {{range .Ready}}
+          <li><a href="/items/{{.ID}}"><code>{{.ID}}</code></a> — {{.Title}}</li>
+        {{end}}
+      </ul>
+    {{else}}
+      <div>(none)</div>
+    {{end}}
+  </div>
+</body>
+</html>
+{{end}}

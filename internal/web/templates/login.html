@@ -1,0 +1,47 @@
+{{define "login.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Clarity Web – Login</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin: 24px; max-width: 980px; }
+    h1 { margin: 0 0 8px; }
+    .meta { opacity: 0.75; font-size: 14px; margin: 0 0 16px; }
+    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+    code { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 0.95em; }
+    a { color: inherit; }
+    .err { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(200,80,80,.6); margin: 12px 0; }
+    select { width: 100%; max-width: 100%; }
+    button { margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Login (dev)</h1>
+  <p class="meta"><a href="/">Home</a> · now={{.Now}} {{if .Workspace}} · workspace={{.Workspace}}{{end}}</p>
+
+  <div class="card">
+    <div><strong>Dir</strong>: <code>{{.Dir}}</code></div>
+  </div>
+
+  {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+
+  <div class="card">
+    <form method="post" action="/login">
+      <div><label for="actor">Actor</label></div>
+      <div>
+        <select id="actor" name="actor" required>
+          <option value="" selected disabled>Select…</option>
+          {{range .Actors}}
+            <option value="{{.ID}}">{{.Name}} ({{.ID}})</option>
+          {{end}}
+        </select>
+      </div>
+      <button type="submit">Continue</button>
+    </form>
+  </div>
+</body>
+</html>
+{{end}}

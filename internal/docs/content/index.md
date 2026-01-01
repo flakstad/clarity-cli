@@ -18,6 +18,7 @@ Recommended starting topics:
 - `items-outlines`
 - `doctor-reindex`
 - `sync`
+- `web`
 - `deps`
 - `backup`
 - `tui`

@@ -1,0 +1,67 @@
+{{define "item.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Clarity Web – Item</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin: 24px; max-width: 980px; }
+    h1 { margin: 0 0 8px; }
+    .meta { opacity: 0.75; font-size: 14px; margin: 0 0 16px; }
+    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+    code { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 0.95em; }
+    pre { white-space: pre-wrap; word-wrap: break-word; font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 0.95em; }
+    a { color: inherit; }
+    .dim { opacity: 0.75; }
+    ul { margin: 8px 0 0 18px; }
+  </style>
+</head>
+<body>
+  <h1>{{.Item.Title}}</h1>
+  <p class="meta">
+    <a href="/">Home</a> · <a href="/projects">Projects</a>
+    · now={{.Now}}
+    {{if .Workspace}} · workspace={{.Workspace}}{{end}}
+  </p>
+
+  <div class="card">
+    <div><strong>Item</strong>: <code>{{.Item.ID}}</code> <span class="dim">({{.Item.StatusID}})</span></div>
+    <div><strong>Outline</strong>: <code>{{.Item.OutlineID}}</code></div>
+    <div><strong>Owner</strong>: <code>{{.Item.OwnerActorID}}</code></div>
+    {{if .Item.AssignedActorID}}<div><strong>Assignee</strong>: <code>{{.Item.AssignedActorID}}</code></div>{{end}}
+    {{if .Item.ParentID}}<div><strong>Parent</strong>: <code>{{.Item.ParentID}}</code></div>{{end}}
+  </div>
+
+  <div class="card">
+    <div><strong>Description</strong></div>
+    {{if .Item.Description}}<pre>{{.Item.Description}}</pre>{{else}}<div>(none)</div>{{end}}
+  </div>
+
+  <div class="card">
+    <div><strong>Comments</strong> ({{len .Comments}})</div>
+    {{if and (not .ReadOnly) .ActorID}}
+      <form method="post" action="/items/{{.Item.ID}}/comments" style="margin-top: 12px;">
+        <div><label for="body"><span class="dim">Add comment</span></label></div>
+        <div><textarea id="body" name="body" rows="4" style="width: 100%; max-width: 100%;"></textarea></div>
+        <div style="margin-top: 8px;"><button type="submit">Post</button></div>
+      </form>
+    {{end}}
+    {{if .Comments}}
+      <ul>
+        {{range .Comments}}
+          <li>
+            <span class="dim">{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</span>
+            — <code>{{.AuthorActorID}}</code>
+            <pre>{{.Body}}</pre>
+          </li>
+        {{end}}
+      </ul>
+    {{else}}
+      <div>(none)</div>
+    {{end}}
+  </div>
+</body>
+</html>
+{{end}}

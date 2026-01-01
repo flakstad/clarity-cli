@@ -1,0 +1,712 @@
+package web
+
+import (
+        "context"
+        "embed"
+        "errors"
+        "html/template"
+        "net/http"
+        "strings"
+        "time"
+
+        "clarity-cli/internal/gitrepo"
+        "clarity-cli/internal/model"
+        "clarity-cli/internal/statusutil"
+        "clarity-cli/internal/store"
+)
+
+//go:embed templates/*.html
+var templatesFS embed.FS
+
+type ServerConfig struct {
+        Addr      string
+        Dir       string
+        Workspace string
+        ActorID   string
+        ReadOnly  bool
+        AuthMode  string // none|dev
+}
+
+type Server struct {
+        cfg  ServerConfig
+        tmpl *template.Template
+}
+
+func NewServer(cfg ServerConfig) (*Server, error) {
+        cfg.Addr = strings.TrimSpace(cfg.Addr)
+        cfg.Dir = strings.TrimSpace(cfg.Dir)
+        cfg.Workspace = strings.TrimSpace(cfg.Workspace)
+        cfg.ActorID = strings.TrimSpace(cfg.ActorID)
+        cfg.AuthMode = strings.ToLower(strings.TrimSpace(cfg.AuthMode))
+        if cfg.Addr == "" {
+                return nil, errors.New("web: addr is empty")
+        }
+        if cfg.Dir == "" {
+                return nil, errors.New("web: dir is empty")
+        }
+        if cfg.AuthMode == "" {
+                cfg.AuthMode = "none"
+        }
+        if cfg.AuthMode != "none" && cfg.AuthMode != "dev" {
+                return nil, errors.New("web: invalid auth mode (expected none|dev)")
+        }
+
+        tmpl, err := template.New("base").Funcs(template.FuncMap{
+                "trim": strings.TrimSpace,
+        }).ParseFS(templatesFS, "templates/*.html")
+        if err != nil {
+                return nil, err
+        }
+
+        return &Server{cfg: cfg, tmpl: tmpl}, nil
+}
+
+func (s *Server) Addr() string { return s.cfg.Addr }
+
+func (s *Server) Handler() http.Handler {
+        mux := http.NewServeMux()
+        mux.HandleFunc("GET /health", s.handleHealth)
+        mux.HandleFunc("GET /", s.handleHome)
+        mux.HandleFunc("GET /login", s.handleLoginGet)
+        mux.HandleFunc("POST /login", s.handleLoginPost)
+        mux.HandleFunc("POST /logout", s.handleLogoutPost)
+        mux.HandleFunc("GET /agenda", s.handleAgenda)
+        mux.HandleFunc("GET /sync", s.handleSync)
+        mux.HandleFunc("POST /sync/pull", s.handleSyncPull)
+        mux.HandleFunc("POST /sync/push", s.handleSyncPush)
+        mux.HandleFunc("GET /projects", s.handleProjects)
+        mux.HandleFunc("GET /projects/{projectId}", s.handleProject)
+        mux.HandleFunc("GET /outlines/{outlineId}", s.handleOutline)
+        mux.HandleFunc("GET /items/{itemId}", s.handleItem)
+        mux.HandleFunc("POST /items/{itemId}/comments", s.handleItemCommentAdd)
+        return mux
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+        w.WriteHeader(http.StatusOK)
+        _, _ = w.Write([]byte("ok\n"))
+}
+
+type homeVM struct {
+        Now       string
+        Workspace string
+        Dir       string
+        ReadOnly  bool
+        ActorID   string
+        AuthMode  string
+        Git       gitrepo.Status
+        Projects  []model.Project
+        Ready     []model.Item
+}
+
+func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
+        ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+        defer cancel()
+
+        st, _ := gitrepo.GetStatus(ctx, s.cfg.Dir)
+
+        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+
+        actorID := s.actorForRequest(r)
+        ready := readyItems(db)
+
+        w.Header().Set("Content-Type", "text/html; charset=utf-8")
+        if err := s.tmpl.ExecuteTemplate(w, "home.html", homeVM{
+                Now:       time.Now().Format(time.RFC3339),
+                Workspace: s.cfg.Workspace,
+                Dir:       s.cfg.Dir,
+                ReadOnly:  s.cfg.ReadOnly,
+                ActorID:   actorID,
+                AuthMode:  s.cfg.AuthMode,
+                Git:       st,
+                Projects:  db.Projects,
+                Ready:     ready,
+        }); err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+}
+
+type loginVM struct {
+        Now       string
+        Workspace string
+        Dir       string
+        Actors    []model.Actor
+        Error     string
+}
+
+func (s *Server) handleLoginGet(w http.ResponseWriter, r *http.Request) {
+        if s.cfg.AuthMode != "dev" {
+                http.NotFound(w, r)
+                return
+        }
+        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+
+        actors := make([]model.Actor, 0)
+        for _, a := range db.Actors {
+                if a.Kind == model.ActorKindHuman {
+                        actors = append(actors, a)
+                }
+        }
+
+        w.Header().Set("Content-Type", "text/html; charset=utf-8")
+        _ = s.tmpl.ExecuteTemplate(w, "login.html", loginVM{
+                Now:       time.Now().Format(time.RFC3339),
+                Workspace: s.cfg.Workspace,
+                Dir:       s.cfg.Dir,
+                Actors:    actors,
+        })
+}
+
+func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
+        if s.cfg.AuthMode != "dev" {
+                http.NotFound(w, r)
+                return
+        }
+        if err := r.ParseForm(); err != nil {
+                http.Error(w, err.Error(), http.StatusBadRequest)
+                return
+        }
+        actorID := strings.TrimSpace(r.Form.Get("actor"))
+        if actorID == "" {
+                http.Redirect(w, r, "/login", http.StatusSeeOther)
+                return
+        }
+
+        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        a, ok := db.FindActor(actorID)
+        if !ok || a == nil || a.Kind != model.ActorKindHuman {
+                w.Header().Set("Content-Type", "text/html; charset=utf-8")
+                _ = s.tmpl.ExecuteTemplate(w, "login.html", loginVM{
+                        Now:       time.Now().Format(time.RFC3339),
+                        Workspace: s.cfg.Workspace,
+                        Dir:       s.cfg.Dir,
+                        Actors:    db.Actors,
+                        Error:     "unknown actor",
+                })
+                return
+        }
+
+        http.SetCookie(w, &http.Cookie{
+                Name:     actorCookieName,
+                Value:    actorID,
+                Path:     "/",
+                HttpOnly: true,
+                SameSite: http.SameSiteLaxMode,
+        })
+        http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handleLogoutPost(w http.ResponseWriter, r *http.Request) {
+        if s.cfg.AuthMode != "dev" {
+                http.NotFound(w, r)
+                return
+        }
+        http.SetCookie(w, &http.Cookie{
+                Name:     actorCookieName,
+                Value:    "",
+                Path:     "/",
+                MaxAge:   -1,
+                HttpOnly: true,
+                SameSite: http.SameSiteLaxMode,
+        })
+        http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+type agendaVM struct {
+        Now       string
+        Workspace string
+        Dir       string
+        ActorID   string
+        Items     []model.Item
+}
+
+func (s *Server) handleAgenda(w http.ResponseWriter, r *http.Request) {
+        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        items := agendaItems(db, actorID)
+
+        w.Header().Set("Content-Type", "text/html; charset=utf-8")
+        if err := s.tmpl.ExecuteTemplate(w, "agenda.html", agendaVM{
+                Now:       time.Now().Format(time.RFC3339),
+                Workspace: s.cfg.Workspace,
+                Dir:       s.cfg.Dir,
+                ActorID:   actorID,
+                Items:     items,
+        }); err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+}
+
+type syncVM struct {
+        Now       string
+        Workspace string
+        Dir       string
+        ReadOnly  bool
+        Git       gitrepo.Status
+        Message   string
+}
+
+func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
+        ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+        defer cancel()
+
+        st, _ := gitrepo.GetStatus(ctx, s.cfg.Dir)
+        msg := strings.TrimSpace(r.URL.Query().Get("msg"))
+
+        w.Header().Set("Content-Type", "text/html; charset=utf-8")
+        if err := s.tmpl.ExecuteTemplate(w, "sync.html", syncVM{
+                Now:       time.Now().Format(time.RFC3339),
+                Workspace: s.cfg.Workspace,
+                Dir:       s.cfg.Dir,
+                ReadOnly:  s.cfg.ReadOnly,
+                Git:       st,
+                Message:   msg,
+        }); err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+}
+
+func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
+        if s.cfg.ReadOnly {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+
+        ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+        defer cancel()
+
+        before, err := gitrepo.GetStatus(ctx, s.cfg.Dir)
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if !before.IsRepo {
+                http.Error(w, "not a git repository", http.StatusBadRequest)
+                return
+        }
+        if before.Unmerged || before.InProgress {
+                http.Error(w, "repo has an in-progress merge/rebase; resolve first", http.StatusConflict)
+                return
+        }
+        if before.DirtyTracked {
+                http.Error(w, "repo has local changes; commit/push first", http.StatusConflict)
+                return
+        }
+
+        if err := gitrepo.PullRebase(ctx, s.cfg.Dir); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        http.Redirect(w, r, "/sync?msg=pull%20--rebase%20ok", http.StatusSeeOther)
+}
+
+func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
+        if s.cfg.ReadOnly {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+
+        ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+        defer cancel()
+
+        before, err := gitrepo.GetStatus(ctx, s.cfg.Dir)
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if !before.IsRepo {
+                http.Error(w, "not a git repository", http.StatusBadRequest)
+                return
+        }
+        if before.Unmerged || before.InProgress {
+                http.Error(w, "repo has an in-progress merge/rebase; resolve first", http.StatusConflict)
+                return
+        }
+
+        if err := r.ParseForm(); err != nil {
+                http.Error(w, err.Error(), http.StatusBadRequest)
+                return
+        }
+        msg := strings.TrimSpace(r.Form.Get("message"))
+
+        committed, err := gitrepo.CommitWorkspaceCanonical(ctx, s.cfg.Dir, msg)
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+
+        // Pull/rebase (best-effort; same as CLI's default).
+        pulled := false
+        cur, err := gitrepo.GetStatus(ctx, s.cfg.Dir)
+        if err == nil && strings.TrimSpace(cur.Upstream) != "" {
+                if !cur.Unmerged && !cur.InProgress && !cur.DirtyTracked {
+                        if err := gitrepo.PullRebase(ctx, s.cfg.Dir); err == nil {
+                                pulled = true
+                        }
+                }
+        }
+
+        pushed := false
+        if err := gitrepo.Push(ctx, s.cfg.Dir); err == nil {
+                pushed = true
+        } else if gitrepo.IsNonFastForwardPushErr(err) {
+                // Retry once: pull --rebase + push.
+                if err := gitrepo.PullRebase(ctx, s.cfg.Dir); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                pulled = true
+                if err := gitrepo.Push(ctx, s.cfg.Dir); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                pushed = true
+        } else {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+
+        parts := []string{}
+        if committed {
+                parts = append(parts, "commit")
+        }
+        if pulled {
+                parts = append(parts, "pull")
+        }
+        if pushed {
+                parts = append(parts, "push")
+        }
+        if len(parts) == 0 {
+                parts = append(parts, "no-op")
+        }
+
+        http.Redirect(w, r, "/sync?msg="+strings.Join(parts, "%20%2B%20")+"%20ok", http.StatusSeeOther)
+}
+
+type projectsVM struct {
+        Now       string
+        Workspace string
+        Dir       string
+        Projects  []model.Project
+}
+
+func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
+        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+
+        w.Header().Set("Content-Type", "text/html; charset=utf-8")
+        if err := s.tmpl.ExecuteTemplate(w, "projects.html", projectsVM{
+                Now:       time.Now().Format(time.RFC3339),
+                Workspace: s.cfg.Workspace,
+                Dir:       s.cfg.Dir,
+                Projects:  db.Projects,
+        }); err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+}
+
+type projectVM struct {
+        Now       string
+        Workspace string
+        Dir       string
+        Project   model.Project
+        Outlines  []model.Outline
+}
+
+func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
+        projectID := strings.TrimSpace(r.PathValue("projectId"))
+        if projectID == "" {
+                http.Error(w, "missing project id", http.StatusBadRequest)
+                return
+        }
+
+        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        p, ok := db.FindProject(projectID)
+        if !ok || p == nil {
+                http.NotFound(w, r)
+                return
+        }
+
+        outlines := make([]model.Outline, 0)
+        for _, o := range db.Outlines {
+                if o.ProjectID == projectID {
+                        outlines = append(outlines, o)
+                }
+        }
+
+        w.Header().Set("Content-Type", "text/html; charset=utf-8")
+        if err := s.tmpl.ExecuteTemplate(w, "project.html", projectVM{
+                Now:       time.Now().Format(time.RFC3339),
+                Workspace: s.cfg.Workspace,
+                Dir:       s.cfg.Dir,
+                Project:   *p,
+                Outlines:  outlines,
+        }); err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+}
+
+type outlineVM struct {
+        Now       string
+        Workspace string
+        Dir       string
+        Outline   model.Outline
+        Items     []model.Item
+}
+
+func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
+        outlineID := strings.TrimSpace(r.PathValue("outlineId"))
+        if outlineID == "" {
+                http.Error(w, "missing outline id", http.StatusBadRequest)
+                return
+        }
+
+        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        o, ok := db.FindOutline(outlineID)
+        if !ok || o == nil {
+                http.NotFound(w, r)
+                return
+        }
+
+        items := make([]model.Item, 0)
+        for _, it := range db.Items {
+                if it.OutlineID == outlineID && !it.Archived {
+                        items = append(items, it)
+                }
+        }
+
+        w.Header().Set("Content-Type", "text/html; charset=utf-8")
+        if err := s.tmpl.ExecuteTemplate(w, "outline.html", outlineVM{
+                Now:       time.Now().Format(time.RFC3339),
+                Workspace: s.cfg.Workspace,
+                Dir:       s.cfg.Dir,
+                Outline:   *o,
+                Items:     items,
+        }); err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+}
+
+type itemVM struct {
+        Now       string
+        Workspace string
+        Dir       string
+        ReadOnly  bool
+        ActorID   string
+        Item      model.Item
+        Comments  []model.Comment
+}
+
+func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
+        itemID := strings.TrimSpace(r.PathValue("itemId"))
+        if itemID == "" {
+                http.Error(w, "missing item id", http.StatusBadRequest)
+                return
+        }
+
+        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        it, ok := db.FindItem(itemID)
+        if !ok || it == nil {
+                http.NotFound(w, r)
+                return
+        }
+
+        comments := db.CommentsForItem(itemID)
+
+        w.Header().Set("Content-Type", "text/html; charset=utf-8")
+        if err := s.tmpl.ExecuteTemplate(w, "item.html", itemVM{
+                Now:       time.Now().Format(time.RFC3339),
+                Workspace: s.cfg.Workspace,
+                Dir:       s.cfg.Dir,
+                ReadOnly:  s.cfg.ReadOnly,
+                ActorID:   strings.TrimSpace(s.cfg.ActorID),
+                Item:      *it,
+                Comments:  comments,
+        }); err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+}
+
+func (s *Server) handleItemCommentAdd(w http.ResponseWriter, r *http.Request) {
+        if s.cfg.ReadOnly {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+
+        itemID := strings.TrimSpace(r.PathValue("itemId"))
+        if itemID == "" {
+                http.Error(w, "missing item id", http.StatusBadRequest)
+                return
+        }
+
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        if actorID == "" {
+                http.Error(w, "missing actor (start server with --actor, set currentActorId, or /login in dev auth mode)", http.StatusUnauthorized)
+                return
+        }
+
+        if err := r.ParseForm(); err != nil {
+                http.Error(w, err.Error(), http.StatusBadRequest)
+                return
+        }
+        body := strings.TrimSpace(r.Form.Get("body"))
+        if body == "" {
+                http.Redirect(w, r, "/items/"+itemID, http.StatusSeeOther)
+                return
+        }
+
+        st := store.Store{Dir: s.cfg.Dir}
+        db, err := st.Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if _, ok := db.FindActor(actorID); !ok {
+                http.Error(w, "unknown actor", http.StatusForbidden)
+                return
+        }
+        if _, ok := db.FindItem(itemID); !ok {
+                http.NotFound(w, r)
+                return
+        }
+
+        c := model.Comment{
+                ID:        st.NextID(db, "cmt"),
+                ItemID:    itemID,
+                AuthorID:  actorID,
+                Body:      body,
+                CreatedAt: time.Now().UTC(),
+        }
+        db.Comments = append(db.Comments, c)
+        if err := st.AppendEvent(actorID, "comment.add", c.ID, c); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if err := st.Save(db); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+
+        http.Redirect(w, r, "/items/"+itemID, http.StatusSeeOther)
+}
+
+const actorCookieName = "clarity_web_actor"
+
+func (s *Server) actorForRequest(r *http.Request) string {
+        // Fixed actor override is useful for local-only usage and early automation.
+        if strings.TrimSpace(s.cfg.ActorID) != "" {
+                return strings.TrimSpace(s.cfg.ActorID)
+        }
+        if s.cfg.AuthMode != "dev" {
+                return ""
+        }
+        c, err := r.Cookie(actorCookieName)
+        if err != nil {
+                return ""
+        }
+        return strings.TrimSpace(c.Value)
+}
+
+func readyItems(db *store.DB) []model.Item {
+        blocked := map[string]bool{}
+        for _, d := range db.Deps {
+                if d.Type == model.DependencyBlocks {
+                        blocked[d.FromItemID] = true
+                }
+        }
+
+        out := make([]model.Item, 0)
+        for _, it := range db.Items {
+                if it.Archived {
+                        continue
+                }
+                if it.OnHold {
+                        continue
+                }
+                if blocked[it.ID] {
+                        continue
+                }
+                if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) != "" {
+                        continue
+                }
+                if isEndState(db, it.OutlineID, it.StatusID) {
+                        continue
+                }
+                out = append(out, it)
+        }
+        return out
+}
+
+func agendaItems(db *store.DB, actorID string) []model.Item {
+        actorID = strings.TrimSpace(actorID)
+        if actorID == "" {
+                return nil
+        }
+
+        out := make([]model.Item, 0)
+        for _, it := range db.Items {
+                if it.Archived {
+                        continue
+                }
+                if isEndState(db, it.OutlineID, it.StatusID) {
+                        continue
+                }
+                if it.OwnerActorID == actorID {
+                        out = append(out, it)
+                        continue
+                }
+                if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) == actorID {
+                        out = append(out, it)
+                        continue
+                }
+        }
+        return out
+}
+
+func isEndState(db *store.DB, outlineID, statusID string) bool {
+        o, ok := db.FindOutline(outlineID)
+        if ok && o != nil {
+                return statusutil.IsEndState(*o, statusID)
+        }
+        return statusutil.IsEndState(model.Outline{}, statusID)
+}

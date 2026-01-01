@@ -1,0 +1,65 @@
+{{define "sync.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Clarity Web – Sync</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin: 24px; max-width: 980px; }
+    h1 { margin: 0 0 8px; }
+    .meta { opacity: 0.75; font-size: 14px; margin: 0 0 16px; }
+    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+    code { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 0.95em; }
+    a { color: inherit; }
+    .dim { opacity: 0.75; }
+    .msg { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(127,127,127,.35); margin: 12px 0; }
+    input { width: 100%; max-width: 100%; }
+    button { margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Sync</h1>
+  <p class="meta">
+    <a href="/">Home</a> · <a href="/projects">Projects</a> · <a href="/agenda">Agenda</a>
+    · now={{.Now}}
+    {{if .Workspace}} · workspace={{.Workspace}}{{end}}
+  </p>
+
+  {{if .Message}}<div class="msg">{{.Message}}</div>{{end}}
+
+  <div class="card">
+    <div><strong>Dir</strong>: <code>{{.Dir}}</code></div>
+    <div><strong>Mode</strong>: {{if .ReadOnly}}read-only{{else}}read-write{{end}}</div>
+  </div>
+
+  <div class="card">
+    <div><strong>Git status</strong></div>
+    {{if .Git.IsRepo}}
+      <div>upstream: <code>{{.Git.Upstream}}</code></div>
+      <div>ahead: {{.Git.Ahead}} behind: {{.Git.Behind}}</div>
+      <div>dirty: {{.Git.Dirty}} unmerged: {{.Git.Unmerged}} inProgress: {{.Git.InProgress}}</div>
+    {{else}}
+      <div>(not a git repo)</div>
+    {{end}}
+  </div>
+
+  <div class="card">
+    <div><strong>Actions</strong></div>
+    {{if .ReadOnly}}
+      <div class="dim">Start server with `--read-only=false` to enable sync operations.</div>
+    {{else}}
+      <form method="post" action="/sync/pull">
+        <button type="submit">Pull --rebase</button>
+      </form>
+      <form method="post" action="/sync/push" style="margin-top: 12px;">
+        <div><label for="message"><span class="dim">Commit message (optional)</span></label></div>
+        <div><input id="message" name="message" placeholder="clarity: update ..." /></div>
+        <button type="submit">Commit + pull + push</button>
+      </form>
+    {{end}}
+  </div>
+</body>
+</html>
+{{end}}

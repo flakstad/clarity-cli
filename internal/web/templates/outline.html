@@ -1,0 +1,51 @@
+{{define "outline.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Clarity Web – Outline</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin: 24px; max-width: 980px; }
+    h1 { margin: 0 0 8px; }
+    .meta { opacity: 0.75; font-size: 14px; margin: 0 0 16px; }
+    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+    code { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 0.95em; }
+    a { color: inherit; }
+    ul { margin: 8px 0 0 18px; }
+    .dim { opacity: 0.75; }
+  </style>
+</head>
+<body>
+  <h1>{{.Outline.Name}}</h1>
+  <p class="meta">
+    <a href="/">Home</a> · <a href="/projects">Projects</a>
+    · now={{.Now}}
+    {{if .Workspace}} · workspace={{.Workspace}}{{end}}
+  </p>
+
+  <div class="card">
+    <div><strong>Outline</strong>: <code>{{.Outline.ID}}</code></div>
+    <div><strong>Project</strong>: <code>{{.Outline.ProjectID}}</code></div>
+  </div>
+
+  <div class="card">
+    <div><strong>Items</strong> ({{len .Items}})</div>
+    {{if .Items}}
+      <ul>
+        {{range .Items}}
+          <li>
+            <a href="/items/{{.ID}}"><code>{{.ID}}</code></a>
+            — {{.Title}}
+            <span class="dim">({{.StatusID}})</span>
+          </li>
+        {{end}}
+      </ul>
+    {{else}}
+      <div>(none)</div>
+    {{end}}
+  </div>
+</body>
+</html>
+{{end}}
