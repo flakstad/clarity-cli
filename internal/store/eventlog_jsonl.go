@@ -4,7 +4,6 @@ import (
         "bufio"
         "bytes"
         "context"
-        "database/sql"
         "encoding/json"
         "errors"
         "fmt"
@@ -26,6 +25,11 @@ type EventV1Line struct {
 func ReadEventsV1Lines(dir string) ([]EventV1Line, error) {
         st := Store{Dir: dir}
         return st.readEventsV1LinesJSONL()
+}
+
+func WalkEventsV1Lines(dir string, fn func(EventV1Line) error) error {
+        st := Store{Dir: dir}
+        return st.walkEventsV1LinesJSONL(fn)
 }
 
 func (s Store) workspaceRoot() string {
@@ -83,6 +87,30 @@ func (s Store) appendEventJSONL(ctx context.Context, actorID, typ, entityID stri
 
         now := time.Now().UTC()
 
+        ids, parentIDs, maxSeq, err := s.scanEntityIDsParentsMaxSeqV1(kind, entityID)
+        if err != nil {
+                return err
+        }
+        heads := computeHeads(ids, parentIDs)
+        if len(heads) > 1 {
+                return fmt.Errorf("conflict: entity has %d heads; requires explicit merge (try: clarity doctor --fail)", len(heads))
+        }
+        var parents []string
+        if len(heads) == 1 {
+                parents = []string{heads[0]}
+        }
+        seq := int64(1)
+        switch {
+        case len(ids) == 0:
+                seq = 1
+        case maxSeq > 0:
+                seq = maxSeq + 1
+        default:
+                // Legacy compatibility: if existing JSONL events have entitySeq=0, allocate a
+                // stable-ish seq based on count to keep per-entity ordering usable.
+                seq = int64(len(ids) + 1)
+        }
+
         pb, err := json.Marshal(payload)
         if err != nil {
                 return err
@@ -99,10 +127,10 @@ func (s Store) appendEventJSONL(ctx context.Context, actorID, typ, entityID stri
 
                 EntityKind: kind,
                 EntityID:   entityID,
-                EntitySeq:  0,
+                EntitySeq:  seq,
 
                 Type:    typ,
-                Parents: nil,
+                Parents: parents,
 
                 IssuedAt: now,
                 ActorID:  actorID,
@@ -131,75 +159,6 @@ func (s Store) appendEventJSONL(ctx context.Context, actorID, typ, entityID stri
                 return err
         }
         return nil
-}
-
-func allocateEntitySeqAndParents(ctx context.Context, db *sql.DB, kind EntityKind, entityID, nextHeadEventID string) (int64, []string, error) {
-        tx, err := db.BeginTx(ctx, &sql.TxOptions{})
-        if err != nil {
-                return 0, nil, err
-        }
-        defer func() { _ = tx.Rollback() }()
-
-        rows, err := tx.QueryContext(ctx, `SELECT head_event_id FROM entity_heads WHERE entity_kind = ? AND entity_id = ?`, kind.String(), entityID)
-        if err != nil {
-                return 0, nil, err
-        }
-        var heads []string
-        for rows.Next() {
-                var h string
-                if err := rows.Scan(&h); err != nil {
-                        _ = rows.Close()
-                        return 0, nil, err
-                }
-                h = strings.TrimSpace(h)
-                if h != "" {
-                        heads = append(heads, h)
-                }
-        }
-        _ = rows.Close()
-        if err := rows.Err(); err != nil {
-                return 0, nil, err
-        }
-        if len(heads) > 1 {
-                return 0, nil, fmt.Errorf("conflict: entity has %d heads; requires explicit merge", len(heads))
-        }
-
-        var parents []string
-        if len(heads) == 1 {
-                parents = []string{heads[0]}
-        }
-
-        var next int64
-        err = tx.QueryRowContext(ctx, `SELECT next_seq FROM entity_seq WHERE entity_kind = ? AND entity_id = ?`, kind.String(), entityID).Scan(&next)
-        switch {
-        case err == nil:
-                // ok
-        case errors.Is(err, sql.ErrNoRows):
-                next = 1
-                if _, err := tx.ExecContext(ctx, `INSERT INTO entity_seq(entity_kind, entity_id, next_seq) VALUES(?, ?, ?)`, kind.String(), entityID, int64(2)); err != nil {
-                        return 0, nil, err
-                }
-        default:
-                return 0, nil, err
-        }
-        seq := next
-        if next > 1 {
-                if _, err := tx.ExecContext(ctx, `UPDATE entity_seq SET next_seq = ? WHERE entity_kind = ? AND entity_id = ?`, next+1, kind.String(), entityID); err != nil {
-                        return 0, nil, err
-                }
-        }
-
-        if _, err := tx.ExecContext(ctx, `DELETE FROM entity_heads WHERE entity_kind = ? AND entity_id = ?`, kind.String(), entityID); err != nil {
-                return 0, nil, err
-        }
-        if _, err := tx.ExecContext(ctx, `INSERT INTO entity_heads(entity_kind, entity_id, head_event_id) VALUES(?, ?, ?)`, kind.String(), entityID, strings.TrimSpace(nextHeadEventID)); err != nil {
-                return 0, nil, err
-        }
-
-        if err := tx.Commit(); err != nil {
-                return 0, nil, err
-        }
-        return seq, parents, nil
 }
 
 func (s Store) readEventsJSONL(limit int) ([]model.Event, error) {
@@ -258,9 +217,6 @@ func (s Store) readEventsForEntityJSONL(entityID string, limit int) ([]model.Eve
                 if strings.TrimSpace(a.EntityID) == entityID && strings.TrimSpace(b.EntityID) != entityID {
                         return true
                 }
-                if a.EntitySeq != b.EntitySeq {
-                        return a.EntitySeq < b.EntitySeq
-                }
                 if a.IssuedAt.Equal(b.IssuedAt) {
                         return a.EventID < b.EventID
                 }
@@ -294,6 +250,21 @@ func (s Store) readEventsForEntityJSONL(entityID string, limit int) ([]model.Eve
 }
 
 func (s Store) readEventsV1LinesJSONL() ([]EventV1Line, error) {
+        var out []EventV1Line
+        err := s.walkEventsV1LinesJSONL(func(l EventV1Line) error {
+                out = append(out, l)
+                return nil
+        })
+        if err != nil {
+                return nil, err
+        }
+        if out == nil {
+                out = []EventV1Line{}
+        }
+        return out, nil
+}
+
+func (s Store) walkEventsV1LinesJSONL(fn func(EventV1Line) error) error {
         // Support both:
         // - sharded logs: events/events.<replica-id>.jsonl (preferred)
         // - legacy single log: events/events.jsonl
@@ -301,9 +272,9 @@ func (s Store) readEventsV1LinesJSONL() ([]EventV1Line, error) {
         entries, err := os.ReadDir(dir)
         if err != nil {
                 if errors.Is(err, os.ErrNotExist) {
-                        return []EventV1Line{}, nil
+                        return nil
                 }
-                return nil, err
+                return err
         }
         var paths []string
         for _, ent := range entries {
@@ -318,52 +289,90 @@ func (s Store) readEventsV1LinesJSONL() ([]EventV1Line, error) {
         }
         sort.Strings(paths)
 
-        var out []EventV1Line
         for _, p := range paths {
-                evs, err := readEventV1Lines(p)
+                f, err := os.Open(p)
                 if err != nil {
-                        return nil, err
+                        if errors.Is(err, os.ErrNotExist) {
+                                continue
+                        }
+                        return err
                 }
-                out = append(out, evs...)
+
+                sc := bufio.NewScanner(f)
+                sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+
+                lineNo := 0
+                for sc.Scan() {
+                        lineNo++
+                        b := bytes.TrimSpace(sc.Bytes())
+                        if len(b) == 0 {
+                                continue
+                        }
+                        var ev EventV1
+                        if err := json.Unmarshal(b, &ev); err != nil {
+                                _ = f.Close()
+                                return fmt.Errorf("%s:%d: %w", p, lineNo, err)
+                        }
+                        if err := fn(EventV1Line{Path: p, Line: lineNo, Event: ev}); err != nil {
+                                _ = f.Close()
+                                return err
+                        }
+                }
+                _ = f.Close()
+                if err := sc.Err(); err != nil {
+                        return err
+                }
         }
-        if out == nil {
-                out = []EventV1Line{}
-        }
-        return out, nil
+        return nil
 }
 
-func readEventV1Lines(path string) ([]EventV1Line, error) {
-        f, err := os.Open(path)
-        if err != nil {
-                if errors.Is(err, os.ErrNotExist) {
-                        return []EventV1Line{}, nil
-                }
-                return nil, err
+func (s Store) scanEntityIDsParentsMaxSeqV1(kind EntityKind, entityID string) (map[string]struct{}, map[string]struct{}, int64, error) {
+        kind = EntityKind(strings.TrimSpace(string(kind)))
+        entityID = strings.TrimSpace(entityID)
+        if !kind.valid() || entityID == "" {
+                return map[string]struct{}{}, map[string]struct{}{}, 0, nil
         }
-        defer f.Close()
 
-        sc := bufio.NewScanner(f)
-        sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+        ids := map[string]struct{}{}
+        parentIDs := map[string]struct{}{}
+        var maxSeq int64
+        err := s.walkEventsV1LinesJSONL(func(l EventV1Line) error {
+                ev := l.Event
+                if ev.EntityKind != kind || strings.TrimSpace(ev.EntityID) != entityID {
+                        return nil
+                }
+                id := strings.TrimSpace(ev.EventID)
+                if id != "" {
+                        ids[id] = struct{}{}
+                }
+                if ev.EntitySeq > maxSeq {
+                        maxSeq = ev.EntitySeq
+                }
+                for _, p := range ev.Parents {
+                        p = strings.TrimSpace(p)
+                        if p != "" {
+                                parentIDs[p] = struct{}{}
+                        }
+                }
+                return nil
+        })
+        if err != nil {
+                return nil, nil, 0, err
+        }
+        return ids, parentIDs, maxSeq, nil
+}
 
-        var out []EventV1Line
-        lineNo := 0
-        for sc.Scan() {
-                lineNo++
-                b := bytes.TrimSpace(sc.Bytes())
-                if len(b) == 0 {
+func computeHeads(ids, parentIDs map[string]struct{}) []string {
+        var heads []string
+        for id := range ids {
+                if _, ok := parentIDs[id]; ok {
                         continue
                 }
-                var ev EventV1
-                if err := json.Unmarshal(b, &ev); err != nil {
-                        return nil, fmt.Errorf("%s:%d: %w", path, lineNo, err)
-                }
-                out = append(out, EventV1Line{Path: path, Line: lineNo, Event: ev})
+                heads = append(heads, id)
         }
-        if err := sc.Err(); err != nil {
-                return nil, err
+        sort.Strings(heads)
+        if heads == nil {
+                heads = []string{}
         }
-        if out == nil {
-                out = []EventV1Line{}
-        }
-        return out, nil
+        return heads
 }

@@ -214,6 +214,17 @@ func DoctorEventsV1(dir string) DoctorReport {
         }
 
         seen := map[string]EventV1Line{}
+        type entKey struct {
+                kind string
+                id   string
+        }
+        type entAgg struct {
+                ids        map[string]EventV1Line
+                parentIDs  map[string]struct{}
+                parentRefs map[string]EventV1Line // parentEventId -> referencing child line (first seen)
+        }
+        globalEventToEnt := map[string]entKey{}
+        aggs := map[entKey]*entAgg{}
         for _, l := range lines {
                 ev := l.Event
 
@@ -336,6 +347,82 @@ func DoctorEventsV1(dir string) DoctorReport {
                         }
                 }
 
+                // Parent invariants / fork detection bookkeeping.
+                entID := strings.TrimSpace(ev.EntityID)
+                if entID != "" && ev.EntityKind.valid() {
+                        k := entKey{kind: ev.EntityKind.String(), id: entID}
+                        a := aggs[k]
+                        if a == nil {
+                                a = &entAgg{
+                                        ids:        map[string]EventV1Line{},
+                                        parentIDs:  map[string]struct{}{},
+                                        parentRefs: map[string]EventV1Line{},
+                                }
+                                aggs[k] = a
+                        }
+
+                        evID := strings.TrimSpace(ev.EventID)
+                        if evID != "" {
+                                a.ids[evID] = l
+                                if prevK, ok := globalEventToEnt[evID]; ok && (prevK.kind != k.kind || prevK.id != k.id) {
+                                        issues = append(issues, DoctorIssue{
+                                                Level:      DoctorIssueLevelError,
+                                                Code:       "event_id_reused",
+                                                Message:    fmt.Sprintf("eventId %q appears in multiple entities: %s/%s and %s/%s", evID, prevK.kind, prevK.id, k.kind, k.id),
+                                                Path:       l.Path,
+                                                Line:       l.Line,
+                                                EventID:    evID,
+                                                EntityKind: k.kind,
+                                                EntityID:   k.id,
+                                                Type:       typ,
+                                        })
+                                } else {
+                                        globalEventToEnt[evID] = k
+                                }
+                        }
+
+                        if len(ev.Parents) > 1 {
+                                issues = append(issues, DoctorIssue{
+                                        Level:      DoctorIssueLevelWarn,
+                                        Code:       "multiple_parents",
+                                        Message:    fmt.Sprintf("event has %d parents (merge events not yet supported in v1 tooling)", len(ev.Parents)),
+                                        Path:       l.Path,
+                                        Line:       l.Line,
+                                        EventID:    evID,
+                                        ReplicaID:  strings.TrimSpace(ev.ReplicaID),
+                                        EntityKind: k.kind,
+                                        EntityID:   k.id,
+                                        Type:       typ,
+                                })
+                        }
+
+                        for _, p := range ev.Parents {
+                                p = strings.TrimSpace(p)
+                                if p == "" {
+                                        continue
+                                }
+                                if evID != "" && p == evID {
+                                        issues = append(issues, DoctorIssue{
+                                                Level:      DoctorIssueLevelError,
+                                                Code:       "self_parent",
+                                                Message:    "event lists itself as a parent",
+                                                Path:       l.Path,
+                                                Line:       l.Line,
+                                                EventID:    evID,
+                                                ReplicaID:  strings.TrimSpace(ev.ReplicaID),
+                                                EntityKind: k.kind,
+                                                EntityID:   k.id,
+                                                Type:       typ,
+                                        })
+                                        continue
+                                }
+                                a.parentIDs[p] = struct{}{}
+                                if _, ok := a.parentRefs[p]; !ok {
+                                        a.parentRefs[p] = l
+                                }
+                        }
+                }
+
                 // Payload should be present and valid JSON.
                 if len(ev.Payload) == 0 {
                         issues = append(issues, DoctorIssue{
@@ -348,6 +435,93 @@ func DoctorEventsV1(dir string) DoctorReport {
                                 ReplicaID: strings.TrimSpace(ev.ReplicaID),
                                 Type:      typ,
                         })
+                }
+        }
+
+        // Fork detection + parent integrity checks.
+        for k, a := range aggs {
+                if a == nil {
+                        continue
+                }
+                for parentID, ref := range a.parentRefs {
+                        if _, ok := a.ids[parentID]; ok {
+                                continue
+                        }
+                        if pk, ok := globalEventToEnt[parentID]; ok && (pk.kind != k.kind || pk.id != k.id) {
+                                issues = append(issues, DoctorIssue{
+                                        Level:      DoctorIssueLevelError,
+                                        Code:       "parent_cross_entity",
+                                        Message:    fmt.Sprintf("parent %q belongs to a different entity (%s/%s)", parentID, pk.kind, pk.id),
+                                        Path:       ref.Path,
+                                        Line:       ref.Line,
+                                        EventID:    strings.TrimSpace(ref.Event.EventID),
+                                        ReplicaID:  strings.TrimSpace(ref.Event.ReplicaID),
+                                        EntityKind: k.kind,
+                                        EntityID:   k.id,
+                                        Type:       strings.TrimSpace(ref.Event.Type),
+                                })
+                                continue
+                        }
+                        issues = append(issues, DoctorIssue{
+                                Level:      DoctorIssueLevelError,
+                                Code:       "missing_parent_event",
+                                Message:    fmt.Sprintf("parent %q not found in this entity stream", parentID),
+                                Path:       ref.Path,
+                                Line:       ref.Line,
+                                EventID:    strings.TrimSpace(ref.Event.EventID),
+                                ReplicaID:  strings.TrimSpace(ref.Event.ReplicaID),
+                                EntityKind: k.kind,
+                                EntityID:   k.id,
+                                Type:       strings.TrimSpace(ref.Event.Type),
+                        })
+                }
+
+                var heads []EventV1Line
+                for id, l := range a.ids {
+                        if _, ok := a.parentIDs[id]; ok {
+                                continue
+                        }
+                        heads = append(heads, l)
+                }
+                sort.Slice(heads, func(i, j int) bool {
+                        if heads[i].Path != heads[j].Path {
+                                return heads[i].Path < heads[j].Path
+                        }
+                        return heads[i].Line < heads[j].Line
+                })
+
+                if len(a.ids) > 0 && len(heads) == 0 {
+                        issues = append(issues, DoctorIssue{
+                                Level:      DoctorIssueLevelError,
+                                Code:       "no_heads",
+                                Message:    "entity stream has no heads (cycle or corrupt parents)",
+                                EntityKind: k.kind,
+                                EntityID:   k.id,
+                        })
+                        continue
+                }
+                if len(heads) > 1 {
+                        issues = append(issues, DoctorIssue{
+                                Level:      DoctorIssueLevelError,
+                                Code:       "fork_detected",
+                                Message:    fmt.Sprintf("entity has %d heads (requires explicit merge)", len(heads)),
+                                EntityKind: k.kind,
+                                EntityID:   k.id,
+                        })
+                        for _, h := range heads {
+                                issues = append(issues, DoctorIssue{
+                                        Level:      DoctorIssueLevelError,
+                                        Code:       "fork_head",
+                                        Message:    "entity head",
+                                        Path:       h.Path,
+                                        Line:       h.Line,
+                                        EventID:    strings.TrimSpace(h.Event.EventID),
+                                        ReplicaID:  strings.TrimSpace(h.Event.ReplicaID),
+                                        EntityKind: k.kind,
+                                        EntityID:   k.id,
+                                        Type:       strings.TrimSpace(h.Event.Type),
+                                })
+                        }
                 }
         }
 
