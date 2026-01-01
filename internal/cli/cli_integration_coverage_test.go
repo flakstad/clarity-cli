@@ -332,6 +332,11 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
         // events: list with limit.
         run(t, invocation{name: "events list --limit", cmdPath: "events list", args: []string{"--dir", dir, "--actor", humanID, "events", "list", "--limit", "0"}, expect: expectJSONEnvelope})
 
+        // publish: derived Markdown export.
+        pubDir := t.TempDir()
+        run(t, invocation{name: "publish item (--to, flags)", cmdPath: "publish item", args: []string{"--dir", dir, "--actor", humanID, "publish", "item", itemA, "--to", pubDir, "--include-worklog", "--overwrite=false"}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "publish outline (--to, flags)", cmdPath: "publish outline", args: []string{"--dir", dir, "--actor", humanID, "publish", "outline", out1, "--to", pubDir, "--include-archived"}, expect: expectJSONEnvelope})
+
         // status: should produce envelope and be stable.
         run(t, invocation{name: "status", cmdPath: "status", args: []string{"--dir", dir, "--actor", humanID, "status"}, expect: expectJSONEnvelope})
 

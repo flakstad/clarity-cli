@@ -20,6 +20,7 @@ Recommended starting topics:
 - `sync`
 - `web`
 - `deps`
+- `publish`
 - `backup`
 - `tui`
 - `quick-capture`
