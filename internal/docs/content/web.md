@@ -19,6 +19,21 @@ clarity --workspace "Flakstad Software" web --addr :3333
 Today there are two modes:
 - `--auth none` (default): no browser login; use a fixed actor by starting with `--actor`, or run read-only.
 - `--auth dev`: local/dev mode that lets you pick a human actor in the browser at `/login` (sets a cookie).
+- `--auth magic`: email magic-link login. V1 delivery writes “emails” to `.clarity/web/outbox/`.
+
+### `meta/users.json`
+
+Magic-link login requires a committed mapping file at `meta/users.json`:
+
+```json
+{
+  "users": [
+    {"email": "you@example.com", "actorId": "act-..."}
+  ]
+}
+```
+
+V1 magic-link delivery writes “emails” to `.clarity/web/outbox/` (gitignored). Tokens and sessions are HMAC-signed using a local secret at `.clarity/web/secret.key` (gitignored).
 
 ## Current status
 
@@ -40,5 +55,6 @@ Current routes (read-only):
 
 Dev auth routes:
 - `/login`
+- `/verify`
 
 Writes, login, and multi-user semantics are planned under the `Pivot` epic.

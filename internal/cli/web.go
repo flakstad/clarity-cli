@@ -89,7 +89,7 @@ clarity --workspace "Flakstad Software" web --addr :3333
 
         cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:3333", "Bind address (host:port or :port)")
         cmd.Flags().BoolVar(&readOnly, "read-only", true, "Disable mutating operations (recommended for v1)")
-        cmd.Flags().StringVar(&authMode, "auth", "none", "Auth mode: none|dev (dev mode lets you pick an actor in the browser)")
+        cmd.Flags().StringVar(&authMode, "auth", "none", "Auth mode: none|dev|magic (dev mode = actor picker; magic = email link via meta/users.json)")
 
         return cmd
 }

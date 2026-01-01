@@ -24,7 +24,7 @@ type ServerConfig struct {
         Workspace string
         ActorID   string
         ReadOnly  bool
-        AuthMode  string // none|dev
+        AuthMode  string // none|dev|magic
 }
 
 type Server struct {
@@ -47,8 +47,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
         if cfg.AuthMode == "" {
                 cfg.AuthMode = "none"
         }
-        if cfg.AuthMode != "none" && cfg.AuthMode != "dev" {
-                return nil, errors.New("web: invalid auth mode (expected none|dev)")
+        if cfg.AuthMode != "none" && cfg.AuthMode != "dev" && cfg.AuthMode != "magic" {
+                return nil, errors.New("web: invalid auth mode (expected none|dev|magic)")
         }
 
         tmpl, err := template.New("base").Funcs(template.FuncMap{
@@ -69,6 +69,7 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("GET /", s.handleHome)
         mux.HandleFunc("GET /login", s.handleLoginGet)
         mux.HandleFunc("POST /login", s.handleLoginPost)
+        mux.HandleFunc("GET /verify", s.handleVerifyGet)
         mux.HandleFunc("POST /logout", s.handleLogoutPost)
         mux.HandleFunc("GET /agenda", s.handleAgenda)
         mux.HandleFunc("GET /sync", s.handleSync)
@@ -137,11 +138,12 @@ type loginVM struct {
         Workspace string
         Dir       string
         Actors    []model.Actor
+        AuthMode  string
         Error     string
 }
 
 func (s *Server) handleLoginGet(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.AuthMode != "dev" {
+        if s.cfg.AuthMode != "dev" && s.cfg.AuthMode != "magic" {
                 http.NotFound(w, r)
                 return
         }
@@ -151,24 +153,31 @@ func (s *Server) handleLoginGet(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        actors := make([]model.Actor, 0)
-        for _, a := range db.Actors {
-                if a.Kind == model.ActorKindHuman {
-                        actors = append(actors, a)
+        actors := []model.Actor{}
+        if s.cfg.AuthMode == "dev" {
+                for _, a := range db.Actors {
+                        if a.Kind == model.ActorKindHuman {
+                                actors = append(actors, a)
+                        }
                 }
         }
 
         w.Header().Set("Content-Type", "text/html; charset=utf-8")
-        _ = s.tmpl.ExecuteTemplate(w, "login.html", loginVM{
+        tpl := "login_dev.html"
+        if s.cfg.AuthMode == "magic" {
+                tpl = "login_magic.html"
+        }
+        _ = s.tmpl.ExecuteTemplate(w, tpl, loginVM{
                 Now:       time.Now().Format(time.RFC3339),
                 Workspace: s.cfg.Workspace,
                 Dir:       s.cfg.Dir,
                 Actors:    actors,
+                AuthMode:  s.cfg.AuthMode,
         })
 }
 
 func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.AuthMode != "dev" {
+        if s.cfg.AuthMode != "dev" && s.cfg.AuthMode != "magic" {
                 http.NotFound(w, r)
                 return
         }
@@ -176,50 +185,163 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
                 http.Error(w, err.Error(), http.StatusBadRequest)
                 return
         }
-        actorID := strings.TrimSpace(r.Form.Get("actor"))
-        if actorID == "" {
-                http.Redirect(w, r, "/login", http.StatusSeeOther)
-                return
-        }
 
         db, err := (store.Store{Dir: s.cfg.Dir}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
         }
-        a, ok := db.FindActor(actorID)
-        if !ok || a == nil || a.Kind != model.ActorKindHuman {
-                w.Header().Set("Content-Type", "text/html; charset=utf-8")
-                _ = s.tmpl.ExecuteTemplate(w, "login.html", loginVM{
-                        Now:       time.Now().Format(time.RFC3339),
-                        Workspace: s.cfg.Workspace,
-                        Dir:       s.cfg.Dir,
-                        Actors:    db.Actors,
-                        Error:     "unknown actor",
-                })
+
+        secret, err := loadOrInitSecretKey(s.cfg.Dir)
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
         }
 
+        switch s.cfg.AuthMode {
+        case "dev":
+                actorID := strings.TrimSpace(r.Form.Get("actor"))
+                if actorID == "" {
+                        http.Redirect(w, r, "/login", http.StatusSeeOther)
+                        return
+                }
+                a, ok := db.FindActor(actorID)
+                if !ok || a == nil || a.Kind != model.ActorKindHuman {
+                        w.Header().Set("Content-Type", "text/html; charset=utf-8")
+                        _ = s.tmpl.ExecuteTemplate(w, "login_dev.html", loginVM{
+                                Now:       time.Now().Format(time.RFC3339),
+                                Workspace: s.cfg.Workspace,
+                                Dir:       s.cfg.Dir,
+                                Actors:    db.Actors,
+                                AuthMode:  s.cfg.AuthMode,
+                                Error:     "unknown actor",
+                        })
+                        return
+                }
+                sess, err := newSessionToken(secret, actorID, 30*24*time.Hour)
+                if err != nil {
+                        http.Error(w, err.Error(), http.StatusInternalServerError)
+                        return
+                }
+                http.SetCookie(w, &http.Cookie{
+                        Name:     sessionCookieName,
+                        Value:    sess,
+                        Path:     "/",
+                        HttpOnly: true,
+                        SameSite: http.SameSiteLaxMode,
+                })
+                http.Redirect(w, r, "/", http.StatusSeeOther)
+                return
+        case "magic":
+                email := strings.ToLower(strings.TrimSpace(r.Form.Get("email")))
+                if email == "" {
+                        http.Redirect(w, r, "/login", http.StatusSeeOther)
+                        return
+                }
+                users, _, err := store.LoadUsers(s.cfg.Dir)
+                if err != nil {
+                        http.Error(w, err.Error(), http.StatusInternalServerError)
+                        return
+                }
+                actorID, ok := users.ActorIDForEmail(email)
+                if !ok {
+                        w.Header().Set("Content-Type", "text/html; charset=utf-8")
+                        _ = s.tmpl.ExecuteTemplate(w, "login_magic.html", loginVM{
+                                Now:       time.Now().Format(time.RFC3339),
+                                Workspace: s.cfg.Workspace,
+                                Dir:       s.cfg.Dir,
+                                AuthMode:  s.cfg.AuthMode,
+                                Error:     "email is not registered in meta/users.json",
+                        })
+                        return
+                }
+                if a, ok := db.FindActor(actorID); !ok || a == nil {
+                        http.Error(w, "meta/users.json maps to unknown actorId", http.StatusInternalServerError)
+                        return
+                }
+
+                tok, err := newMagicToken(secret, email, 15*time.Minute)
+                if err != nil {
+                        http.Error(w, err.Error(), http.StatusInternalServerError)
+                        return
+                }
+
+                link := "http://" + r.Host + "/verify?token=" + tok
+                _ = writeOutboxEmail(s.cfg.Dir, email, "Clarity login link", link)
+
+                w.Header().Set("Content-Type", "text/html; charset=utf-8")
+                _ = s.tmpl.ExecuteTemplate(w, "login_magic_sent.html", map[string]any{
+                        "Now":       time.Now().Format(time.RFC3339),
+                        "Workspace": s.cfg.Workspace,
+                        "Dir":       s.cfg.Dir,
+                        "Email":     email,
+                        "Link":      link,
+                })
+                return
+        default:
+                http.NotFound(w, r)
+                return
+        }
+}
+
+func (s *Server) handleLogoutPost(w http.ResponseWriter, r *http.Request) {
+        if s.cfg.AuthMode != "dev" && s.cfg.AuthMode != "magic" {
+                http.NotFound(w, r)
+                return
+        }
         http.SetCookie(w, &http.Cookie{
-                Name:     actorCookieName,
-                Value:    actorID,
+                Name:     sessionCookieName,
+                Value:    "",
                 Path:     "/",
+                MaxAge:   -1,
                 HttpOnly: true,
                 SameSite: http.SameSiteLaxMode,
         })
         http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-func (s *Server) handleLogoutPost(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.AuthMode != "dev" {
+func (s *Server) handleVerifyGet(w http.ResponseWriter, r *http.Request) {
+        if s.cfg.AuthMode != "magic" {
                 http.NotFound(w, r)
                 return
         }
+
+        token := strings.TrimSpace(r.URL.Query().Get("token"))
+        if token == "" {
+                http.Error(w, "missing token", http.StatusBadRequest)
+                return
+        }
+        secret, err := loadOrInitSecretKey(s.cfg.Dir)
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        sp, err := verifyToken(secret, token)
+        if err != nil || sp.Typ != "magic" {
+                http.Error(w, "invalid token", http.StatusForbidden)
+                return
+        }
+
+        users, _, err := store.LoadUsers(s.cfg.Dir)
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        actorID, ok := users.ActorIDForEmail(sp.Sub)
+        if !ok {
+                http.Error(w, "email is not registered in meta/users.json", http.StatusForbidden)
+                return
+        }
+
+        sess, err := newSessionToken(secret, actorID, 30*24*time.Hour)
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
         http.SetCookie(w, &http.Cookie{
-                Name:     actorCookieName,
-                Value:    "",
+                Name:     sessionCookieName,
+                Value:    sess,
                 Path:     "/",
-                MaxAge:   -1,
                 HttpOnly: true,
                 SameSite: http.SameSiteLaxMode,
         })
@@ -349,6 +471,12 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
                 return
         }
         msg := strings.TrimSpace(r.Form.Get("message"))
+        if msg == "" {
+                actor := strings.TrimSpace(s.actorForRequest(r))
+                if actor != "" {
+                        msg = "clarity: update (" + actor + ")"
+                }
+        }
 
         committed, err := gitrepo.CommitWorkspaceCanonical(ctx, s.cfg.Dir, msg)
         if err != nil {
@@ -630,21 +758,27 @@ func (s *Server) handleItemCommentAdd(w http.ResponseWriter, r *http.Request) {
         http.Redirect(w, r, "/items/"+itemID, http.StatusSeeOther)
 }
 
-const actorCookieName = "clarity_web_actor"
+const sessionCookieName = "clarity_web_session"
 
 func (s *Server) actorForRequest(r *http.Request) string {
         // Fixed actor override is useful for local-only usage and early automation.
         if strings.TrimSpace(s.cfg.ActorID) != "" {
                 return strings.TrimSpace(s.cfg.ActorID)
         }
-        if s.cfg.AuthMode != "dev" {
-                return ""
-        }
-        c, err := r.Cookie(actorCookieName)
+
+        c, err := r.Cookie(sessionCookieName)
         if err != nil {
                 return ""
         }
-        return strings.TrimSpace(c.Value)
+        secret, err := loadOrInitSecretKey(s.cfg.Dir)
+        if err != nil {
+                return ""
+        }
+        sp, err := verifyToken(secret, c.Value)
+        if err != nil || sp.Typ != "session" {
+                return ""
+        }
+        return strings.TrimSpace(sp.Sub)
 }
 
 func readyItems(db *store.DB) []model.Item {

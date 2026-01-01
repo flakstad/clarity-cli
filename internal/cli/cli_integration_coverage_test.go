@@ -463,6 +463,10 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
         // Import again using --name and --force to cover those flags.
         run(t, invocation{name: "workspace import --name --force --events=false", cmdPath: "workspace import", args: []string{"workspace", "import", "--name", importName, "--from", exportDir, "--force", "--events=false"}, expect: expectJSONEnvelope})
 
+        // workspace migrate: migrate the sqlite-based temp store `dir` into a fresh workspace dir (and init+commit).
+        migrateTo := t.TempDir()
+        run(t, invocation{name: "workspace migrate (--from --to --git-init --git-commit --message)", cmdPath: "workspace migrate", args: []string{"workspace", "migrate", "--from", dir, "--to", migrateTo, "--git-init", "--git-commit", "--message", "clarity: migrate (test)"}, expect: expectJSONEnvelope})
+
         // Also cover CLARITY_WORKSPACE env (without --workspace).
         run(t, invocation{name: "status (env CLARITY_WORKSPACE)", cmdPath: "status", args: []string{"status"}, env: map[string]string{"CLARITY_WORKSPACE": wsName2, "CLARITY_ACTOR": wsHuman}, expect: expectJSONEnvelope, markEnvFlags: []string{"workspace", "actor"}})
 
@@ -476,7 +480,7 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
         run(t, invocation{name: "sync resolve (non-repo error, --dir)", cmdPath: "sync resolve", args: []string{"--dir", dir, "sync", "resolve"}, expect: expectError})
 
         // web: long-running server command; cover flags via --help (no server start).
-        run(t, invocation{name: "web --help (--addr --read-only --auth)", cmdPath: "web", args: []string{"--dir", dir, "web", "--addr", "127.0.0.1:0", "--read-only=false", "--auth", "dev", "--help"}, expect: expectRawText})
+        run(t, invocation{name: "web --help (--addr --read-only --auth)", cmdPath: "web", args: []string{"--dir", dir, "web", "--addr", "127.0.0.1:0", "--read-only=false", "--auth", "magic", "--help"}, expect: expectRawText})
 
         // --- Coverage assertions ---
         leafCmds, rootPersistentFlags, localFlagsByCmd := buildCoverageIndex()

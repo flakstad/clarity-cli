@@ -29,6 +29,7 @@ func newWorkspaceCmd(app *App) *cobra.Command {
         cmd.AddCommand(newWorkspaceRenameCmd(app))
         cmd.AddCommand(newWorkspaceExportCmd(app))
         cmd.AddCommand(newWorkspaceImportCmd(app))
+        cmd.AddCommand(newWorkspaceMigrateCmd(app))
 
         return cmd
 }

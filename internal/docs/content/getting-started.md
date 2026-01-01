@@ -31,6 +31,22 @@ If you have a Git repo directory that you want Clarity to treat as a workspace, 
 clarity workspace add <name> --dir /path/to/repo --use
 ```
 
+### Migrating legacy SQLite workspaces
+
+If you have an older workspace using the legacy SQLite event log, migrate it into the Git-backed JSONL v1 layout:
+
+```bash
+clarity workspace migrate --from /path/to/old --to /path/to/new
+clarity --dir /path/to/new reindex
+clarity --dir /path/to/new doctor --fail
+```
+
+Optionally initialize a new repo and create the first commit:
+
+```bash
+clarity workspace migrate --from /path/to/old --to /path/to/new --git-init --git-commit --message "clarity: migrate"
+```
+
 ## Projects (set context)
 
 ```bash

@@ -25,7 +25,7 @@
     · <a href="/agenda">Agenda</a>
     · <a href="/sync">Sync</a>
     · now={{.Now}}
-    {{if eq .AuthMode "dev"}}
+    {{if or (eq .AuthMode "dev") (eq .AuthMode "magic")}}
       {{if .ActorID}}
         · <form method="post" action="/logout" style="display:inline;"><button type="submit">Logout</button></form>
       {{else}}
