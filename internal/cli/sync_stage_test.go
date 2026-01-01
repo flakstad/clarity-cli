@@ -1,14 +1,17 @@
 package cli
 
 import (
+        "context"
         "os"
         "os/exec"
         "path/filepath"
         "strings"
         "testing"
+
+        "clarity-cli/internal/gitrepo"
 )
 
-func TestStageWorkspaceCanonical_StagesOnlyCanonicalPaths(t *testing.T) {
+func TestCommitWorkspaceCanonical_CommitsOnlyCanonicalPaths(t *testing.T) {
         if _, err := exec.LookPath("git"); err != nil {
                 t.Skip("git not installed")
         }
@@ -29,15 +32,15 @@ func TestStageWorkspaceCanonical_StagesOnlyCanonicalPaths(t *testing.T) {
         mustWriteFile(t, filepath.Join(workspaceDir, "resources", "note.txt"), []byte("x\n"))
         mustWriteFile(t, filepath.Join(workspaceDir, ".clarity", "index.sqlite"), []byte("sqlite\n"))
 
-        staged, err := stageWorkspaceCanonical(workspaceDir, repoRoot)
+        committed, err := gitrepo.CommitWorkspaceCanonical(context.Background(), workspaceDir, "test commit")
         if err != nil {
-                t.Fatalf("stageWorkspaceCanonical: %v", err)
+                t.Fatalf("CommitWorkspaceCanonical: %v", err)
         }
-        if !staged {
-                t.Fatalf("expected staged=true")
+        if !committed {
+                t.Fatalf("expected committed=true")
         }
 
-        out := runGitCmdOut(t, repoRoot, "git", "diff", "--cached", "--name-only")
+        out := runGitCmdOut(t, repoRoot, "git", "show", "--name-only", "--pretty=")
         lines := nonEmptyLines(out)
 
         want := map[string]bool{
@@ -47,15 +50,15 @@ func TestStageWorkspaceCanonical_StagesOnlyCanonicalPaths(t *testing.T) {
         }
         for _, ln := range lines {
                 if strings.Contains(ln, ".clarity/") {
-                        t.Fatalf("staged derived file unexpectedly: %q", ln)
+                        t.Fatalf("committed derived file unexpectedly: %q", ln)
                 }
                 if !want[ln] {
-                        t.Fatalf("unexpected staged path: %q", ln)
+                        t.Fatalf("unexpected committed path: %q", ln)
                 }
                 delete(want, ln)
         }
         if len(want) != 0 {
-                t.Fatalf("missing staged paths: %v", keys(want))
+                t.Fatalf("missing committed paths: %v", keys(want))
         }
 }
 

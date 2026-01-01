@@ -1,10 +1,12 @@
 package cli
 
 import (
+        "context"
         "os"
         "path/filepath"
         "strings"
 
+        "clarity-cli/internal/gitrepo"
         "clarity-cli/internal/store"
 
         "github.com/spf13/cobra"
@@ -51,7 +53,7 @@ func newInitCmd(app *App) *cobra.Command {
                         if _, err := os.Stat(filepath.Join(app.Dir, "events")); err == nil {
                                 shouldInitV1 = true
                         }
-                        if _, err := os.Stat(filepath.Join(app.Dir, ".git")); err == nil {
+                        if st, err := gitrepo.GetStatus(context.Background(), app.Dir); err == nil && st.IsRepo {
                                 shouldInitV1 = true
                         }
                         if shouldInitV1 {

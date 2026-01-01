@@ -4,9 +4,7 @@ import (
         "context"
         "errors"
         "fmt"
-        "os"
         "os/exec"
-        "path/filepath"
         "strings"
         "time"
 
@@ -130,12 +128,6 @@ func newSyncPushCmd(app *App) *cobra.Command {
                                 return writeErr(cmd, errors.New("sync push: repo has an in-progress merge/rebase; resolve first (try: clarity sync resolve)"))
                         }
 
-                        // Stage canonical workspace paths (ignore derived files like .clarity/index.sqlite).
-                        added, err := stageWorkspaceCanonical(dir, before.Root)
-                        if err != nil {
-                                return writeErr(cmd, err)
-                        }
-
                         committed := false
                         commitMsg := strings.TrimSpace(message)
                         if commitMsg == "" {
@@ -145,14 +137,10 @@ func newSyncPushCmd(app *App) *cobra.Command {
                                 }
                         }
 
-                        if added {
-                                // Commit only if there's something staged.
-                                if out, err := runGit(dir, "diff", "--cached", "--name-only"); err == nil && strings.TrimSpace(out) != "" {
-                                        if _, err := runGit(dir, "commit", "-m", commitMsg); err != nil {
-                                                return writeErr(cmd, err)
-                                        }
-                                        committed = true
-                                }
+                        // Stage+commit canonical workspace paths (ignore derived files like .clarity/index.sqlite).
+                        committed, err = gitrepo.CommitWorkspaceCanonical(ctx, dir, commitMsg)
+                        if err != nil {
+                                return writeErr(cmd, err)
                         }
 
                         // Pull/rebase (optional) then push.
@@ -285,51 +273,4 @@ func isNonFastForwardPushErr(err error) bool {
                 }
         }
         return false
-}
-
-func stageWorkspaceCanonical(workspaceDir string, repoRoot string) (bool, error) {
-        workspaceDir = filepath.Clean(workspaceDir)
-        repoRoot = filepath.Clean(repoRoot)
-
-        rel, err := filepath.Rel(repoRoot, workspaceDir)
-        if err != nil {
-                return false, err
-        }
-        rel = filepath.Clean(rel)
-
-        type entry struct {
-                abs string
-                rel string
-        }
-
-        var targets []entry
-        addIfExists := func(subRel string) {
-                subRel = filepath.Clean(subRel)
-                abs := filepath.Join(workspaceDir, subRel)
-                if _, err := os.Stat(abs); err == nil {
-                        if rel == "." {
-                                targets = append(targets, entry{abs: abs, rel: subRel})
-                        } else {
-                                targets = append(targets, entry{abs: abs, rel: filepath.Join(rel, subRel)})
-                        }
-                }
-        }
-
-        addIfExists("events")
-        addIfExists(filepath.Join("meta", "workspace.json"))
-        addIfExists("resources")
-
-        if len(targets) == 0 {
-                return false, nil
-        }
-
-        args := []string{"-C", repoRoot, "add", "--"}
-        for _, t := range targets {
-                args = append(args, t.rel)
-        }
-        _, err = runGit(repoRoot, args...)
-        if err != nil {
-                return false, err
-        }
-        return true, nil
 }

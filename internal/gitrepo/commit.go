@@ -75,6 +75,16 @@ func stageWorkspaceCanonical(ctx context.Context, workspaceDir string, repoRoot 
         workspaceDir = filepath.Clean(workspaceDir)
         repoRoot = filepath.Clean(repoRoot)
 
+        // On macOS, temp dirs may involve symlinks like /var -> /private/var. Git often
+        // reports a canonicalized repo root, so normalize both sides before Rel() to avoid
+        // "path is outside repository" errors.
+        if v, err := filepath.EvalSymlinks(workspaceDir); err == nil {
+                workspaceDir = v
+        }
+        if v, err := filepath.EvalSymlinks(repoRoot); err == nil {
+                repoRoot = v
+        }
+
         rel, err := filepath.Rel(repoRoot, workspaceDir)
         if err != nil {
                 return false, err

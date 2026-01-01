@@ -4,6 +4,7 @@ Clarity v1 workspaces can be **Git-backed**:
 
 - Canonical history: `events/events*.jsonl` (committed)
 - Derived state: `.clarity/index.sqlite` (local, rebuildable)
+- Recommended ignore: `.clarity/` (Clarity can add this to `.gitignore` during `clarity init`)
 
 ## `clarity sync status`
 

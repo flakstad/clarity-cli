@@ -16,10 +16,12 @@ type GitBackedV1InitResult struct {
         WorkspaceMetaCreated bool `json:"workspaceMetaCreated"`
         DeviceCreated        bool `json:"deviceCreated"`
         ShardCreated         bool `json:"shardCreated"`
+        GitignoreUpdated     bool `json:"gitignoreUpdated"`
 
         WorkspaceMetaPath string `json:"workspaceMetaPath"`
         DevicePath        string `json:"devicePath"`
         ShardPath         string `json:"shardPath"`
+        GitignorePath     string `json:"gitignorePath"`
 }
 
 // EnsureGitBackedV1Layout bootstraps the Git-backed JSONL v1 workspace layout.
@@ -52,6 +54,12 @@ func EnsureGitBackedV1Layout(dir string) (GitBackedV1InitResult, error) {
                 return GitBackedV1InitResult{}, err
         }
 
+        gitignorePath := filepath.Join(dir, ".gitignore")
+        gitignoreUpdated, err := ensureGitignoreHasClarityIgnores(gitignorePath)
+        if err != nil {
+                return GitBackedV1InitResult{}, err
+        }
+
         shardPath := s.shardPath(strings.TrimSpace(device.ReplicaID))
         shardCreated := false
         if _, err := os.Stat(shardPath); err != nil {
@@ -75,9 +83,60 @@ func EnsureGitBackedV1Layout(dir string) (GitBackedV1InitResult, error) {
                 WorkspaceMetaCreated: wsCreated,
                 DeviceCreated:        deviceCreated,
                 ShardCreated:         shardCreated,
+                GitignoreUpdated:     gitignoreUpdated,
 
                 WorkspaceMetaPath: workspaceMetaPath,
                 DevicePath:        devicePath,
                 ShardPath:         shardPath,
+                GitignorePath:     gitignorePath,
         }, nil
+}
+
+func ensureGitignoreHasClarityIgnores(path string) (updated bool, err error) {
+        path = filepath.Clean(strings.TrimSpace(path))
+        if path == "" {
+                return false, errors.New("empty gitignore path")
+        }
+
+        want := []string{
+                "",
+                "# Clarity (derived/local-only)",
+                ".clarity/",
+        }
+
+        b, err := os.ReadFile(path)
+        if err != nil && !errors.Is(err, os.ErrNotExist) {
+                return false, err
+        }
+        existing := string(b)
+        lines := strings.Split(existing, "\n")
+        has := map[string]bool{}
+        for _, ln := range lines {
+                has[strings.TrimSpace(ln)] = true
+        }
+
+        var toAppend []string
+        for _, ln := range want {
+                if ln == "" {
+                        continue
+                }
+                if !has[ln] {
+                        toAppend = append(toAppend, ln)
+                }
+        }
+        if len(toAppend) == 0 {
+                return false, nil
+        }
+
+        out := existing
+        if strings.TrimSpace(out) != "" && !strings.HasSuffix(out, "\n") {
+                out += "\n"
+        }
+        // Keep the insertion compact and readable.
+        out += strings.Join(append([]string{""}, toAppend...), "\n") + "\n"
+
+        if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+                return false, err
+        }
+        return true, nil
 }

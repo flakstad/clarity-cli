@@ -3,6 +3,7 @@ package store
 import (
         "os"
         "path/filepath"
+        "strings"
         "testing"
 )
 
@@ -28,6 +29,9 @@ func TestEnsureGitBackedV1Layout_CreatesFiles(t *testing.T) {
         if !res.ShardCreated {
                 t.Fatalf("expected shard file to be created")
         }
+        if !res.GitignoreUpdated {
+                t.Fatalf("expected gitignore to be updated")
+        }
 
         // workspace meta committed file
         if _, err := os.Stat(filepath.Join(dir, "meta", "workspace.json")); err != nil {
@@ -41,6 +45,11 @@ func TestEnsureGitBackedV1Layout_CreatesFiles(t *testing.T) {
         if _, err := os.Stat(res.ShardPath); err != nil {
                 t.Fatalf("stat shard: %v", err)
         }
+        if b, err := os.ReadFile(filepath.Join(dir, ".gitignore")); err != nil {
+                t.Fatalf("read .gitignore: %v", err)
+        } else if !strings.Contains(string(b), ".clarity/") {
+                t.Fatalf("expected .gitignore to include .clarity/")
+        }
 
         // Idempotent.
         res2, err := EnsureGitBackedV1Layout(dir)
@@ -52,5 +61,8 @@ func TestEnsureGitBackedV1Layout_CreatesFiles(t *testing.T) {
         }
         if res2.ReplicaID != res.ReplicaID {
                 t.Fatalf("replica id changed: %q -> %q", res.ReplicaID, res2.ReplicaID)
+        }
+        if res2.GitignoreUpdated {
+                t.Fatalf("expected gitignore to not be updated on second run")
         }
 }
