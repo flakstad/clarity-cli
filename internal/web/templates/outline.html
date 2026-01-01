@@ -31,7 +31,32 @@
   </div>
 
   <div class="card">
-    <div><strong>Items</strong> ({{len .Items}})</div>
+    <div><strong>Items</strong></div>
+
+    {{if .UseOutlineComponent}}
+      <script src="/static/outline.js"></script>
+      <clarity-outline id="outline"></clarity-outline>
+      <script>
+        (function () {
+          const el = document.getElementById('outline');
+          if (!el) return;
+          el.setAttribute('data-current-user', {{printf "%q" .ActorID}});
+          el.setAttribute('data-status-labels', JSON.stringify({{.StatusLabelsJSON}}));
+          el.setAttribute('data-assignees', JSON.stringify({{.AssigneesJSON}}));
+          el.setAttribute('data-tags', JSON.stringify({{.TagsJSON}}));
+          el.setAttribute('data-features', JSON.stringify({
+            dragAndDrop: false
+          }));
+          el.setAttribute('data-items', JSON.stringify({{.ItemsJSON}}));
+        })();
+      </script>
+      <noscript>
+        <div class="dim">JavaScript is disabled; showing a basic list.</div>
+      </noscript>
+    {{else}}
+      <div class="dim">Outline component is not configured (start `clarity web` with `--components-dir`).</div>
+    {{end}}
+
     {{if .Items}}
       <ul>
         {{range .Items}}

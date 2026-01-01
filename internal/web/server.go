@@ -3,14 +3,19 @@ package web
 import (
         "context"
         "embed"
+        "encoding/json"
         "errors"
         "html/template"
         "net/http"
+        "os"
+        "path/filepath"
+        "sort"
         "strings"
         "time"
 
         "clarity-cli/internal/gitrepo"
         "clarity-cli/internal/model"
+        "clarity-cli/internal/perm"
         "clarity-cli/internal/statusutil"
         "clarity-cli/internal/store"
 )
@@ -25,6 +30,10 @@ type ServerConfig struct {
         ActorID   string
         ReadOnly  bool
         AuthMode  string // none|dev|magic
+
+        // ComponentsDir points at a local checkout of `clarity-components` (for now),
+        // used to serve `outline.js` to the browser.
+        ComponentsDir string
 }
 
 type Server struct {
@@ -38,6 +47,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
         cfg.Workspace = strings.TrimSpace(cfg.Workspace)
         cfg.ActorID = strings.TrimSpace(cfg.ActorID)
         cfg.AuthMode = strings.ToLower(strings.TrimSpace(cfg.AuthMode))
+        cfg.ComponentsDir = strings.TrimSpace(cfg.ComponentsDir)
         if cfg.Addr == "" {
                 return nil, errors.New("web: addr is empty")
         }
@@ -66,6 +76,7 @@ func (s *Server) Addr() string { return s.cfg.Addr }
 func (s *Server) Handler() http.Handler {
         mux := http.NewServeMux()
         mux.HandleFunc("GET /health", s.handleHealth)
+        mux.HandleFunc("GET /static/outline.js", s.handleOutlineJS)
         mux.HandleFunc("GET /", s.handleHome)
         mux.HandleFunc("GET /login", s.handleLoginGet)
         mux.HandleFunc("POST /login", s.handleLoginPost)
@@ -81,6 +92,23 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("GET /items/{itemId}", s.handleItem)
         mux.HandleFunc("POST /items/{itemId}/comments", s.handleItemCommentAdd)
         return mux
+}
+
+func (s *Server) handleOutlineJS(w http.ResponseWriter, r *http.Request) {
+        dir := strings.TrimSpace(s.cfg.ComponentsDir)
+        if dir == "" {
+                http.NotFound(w, r)
+                return
+        }
+        p := filepath.Join(dir, "outline.js")
+        b, err := os.ReadFile(p)
+        if err != nil {
+                http.NotFound(w, r)
+                return
+        }
+        w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+        w.WriteHeader(http.StatusOK)
+        _, _ = w.Write(b)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -99,6 +127,31 @@ type homeVM struct {
         Git       gitrepo.Status
         Projects  []model.Project
         Ready     []model.Item
+}
+
+func unarchivedProjects(projects []model.Project) []model.Project {
+        out := make([]model.Project, 0, len(projects))
+        for _, p := range projects {
+                if p.Archived {
+                        continue
+                }
+                out = append(out, p)
+        }
+        return out
+}
+
+func unarchivedOutlines(outlines []model.Outline, projectID string) []model.Outline {
+        out := make([]model.Outline, 0, len(outlines))
+        for _, o := range outlines {
+                if o.ProjectID != projectID {
+                        continue
+                }
+                if o.Archived {
+                        continue
+                }
+                out = append(out, o)
+        }
+        return out
 }
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +178,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
                 ActorID:   actorID,
                 AuthMode:  s.cfg.AuthMode,
                 Git:       st,
-                Projects:  db.Projects,
+                Projects:  unarchivedProjects(db.Projects),
                 Ready:     ready,
         }); err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -551,7 +604,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
                 Now:       time.Now().Format(time.RFC3339),
                 Workspace: s.cfg.Workspace,
                 Dir:       s.cfg.Dir,
-                Projects:  db.Projects,
+                Projects:  unarchivedProjects(db.Projects),
         }); err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -584,12 +637,7 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        outlines := make([]model.Outline, 0)
-        for _, o := range db.Outlines {
-                if o.ProjectID == projectID {
-                        outlines = append(outlines, o)
-                }
-        }
+        outlines := unarchivedOutlines(db.Outlines, projectID)
 
         w.Header().Set("Content-Type", "text/html; charset=utf-8")
         if err := s.tmpl.ExecuteTemplate(w, "project.html", projectVM{
@@ -608,8 +656,19 @@ type outlineVM struct {
         Now       string
         Workspace string
         Dir       string
+        ActorID   string
+        ReadOnly  bool
         Outline   model.Outline
-        Items     []model.Item
+
+        // Outline component view-model (progressive enhancement).
+        UseOutlineComponent bool
+        ItemsJSON           template.JS
+        StatusLabelsJSON    template.JS
+        AssigneesJSON       template.JS
+        TagsJSON            template.JS
+
+        // Fallback list (no JS / no components).
+        Items []model.Item
 }
 
 func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
@@ -629,6 +688,10 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
                 http.NotFound(w, r)
                 return
         }
+        if o.Archived {
+                http.NotFound(w, r)
+                return
+        }
 
         items := make([]model.Item, 0)
         for _, it := range db.Items {
@@ -637,17 +700,192 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
                 }
         }
 
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        useComponent := strings.TrimSpace(s.cfg.ComponentsDir) != ""
+        itemsJSON, statusJSON, assigneesJSON, tagsJSON := outlineComponentPayload(db, *o, actorID)
+
         w.Header().Set("Content-Type", "text/html; charset=utf-8")
         if err := s.tmpl.ExecuteTemplate(w, "outline.html", outlineVM{
-                Now:       time.Now().Format(time.RFC3339),
-                Workspace: s.cfg.Workspace,
-                Dir:       s.cfg.Dir,
-                Outline:   *o,
-                Items:     items,
+                Now:                 time.Now().Format(time.RFC3339),
+                Workspace:           s.cfg.Workspace,
+                Dir:                 s.cfg.Dir,
+                ActorID:             actorID,
+                ReadOnly:            s.cfg.ReadOnly,
+                Outline:             *o,
+                UseOutlineComponent: useComponent,
+                ItemsJSON:           itemsJSON,
+                StatusLabelsJSON:    statusJSON,
+                AssigneesJSON:       assigneesJSON,
+                TagsJSON:            tagsJSON,
+                Items:               items,
         }); err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
         }
+}
+
+type outlineTodoNode struct {
+        ID       string `json:"id"`
+        Text     string `json:"text"`
+        Status   string `json:"status"`
+        Editable bool   `json:"editable"`
+
+        Priority bool     `json:"priority,omitempty"`
+        OnHold   bool     `json:"onHold,omitempty"`
+        Due      string   `json:"due,omitempty"`
+        Schedule string   `json:"schedule,omitempty"`
+        Assign   string   `json:"assign,omitempty"`
+        Tags     []string `json:"tags,omitempty"`
+
+        Children []outlineTodoNode `json:"children,omitempty"`
+}
+
+type outlineStatusLabel struct {
+        Label      string `json:"label"`
+        IsEndState bool   `json:"isEndState"`
+}
+
+func outlineComponentPayload(db *store.DB, o model.Outline, actorID string) (items template.JS, statusLabels template.JS, assignees template.JS, tags template.JS) {
+        // Build status labels contract for the component.
+        status := make([]outlineStatusLabel, 0, len(o.StatusDefs))
+        for _, sd := range o.StatusDefs {
+                lbl := strings.TrimSpace(sd.Label)
+                if lbl == "" {
+                        continue
+                }
+                status = append(status, outlineStatusLabel{Label: lbl, IsEndState: sd.IsEndState})
+        }
+        if len(status) == 0 {
+                status = append(status, outlineStatusLabel{Label: "TODO", IsEndState: false})
+                status = append(status, outlineStatusLabel{Label: "DONE", IsEndState: true})
+        }
+
+        // Build assignee list contract for the component.
+        assigneeLabels := make([]string, 0, len(db.Actors))
+        for _, a := range db.Actors {
+                if strings.TrimSpace(a.Name) == "" {
+                        continue
+                }
+                assigneeLabels = append(assigneeLabels, a.Name)
+        }
+        sort.Strings(assigneeLabels)
+
+        // Tags: unique across workspace.
+        tagSet := map[string]struct{}{}
+        for _, it := range db.Items {
+                for _, t := range it.Tags {
+                        t = strings.TrimSpace(t)
+                        if t != "" {
+                                tagSet[t] = struct{}{}
+                        }
+                }
+        }
+        allTags := make([]string, 0, len(tagSet))
+        for t := range tagSet {
+                allTags = append(allTags, t)
+        }
+        sort.Strings(allTags)
+
+        // Prepare status mapping from statusID -> label.
+        statusLabelByID := map[string]string{}
+        for _, sd := range o.StatusDefs {
+                if strings.TrimSpace(sd.ID) == "" || strings.TrimSpace(sd.Label) == "" {
+                        continue
+                }
+                statusLabelByID[sd.ID] = sd.Label
+        }
+
+        // Filter and group items by parent, sorted by rank.
+        itemsInOutline := make([]model.Item, 0)
+        byID := map[string]model.Item{}
+        for _, it := range db.Items {
+                if it.OutlineID != o.ID || it.Archived {
+                        continue
+                }
+                itemsInOutline = append(itemsInOutline, it)
+                byID[it.ID] = it
+        }
+
+        children := map[string][]model.Item{}
+        for _, it := range itemsInOutline {
+                parent := ""
+                if it.ParentID != nil {
+                        parent = strings.TrimSpace(*it.ParentID)
+                        if parent != "" {
+                                if pit, ok := byID[parent]; !ok || pit.Archived {
+                                        parent = ""
+                                }
+                        }
+                }
+                children[parent] = append(children[parent], it)
+        }
+
+        for k := range children {
+                sort.Slice(children[k], func(i, j int) bool {
+                        a := children[k][i]
+                        b := children[k][j]
+                        ra := strings.TrimSpace(a.Rank)
+                        rb := strings.TrimSpace(b.Rank)
+                        if ra != "" && rb != "" && ra != rb {
+                                return ra < rb
+                        }
+                        return a.CreatedAt.Before(b.CreatedAt)
+                })
+        }
+
+        actorID = strings.TrimSpace(actorID)
+
+        var build func(parent string) []outlineTodoNode
+        build = func(parent string) []outlineTodoNode {
+                out := make([]outlineTodoNode, 0, len(children[parent]))
+                for _, it := range children[parent] {
+                        st := strings.TrimSpace(it.StatusID)
+                        if lbl, ok := statusLabelByID[st]; ok && strings.TrimSpace(lbl) != "" {
+                                st = lbl
+                        }
+                        node := outlineTodoNode{
+                                ID:       it.ID,
+                                Text:     it.Title,
+                                Status:   st,
+                                Editable: actorID != "" && perm.CanEditItem(db, actorID, &it),
+                                Priority: it.Priority,
+                                OnHold:   it.OnHold,
+                                Tags:     it.Tags,
+                                Children: build(it.ID),
+                        }
+
+                        if it.Due != nil && strings.TrimSpace(it.Due.Date) != "" {
+                                node.Due = strings.TrimSpace(it.Due.Date)
+                                if it.Due.Time != nil && strings.TrimSpace(*it.Due.Time) != "" {
+                                        node.Due = node.Due + " " + strings.TrimSpace(*it.Due.Time)
+                                }
+                        }
+                        if it.Schedule != nil && strings.TrimSpace(it.Schedule.Date) != "" {
+                                node.Schedule = strings.TrimSpace(it.Schedule.Date)
+                                if it.Schedule.Time != nil && strings.TrimSpace(*it.Schedule.Time) != "" {
+                                        node.Schedule = node.Schedule + " " + strings.TrimSpace(*it.Schedule.Time)
+                                }
+                        }
+                        if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) != "" {
+                                if a, ok := db.FindActor(strings.TrimSpace(*it.AssignedActorID)); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                                        node.Assign = strings.TrimSpace(a.Name)
+                                } else {
+                                        node.Assign = strings.TrimSpace(*it.AssignedActorID)
+                                }
+                        }
+
+                        out = append(out, node)
+                }
+                return out
+        }
+
+        todos := build("")
+
+        bTodos, _ := json.Marshal(todos)
+        bStatus, _ := json.Marshal(status)
+        bAssignees, _ := json.Marshal(assigneeLabels)
+        bTags, _ := json.Marshal(allTags)
+        return template.JS(bTodos), template.JS(bStatus), template.JS(bAssignees), template.JS(bTags)
 }
 
 type itemVM struct {

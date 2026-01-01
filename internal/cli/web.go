@@ -17,6 +17,7 @@ func newWebCmd(app *App) *cobra.Command {
         var addr string
         var readOnly bool
         var authMode string
+        var componentsDir string
 
         cmd := &cobra.Command{
                 Use:   "web",
@@ -50,12 +51,13 @@ clarity --workspace "Flakstad Software" web --addr :3333
                                 }
                         }
                         srv, err := web.NewServer(web.ServerConfig{
-                                Addr:      strings.TrimSpace(addr),
-                                Dir:       dir,
-                                Workspace: strings.TrimSpace(app.Workspace),
-                                ActorID:   actorID,
-                                ReadOnly:  readOnly,
-                                AuthMode:  strings.TrimSpace(authMode),
+                                Addr:          strings.TrimSpace(addr),
+                                Dir:           dir,
+                                Workspace:     strings.TrimSpace(app.Workspace),
+                                ActorID:       actorID,
+                                ReadOnly:      readOnly,
+                                AuthMode:      strings.TrimSpace(authMode),
+                                ComponentsDir: strings.TrimSpace(componentsDir),
                         })
                         if err != nil {
                                 return writeErr(cmd, err)
@@ -90,6 +92,7 @@ clarity --workspace "Flakstad Software" web --addr :3333
         cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:3333", "Bind address (host:port or :port)")
         cmd.Flags().BoolVar(&readOnly, "read-only", true, "Disable mutating operations (recommended for v1)")
         cmd.Flags().StringVar(&authMode, "auth", "none", "Auth mode: none|dev|magic (dev mode = actor picker; magic = email link via meta/users.json)")
+        cmd.Flags().StringVar(&componentsDir, "components-dir", envOr("CLARITY_COMPONENTS_DIR", ""), "Path to a local `clarity-components` checkout (serves outline.js)")
 
         return cmd
 }

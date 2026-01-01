@@ -7,6 +7,7 @@ import (
         "path/filepath"
         "sort"
         "strings"
+        "sync/atomic"
         "time"
 
         "clarity-cli/internal/model"
@@ -41,6 +42,19 @@ type DB struct {
 
 type Store struct {
         Dir string
+}
+
+var appendEventCounter uint64
+
+// AppendEventCount returns the total number of successful AppendEvent calls in this process.
+// This is intended for CLI/web "did we mutate?" detection.
+func AppendEventCount() uint64 {
+        return atomic.LoadUint64(&appendEventCounter)
+}
+
+// IsJSONLWorkspace reports whether this store is currently using the JSONL event log backend.
+func (s Store) IsJSONLWorkspace() bool {
+        return s.eventLogBackend() == EventLogBackendJSONL
 }
 
 func (s Store) localDir() string {
@@ -401,9 +415,17 @@ func (s Store) AppendEvent(actorID, typ, entityID string, payload any) error {
                 if err := s.ensureWritableForAppend(context.Background()); err != nil {
                         return err
                 }
-                return s.appendEventJSONL(context.Background(), actorID, typ, entityID, payload)
+                if err := s.appendEventJSONL(context.Background(), actorID, typ, entityID, payload); err != nil {
+                        return err
+                }
+                atomic.AddUint64(&appendEventCounter, 1)
+                return nil
         default:
-                return s.appendEventSQLite(context.Background(), actorID, typ, entityID, payload)
+                if err := s.appendEventSQLite(context.Background(), actorID, typ, entityID, payload); err != nil {
+                        return err
+                }
+                atomic.AddUint64(&appendEventCounter, 1)
+                return nil
         }
 }
 

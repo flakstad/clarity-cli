@@ -489,7 +489,7 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
         run(t, invocation{name: "sync setup (--remote-url/--remote-name/--message)", cmdPath: "sync setup", args: []string{"--dir", dir, "sync", "setup", "--remote-name", "origin", "--remote-url", "https://example.com/repo.git", "--message", "clarity: setup (test)", "--commit=false", "--push=false"}, expect: expectJSONEnvelope})
 
         // web: long-running server command; cover flags via --help (no server start).
-        run(t, invocation{name: "web --help (--addr --read-only --auth)", cmdPath: "web", args: []string{"--dir", dir, "web", "--addr", "127.0.0.1:0", "--read-only=false", "--auth", "magic", "--help"}, expect: expectRawText})
+        run(t, invocation{name: "web --help (--addr --read-only --auth --components-dir)", cmdPath: "web", args: []string{"--dir", dir, "web", "--addr", "127.0.0.1:0", "--read-only=false", "--auth", "magic", "--components-dir", dir, "--help"}, expect: expectRawText})
 
         // --- Coverage assertions ---
         leafCmds, rootPersistentFlags, localFlagsByCmd := buildCoverageIndex()

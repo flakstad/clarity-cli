@@ -7,6 +7,7 @@ import (
         "strings"
 
         "clarity-cli/internal/format"
+        "clarity-cli/internal/gitrepo"
         "clarity-cli/internal/store"
         "clarity-cli/internal/tui"
 
@@ -19,6 +20,8 @@ type App struct {
         ActorID    string
         PrettyJSON bool
         Format     string
+
+        appendCountStart uint64
 }
 
 func NewRootCmd() *cobra.Command {
@@ -48,6 +51,31 @@ func NewRootCmd() *cobra.Command {
                         }
                         return cmd.Help()
                 },
+        }
+
+        cmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+                app.appendCountStart = store.AppendEventCount()
+                return nil
+        }
+
+        cmd.PersistentPostRunE = func(cmd *cobra.Command, args []string) error {
+                // Keep Git-backed workspaces synced even when invoked from scripts/agents.
+                // (TUI has its own auto-sync loop.)
+                if !gitrepo.AutoCommitEnabled() {
+                        return nil
+                }
+                if store.AppendEventCount() <= app.appendCountStart {
+                        return nil
+                }
+                // Avoid double-sync for explicit sync commands.
+                if strings.HasPrefix(strings.TrimSpace(cmd.CommandPath()), "clarity sync") {
+                        return nil
+                }
+                // Avoid attempting sync after long-running commands.
+                if strings.HasPrefix(strings.TrimSpace(cmd.CommandPath()), "clarity web") {
+                        return nil
+                }
+                return autoSyncWorkspaceBestEffort(cmd, app)
         }
 
         cmd.PersistentFlags().StringVar(&app.Dir, "dir", envOr("CLARITY_DIR", ""), "Path to store dir (advanced: overrides workspace resolution; use only when explicitly told or for fixtures/tests)")
