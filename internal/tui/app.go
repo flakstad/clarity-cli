@@ -7842,6 +7842,12 @@ func (m appModel) switchWorkspaceTo(name string) (appModel, error) {
         }
 
         if cfg, err := store.LoadConfig(); err == nil {
+                if cfg.Workspaces != nil {
+                        if ref, ok := cfg.Workspaces[name]; ok {
+                                ref.LastOpened = time.Now().UTC().Format(time.RFC3339Nano)
+                                cfg.Workspaces[name] = ref
+                        }
+                }
                 cfg.CurrentWorkspace = name
                 if err := store.SaveConfig(cfg); err != nil {
                         return m, err
@@ -7867,28 +7873,49 @@ func (m appModel) renameWorkspaceTo(oldName, newName string) (appModel, error) {
         if oldName == newName {
                 return m.switchWorkspaceTo(newName)
         }
-        oldDir, err := store.WorkspaceDir(oldName)
+
+        cfg, err := store.LoadConfig()
         if err != nil {
                 return m, err
         }
-        newDir, err := store.WorkspaceDir(newName)
-        if err != nil {
+        if strings.TrimSpace(cfg.CurrentWorkspace) == "" {
+                cfg.CurrentWorkspace = "default"
+        }
+
+        ref, hasRef := store.WorkspaceRef{}, false
+        if cfg.Workspaces != nil {
+                ref, hasRef = cfg.Workspaces[oldName]
+        }
+        isRegistered := hasRef && strings.TrimSpace(ref.Path) != ""
+
+        // For legacy workspaces (not registered), rename the directory on disk.
+        // For registered workspaces, renaming is logical only (the directory path stays the same).
+        if !isRegistered {
+                oldDir, err := store.LegacyWorkspaceDir(oldName)
+                if err != nil {
+                        return m, err
+                }
+                newDir, err := store.LegacyWorkspaceDir(newName)
+                if err != nil {
+                        return m, err
+                }
+                if err := os.Rename(oldDir, newDir); err != nil {
+                        return m, err
+                }
+        }
+
+        // Update registry entry (if present).
+        if cfg.Workspaces != nil && hasRef {
+                delete(cfg.Workspaces, oldName)
+                cfg.Workspaces[newName] = ref
+        }
+        if cfg.CurrentWorkspace == oldName {
+                cfg.CurrentWorkspace = newName
+        }
+        if err := store.SaveConfig(cfg); err != nil {
                 return m, err
         }
-        if err := os.Rename(oldDir, newDir); err != nil {
-                return m, err
-        }
-        if cfg, err := store.LoadConfig(); err == nil {
-                if strings.TrimSpace(cfg.CurrentWorkspace) == "" {
-                        cfg.CurrentWorkspace = "default"
-                }
-                if cfg.CurrentWorkspace == oldName {
-                        cfg.CurrentWorkspace = newName
-                        if err := store.SaveConfig(cfg); err != nil {
-                                return m, err
-                        }
-                }
-        }
+
         return m.switchWorkspaceTo(newName)
 }
 

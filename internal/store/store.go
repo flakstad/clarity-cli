@@ -85,6 +85,31 @@ func WorkspaceDir(name string) (string, error) {
         if err != nil {
                 return "", err
         }
+
+        // If the workspace is registered in ~/.clarity/config.json, use that path.
+        // This enables Git-backed workspaces living anywhere on disk.
+        if cfg, err := LoadConfig(); err == nil && cfg != nil {
+                if ref, ok := cfg.Workspaces[name]; ok {
+                        p := filepath.Clean(strings.TrimSpace(ref.Path))
+                        if p != "" {
+                                return p, nil
+                        }
+                }
+        }
+
+        return LegacyWorkspaceDir(name)
+}
+
+// LegacyWorkspaceDir returns the on-disk path for a named workspace under the global
+// Clarity config directory (e.g. ~/.clarity/workspaces/<name>).
+//
+// Use this for commands that create or manage the legacy workspace directory tree
+// (e.g. `clarity workspace init`, import/export tooling, etc.).
+func LegacyWorkspaceDir(name string) (string, error) {
+        name, err := NormalizeWorkspaceName(name)
+        if err != nil {
+                return "", err
+        }
         dir, err := ConfigDir()
         if err != nil {
                 return "", err

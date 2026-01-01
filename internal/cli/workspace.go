@@ -3,6 +3,7 @@ package cli
 import (
         "encoding/json"
         "errors"
+        "fmt"
         "os"
         "path/filepath"
         "strings"
@@ -20,6 +21,8 @@ func newWorkspaceCmd(app *App) *cobra.Command {
         }
 
         cmd.AddCommand(newWorkspaceInitCmd(app))
+        cmd.AddCommand(newWorkspaceAddCmd(app))
+        cmd.AddCommand(newWorkspaceForgetCmd(app))
         cmd.AddCommand(newWorkspaceUseCmd(app))
         cmd.AddCommand(newWorkspaceCurrentCmd(app))
         cmd.AddCommand(newWorkspaceListCmd(app))
@@ -27,6 +30,122 @@ func newWorkspaceCmd(app *App) *cobra.Command {
         cmd.AddCommand(newWorkspaceExportCmd(app))
         cmd.AddCommand(newWorkspaceImportCmd(app))
 
+        return cmd
+}
+
+func newWorkspaceAddCmd(app *App) *cobra.Command {
+        var dir string
+        var kind string
+        var use bool
+
+        cmd := &cobra.Command{
+                Use:   "add <name>",
+                Short: "Register an existing workspace directory (useful for Git-backed workspaces)",
+                Args:  cobra.ExactArgs(1),
+                RunE: func(cmd *cobra.Command, args []string) error {
+                        name, err := store.NormalizeWorkspaceName(args[0])
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+
+                        dir = strings.TrimSpace(dir)
+                        if dir == "" {
+                                return writeErr(cmd, errors.New("missing --dir"))
+                        }
+                        abs, err := filepath.Abs(dir)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        abs = filepath.Clean(abs)
+                        if st, err := os.Stat(abs); err != nil {
+                                return writeErr(cmd, err)
+                        } else if !st.IsDir() {
+                                return writeErr(cmd, fmt.Errorf("--dir is not a directory: %s", abs))
+                        }
+
+                        cfg, err := store.LoadConfig()
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if cfg.Workspaces == nil {
+                                cfg.Workspaces = map[string]store.WorkspaceRef{}
+                        }
+                        cfg.Workspaces[name] = store.WorkspaceRef{
+                                Path:       abs,
+                                Kind:       strings.TrimSpace(kind),
+                                LastOpened: time.Now().UTC().Format(time.RFC3339Nano),
+                        }
+                        if use {
+                                cfg.CurrentWorkspace = name
+                        }
+                        if err := store.SaveConfig(cfg); err != nil {
+                                return writeErr(cmd, err)
+                        }
+
+                        if use {
+                                app.Workspace = name
+                                app.Dir = abs
+                        }
+                        return writeOut(cmd, app, map[string]any{
+                                "data": map[string]any{
+                                        "workspace": name,
+                                        "dir":       abs,
+                                        "kind":      strings.TrimSpace(kind),
+                                        "used":      use,
+                                },
+                                "_hints": []string{
+                                        "clarity workspace list",
+                                        "clarity workspace use " + name,
+                                },
+                        })
+                },
+        }
+
+        cmd.Flags().StringVar(&dir, "dir", "", "Workspace directory to register")
+        cmd.Flags().StringVar(&kind, "kind", "git", "Workspace kind hint (optional)")
+        cmd.Flags().BoolVar(&use, "use", false, "Also set as current workspace")
+        _ = cmd.MarkFlagRequired("dir")
+        return cmd
+}
+
+func newWorkspaceForgetCmd(app *App) *cobra.Command {
+        cmd := &cobra.Command{
+                Use:   "forget <name>",
+                Short: "Remove a workspace from the registry (does not delete files)",
+                Args:  cobra.ExactArgs(1),
+                RunE: func(cmd *cobra.Command, args []string) error {
+                        name, err := store.NormalizeWorkspaceName(args[0])
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+
+                        cfg, err := store.LoadConfig()
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if cfg.Workspaces == nil {
+                                cfg.Workspaces = map[string]store.WorkspaceRef{}
+                        }
+                        _, existed := cfg.Workspaces[name]
+                        delete(cfg.Workspaces, name)
+                        if cfg.CurrentWorkspace == name {
+                                cfg.CurrentWorkspace = ""
+                        }
+                        if err := store.SaveConfig(cfg); err != nil {
+                                return writeErr(cmd, err)
+                        }
+
+                        return writeOut(cmd, app, map[string]any{
+                                "data": map[string]any{
+                                        "workspace": name,
+                                        "removed":   existed,
+                                },
+                                "_hints": []string{
+                                        "clarity workspace list",
+                                },
+                        })
+                },
+        }
         return cmd
 }
 
@@ -40,7 +159,7 @@ func newWorkspaceInitCmd(app *App) *cobra.Command {
                         if err != nil {
                                 return writeErr(cmd, err)
                         }
-                        dir, err := store.WorkspaceDir(name)
+                        dir, err := store.LegacyWorkspaceDir(name)
                         if err != nil {
                                 return writeErr(cmd, err)
                         }
@@ -100,6 +219,12 @@ func newWorkspaceUseCmd(app *App) *cobra.Command {
                         cfg, err := store.LoadConfig()
                         if err != nil {
                                 return writeErr(cmd, err)
+                        }
+                        if cfg.Workspaces != nil {
+                                if ref, ok := cfg.Workspaces[name]; ok {
+                                        ref.LastOpened = time.Now().UTC().Format(time.RFC3339Nano)
+                                        cfg.Workspaces[name] = ref
+                                }
                         }
                         cfg.CurrentWorkspace = name
                         if err := store.SaveConfig(cfg); err != nil {
@@ -168,10 +293,33 @@ func newWorkspaceListCmd(app *App) *cobra.Command {
                                 return writeErr(cmd, err)
                         }
 
+                        type wsDetail struct {
+                                Name string `json:"name"`
+                                Path string `json:"path"`
+                                Kind string `json:"kind,omitempty"`
+                        }
+                        var details []wsDetail
+                        for _, name := range ws {
+                                dir, err := store.WorkspaceDir(name)
+                                if err != nil {
+                                        continue
+                                }
+                                d := wsDetail{Name: name, Path: dir}
+                                if cfg.Workspaces != nil {
+                                        if ref, ok := cfg.Workspaces[name]; ok {
+                                                d.Kind = strings.TrimSpace(ref.Kind)
+                                        }
+                                }
+                                details = append(details, d)
+                        }
+
                         return writeOut(cmd, app, map[string]any{
                                 "data": map[string]any{
                                         "workspaces":       ws,
                                         "currentWorkspace": cfg.CurrentWorkspace,
+                                },
+                                "meta": map[string]any{
+                                        "details": details,
                                 },
                         })
                 },
@@ -193,17 +341,6 @@ func newWorkspaceRenameCmd(app *App) *cobra.Command {
                         if err != nil {
                                 return writeErr(cmd, err)
                         }
-                        oldDir, err := store.WorkspaceDir(oldName)
-                        if err != nil {
-                                return writeErr(cmd, err)
-                        }
-                        newDir, err := store.WorkspaceDir(newName)
-                        if err != nil {
-                                return writeErr(cmd, err)
-                        }
-                        if err := os.Rename(oldDir, newDir); err != nil {
-                                return writeErr(cmd, err)
-                        }
 
                         cfg, err := store.LoadConfig()
                         if err != nil {
@@ -212,11 +349,39 @@ func newWorkspaceRenameCmd(app *App) *cobra.Command {
                         if cfg.CurrentWorkspace == "" {
                                 cfg.CurrentWorkspace = "default"
                         }
-                        if cfg.CurrentWorkspace == oldName {
-                                cfg.CurrentWorkspace = newName
-                                if err := store.SaveConfig(cfg); err != nil {
+
+                        ref, hasRef := store.WorkspaceRef{}, false
+                        if cfg.Workspaces != nil {
+                                ref, hasRef = cfg.Workspaces[oldName]
+                        }
+                        isRegistered := hasRef && strings.TrimSpace(ref.Path) != ""
+
+                        // For legacy workspaces (not registered), rename the directory on disk.
+                        // For registered workspaces, renaming is logical only (the directory path stays the same).
+                        if !isRegistered {
+                                oldDir, err := store.LegacyWorkspaceDir(oldName)
+                                if err != nil {
                                         return writeErr(cmd, err)
                                 }
+                                newDir, err := store.LegacyWorkspaceDir(newName)
+                                if err != nil {
+                                        return writeErr(cmd, err)
+                                }
+                                if err := os.Rename(oldDir, newDir); err != nil {
+                                        return writeErr(cmd, err)
+                                }
+                        }
+
+                        // Update registry entry (if present).
+                        if cfg.Workspaces != nil && hasRef {
+                                delete(cfg.Workspaces, oldName)
+                                cfg.Workspaces[newName] = ref
+                        }
+                        if cfg.CurrentWorkspace == oldName {
+                                cfg.CurrentWorkspace = newName
+                        }
+                        if err := store.SaveConfig(cfg); err != nil {
+                                return writeErr(cmd, err)
                         }
 
                         return writeOut(cmd, app, map[string]any{
@@ -360,7 +525,7 @@ func newWorkspaceImportCmd(app *App) *cobra.Command {
                                 return writeErr(cmd, errors.New("missing --from (backup directory)"))
                         }
 
-                        dir, err := store.WorkspaceDir(name)
+                        dir, err := store.LegacyWorkspaceDir(name)
                         if err != nil {
                                 return writeErr(cmd, err)
                         }

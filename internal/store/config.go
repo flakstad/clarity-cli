@@ -12,6 +12,10 @@ import (
 type GlobalConfig struct {
         CurrentWorkspace string `json:"currentWorkspace,omitempty"`
 
+        // Workspaces is an optional registry of named workspace roots.
+        // When set, these entries take precedence over ~/.clarity/workspaces/<name>.
+        Workspaces map[string]WorkspaceRef `json:"workspaces,omitempty"`
+
         // CaptureTemplates define user-configured quick-capture targets and key sequences.
         // Stored globally (not per-workspace) to allow capturing across workspaces.
         CaptureTemplates []CaptureTemplate `json:"captureTemplates,omitempty"`
@@ -22,6 +26,17 @@ type GlobalConfig struct {
 
         // Replicas maps workspaceId -> replicaId for this device.
         Replicas map[string]string `json:"replicas,omitempty"`
+}
+
+type WorkspaceRef struct {
+        // Path is the workspace root directory.
+        Path string `json:"path"`
+
+        // Kind is an optional hint for the UI ("git", "local", ...).
+        Kind string `json:"kind,omitempty"`
+
+        // LastOpened is an optional timestamp for MRU selection in UIs.
+        LastOpened string `json:"lastOpened,omitempty"`
 }
 
 func ConfigDir() (string, error) {
@@ -97,20 +112,38 @@ func ListWorkspaces() ([]string, error) {
         if err != nil {
                 return nil, err
         }
+        outSet := map[string]struct{}{}
+
         wsRoot := filepath.Join(dir, "workspaces")
-        ents, err := os.ReadDir(wsRoot)
-        if err != nil {
-                if errors.Is(err, os.ErrNotExist) {
-                        return []string{}, nil
+        if ents, err := os.ReadDir(wsRoot); err == nil {
+                for _, e := range ents {
+                        if e.IsDir() {
+                                outSet[e.Name()] = struct{}{}
+                        }
                 }
+        } else if err != nil && !errors.Is(err, os.ErrNotExist) {
                 return nil, err
         }
-        var out []string
-        for _, e := range ents {
-                if e.IsDir() {
-                        out = append(out, e.Name())
+
+        cfg, err := LoadConfig()
+        if err != nil {
+                return nil, err
+        }
+        for name := range cfg.Workspaces {
+                name = strings.TrimSpace(name)
+                if name == "" {
+                        continue
                 }
+                outSet[name] = struct{}{}
+        }
+
+        out := make([]string, 0, len(outSet))
+        for name := range outSet {
+                out = append(out, name)
         }
         sort.Strings(out)
+        if out == nil {
+                out = []string{}
+        }
         return out, nil
 }

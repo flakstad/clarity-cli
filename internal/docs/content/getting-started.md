@@ -23,6 +23,14 @@ Clarity is **workspace-first** and will use the implicit **`default`** workspace
 
 For most users (and for agents), you should **stick to the default workspace** unless you were specifically instructed to use a different workspace.
 
+### Registering Git-backed workspaces
+
+If you have a Git repo directory that you want Clarity to treat as a workspace, register it:
+
+```bash
+clarity workspace add <name> --dir /path/to/repo --use
+```
+
 ## Projects (set context)
 
 ```bash
