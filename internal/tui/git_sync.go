@@ -2,7 +2,6 @@ package tui
 
 import (
         "context"
-        "fmt"
         "path/filepath"
         "strings"
         "time"
@@ -66,12 +65,14 @@ func (m *appModel) syncPushCmd() tea.Cmd {
                         return syncOpDoneMsg{op: "push", status: st, err: "repo has in-progress merge/rebase; resolve first"}
                 }
 
-                msg := fmt.Sprintf("clarity: update (%s)", time.Now().UTC().Format(time.RFC3339))
-                if actorID != "" {
-                        msg = fmt.Sprintf("clarity: %s update (%s)", actorID, time.Now().UTC().Format(time.RFC3339))
+                actorLabel := actorID
+                if actorLabel != "" && m != nil && m.db != nil {
+                        if a, ok := m.db.FindActor(actorID); ok && strings.TrimSpace(a.Name) != "" {
+                                actorLabel = strings.TrimSpace(a.Name)
+                        }
                 }
 
-                _, err = gitrepo.CommitWorkspaceCanonical(ctx, dir, msg)
+                _, err = gitrepo.CommitWorkspaceCanonicalAuto(ctx, dir, actorLabel)
                 if err != nil {
                         st2, _ := gitrepo.GetStatus(ctx, dir)
                         return syncOpDoneMsg{op: "push", status: st2, err: err.Error()}
@@ -134,7 +135,7 @@ func (m *appModel) syncSetupCmd(remoteURL string) tea.Cmd {
                 }
 
                 // Commit canonical workspace files (best-effort; no-op when nothing to commit).
-                _, err = gitrepo.CommitWorkspaceCanonical(ctx, dir, "")
+                _, err = gitrepo.CommitWorkspaceCanonicalAuto(ctx, dir, "")
                 if err != nil {
                         st2, _ := gitrepo.GetStatus(ctx, dir)
                         return syncOpDoneMsg{op: "setup", status: st2, err: err.Error()}

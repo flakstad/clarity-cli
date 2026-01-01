@@ -7,7 +7,6 @@ import (
         "os/exec"
         "path/filepath"
         "strings"
-        "time"
 
         "clarity-cli/internal/gitrepo"
         "clarity-cli/internal/store"
@@ -244,15 +243,12 @@ func newSyncPushCmd(app *App) *cobra.Command {
 
                         committed := false
                         commitMsg := strings.TrimSpace(message)
-                        if commitMsg == "" {
-                                commitMsg = fmt.Sprintf("clarity: update (%s)", time.Now().UTC().Format(time.RFC3339))
-                                if strings.TrimSpace(app.ActorID) != "" {
-                                        commitMsg = fmt.Sprintf("clarity: %s update (%s)", strings.TrimSpace(app.ActorID), time.Now().UTC().Format(time.RFC3339))
-                                }
+                        if commitMsg != "" {
+                                committed, err = gitrepo.CommitWorkspaceCanonical(ctx, dir, commitMsg)
+                        } else {
+                                actorLabel := guessActorLabelForDir(app, dir)
+                                committed, err = gitrepo.CommitWorkspaceCanonicalAuto(ctx, dir, actorLabel)
                         }
-
-                        // Stage+commit canonical workspace paths (ignore derived files like .clarity/index.sqlite).
-                        committed, err = gitrepo.CommitWorkspaceCanonical(ctx, dir, commitMsg)
                         if err != nil {
                                 return writeErr(cmd, err)
                         }
@@ -350,6 +346,32 @@ func newSyncResolveCmd(app *App) *cobra.Command {
                 },
         }
         return cmd
+}
+
+func guessActorLabelForDir(app *App, dir string) string {
+        // Best-effort: use current actor name if available; do not hard-fail sync operations.
+        dir = strings.TrimSpace(dir)
+        if dir == "" {
+                return ""
+        }
+        s := store.Store{Dir: dir}
+        db, err := s.Load()
+        if err != nil || db == nil {
+                return strings.TrimSpace(app.ActorID)
+        }
+        actorID := strings.TrimSpace(app.ActorID)
+        if actorID == "" {
+                actorID = strings.TrimSpace(db.CurrentActorID)
+        }
+        if actorID == "" {
+                return ""
+        }
+        if a, ok := db.FindActor(actorID); ok {
+                if strings.TrimSpace(a.Name) != "" {
+                        return strings.TrimSpace(a.Name)
+                }
+        }
+        return actorID
 }
 
 func runGit(dir string, args ...string) (string, error) {

@@ -2,6 +2,7 @@ package gitrepo
 
 import (
         "context"
+        "strings"
         "sync"
         "time"
 )
@@ -9,18 +10,25 @@ import (
 type DebouncedCommitter struct {
         workspaceDir string
         debounce     time.Duration
-        message      func() string
+        autoPush     bool
+        autoPull     bool
 
         mu      sync.Mutex
         timer   *time.Timer
         pending bool
         running bool
+
+        lastActorLabel string
 }
 
 type DebouncedCommitterOpts struct {
         WorkspaceDir string
         Debounce     time.Duration
-        Message      func() string
+
+        // AutoPush enables best-effort `git push` after committing when an upstream exists.
+        AutoPush bool
+        // AutoPullRebase enables a best-effort `git pull --rebase` retry on non-fast-forward push errors.
+        AutoPullRebase bool
 }
 
 func NewDebouncedCommitter(opts DebouncedCommitterOpts) *DebouncedCommitter {
@@ -28,24 +36,22 @@ func NewDebouncedCommitter(opts DebouncedCommitterOpts) *DebouncedCommitter {
         if debounce <= 0 {
                 debounce = 2 * time.Second
         }
-        msgFn := opts.Message
-        if msgFn == nil {
-                msgFn = func() string { return "" }
-        }
         return &DebouncedCommitter{
                 workspaceDir: opts.WorkspaceDir,
                 debounce:     debounce,
-                message:      msgFn,
+                autoPush:     opts.AutoPush,
+                autoPull:     opts.AutoPullRebase,
         }
 }
 
-func (d *DebouncedCommitter) Notify() {
+func (d *DebouncedCommitter) Notify(actorLabel string) {
         if d == nil {
                 return
         }
 
         d.mu.Lock()
         d.pending = true
+        d.lastActorLabel = actorLabel
         if d.timer == nil {
                 d.timer = time.AfterFunc(d.debounce, d.onTimer)
                 d.mu.Unlock()
@@ -71,11 +77,22 @@ func (d *DebouncedCommitter) onTimer() {
         }
         d.pending = false
         d.running = true
+        actorLabel := d.lastActorLabel
         d.mu.Unlock()
 
         // Best-effort: commit canonical paths if possible. Errors are intentionally dropped;
         // the user can always run `clarity sync push` / `git status` manually.
-        _, _ = CommitWorkspaceCanonical(context.Background(), d.workspaceDir, d.message())
+        ctx := context.Background()
+        committed, _ := CommitWorkspaceCanonicalAuto(ctx, d.workspaceDir, actorLabel)
+        if committed && d.autoPush {
+                st, err := GetStatus(ctx, d.workspaceDir)
+                if err == nil && st.IsRepo && !st.Unmerged && !st.InProgress && strings.TrimSpace(st.Upstream) != "" {
+                        if err := Push(ctx, d.workspaceDir); err != nil && d.autoPull && IsNonFastForwardPushErr(err) {
+                                _ = PullRebase(ctx, d.workspaceDir)
+                                _ = Push(ctx, d.workspaceDir)
+                        }
+                }
+        }
 
         d.mu.Lock()
         d.running = false

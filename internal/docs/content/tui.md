@@ -90,13 +90,15 @@ Comment/worklog editor:
 - `ctrl+g`: close (cancel)
 - `tab` / `shift+tab`: focus body/save/cancel, `enter` activates buttons
 
-## Git auto-commit (experimental)
+## Git auto-sync (default)
 
-For Git-backed workspaces, the TUI can optionally stage+commit canonical workspace changes after you stop editing for a short while (debounced).
+For Git-backed workspaces, the TUI will stage+commit canonical workspace changes after you stop editing for a short while (debounced).
+If the repo has an upstream configured, it will also best-effort push.
 
-Enable with:
-- `CLARITY_AUTOCOMMIT=1` (or `CLARITY_GIT_AUTOCOMMIT=1`)
+Disable with:
+- `CLARITY_AUTOCOMMIT=0`
+- `CLARITY_AUTOPUSH=0` (still commits locally)
 
 Notes:
 - Commits include canonical paths only (`events/`, `meta/workspace.json`, `resources/`).
-- This does not push to a remote; use `clarity sync push` (or `git push`) for that.
+- If pushing fails (auth/non-fast-forward), you can always run `clarity sync push` (or `git push`) manually.

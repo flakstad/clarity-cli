@@ -8,7 +8,6 @@ import (
         "os/exec"
         "path/filepath"
         "strings"
-        "time"
 )
 
 // CommitWorkspaceCanonical stages and commits canonical Clarity workspace paths.
@@ -48,7 +47,59 @@ func CommitWorkspaceCanonical(ctx context.Context, workspaceDir string, message 
 
         msg := strings.TrimSpace(message)
         if msg == "" {
-                msg = fmt.Sprintf("clarity: update (%s)", time.Now().UTC().Format(time.RFC3339))
+                // Keep default messages stable and human-readable; Git already stores timestamps.
+                msg = "clarity: update"
+        }
+
+        if _, err := runGit(ctx, workspaceDir, "commit", "-m", msg); err != nil {
+                return false, err
+        }
+        return true, nil
+}
+
+// CommitWorkspaceCanonicalAuto stages and commits canonical paths with a useful message derived from staged events.
+// If actorLabel is empty, it is omitted.
+func CommitWorkspaceCanonicalAuto(ctx context.Context, workspaceDir string, actorLabel string) (committed bool, err error) {
+        workspaceDir = filepath.Clean(workspaceDir)
+
+        st, err := GetStatus(ctx, workspaceDir)
+        if err != nil {
+                return false, err
+        }
+        if !st.IsRepo {
+                return false, nil
+        }
+        if st.Unmerged || st.InProgress {
+                return false, errors.New("git repo has an in-progress merge/rebase; resolve first")
+        }
+
+        added, err := stageWorkspaceCanonical(ctx, workspaceDir, st.Root)
+        if err != nil {
+                return false, err
+        }
+        if !added {
+                return false, nil
+        }
+
+        // Commit only if there's something staged.
+        out, err := runGit(ctx, workspaceDir, "diff", "--cached", "--name-only")
+        if err != nil {
+                return false, err
+        }
+        if strings.TrimSpace(out) == "" {
+                return false, nil
+        }
+
+        actorLabel = strings.TrimSpace(actorLabel)
+        summary, _, _ := StagedEventSummary(ctx, workspaceDir, 10)
+        msg := "clarity"
+        if actorLabel != "" {
+                msg += ": " + actorLabel
+        }
+        if strings.TrimSpace(summary) != "" {
+                msg += ": " + summary
+        } else {
+                msg += ": update"
         }
 
         if _, err := runGit(ctx, workspaceDir, "commit", "-m", msg); err != nil {
