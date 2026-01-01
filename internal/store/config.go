@@ -1,149 +1,230 @@
 package store
 
 import (
-        "encoding/json"
-        "errors"
-        "os"
-        "path/filepath"
-        "sort"
-        "strings"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 )
 
 type GlobalConfig struct {
-        CurrentWorkspace string `json:"currentWorkspace,omitempty"`
+	CurrentWorkspace string `json:"currentWorkspace,omitempty"`
 
-        // Workspaces is an optional registry of named workspace roots.
-        // When set, these entries take precedence over ~/.clarity/workspaces/<name>.
-        Workspaces map[string]WorkspaceRef `json:"workspaces,omitempty"`
+	// Workspaces is an optional registry of named workspace roots.
+	// When set, these entries take precedence over ~/.clarity/workspaces/<name>.
+	Workspaces map[string]WorkspaceRef `json:"workspaces,omitempty"`
 
-        // CaptureTemplates define user-configured quick-capture targets and key sequences.
-        // Stored globally (not per-workspace) to allow capturing across workspaces.
-        CaptureTemplates []CaptureTemplate `json:"captureTemplates,omitempty"`
+	// CaptureTemplates define user-configured quick-capture targets and key sequences.
+	// Stored globally (not per-workspace) to allow capturing across workspaces.
+	CaptureTemplates []CaptureTemplate `json:"captureTemplates,omitempty"`
 
-        // DeviceID is a stable per-machine identifier. It is used to derive per-workspace replica IDs
-        // so that cloning a workspace directory to another machine yields a new replicaId automatically.
-        DeviceID string `json:"deviceId,omitempty"`
+	// DeviceID is a stable per-machine identifier. It is used to derive per-workspace replica IDs
+	// so that cloning a workspace directory to another machine yields a new replicaId automatically.
+	DeviceID string `json:"deviceId,omitempty"`
 
-        // Replicas maps workspaceId -> replicaId for this device.
-        Replicas map[string]string `json:"replicas,omitempty"`
+	// Replicas maps workspaceId -> replicaId for this device.
+	Replicas map[string]string `json:"replicas,omitempty"`
 }
 
 type WorkspaceRef struct {
-        // Path is the workspace root directory.
-        Path string `json:"path"`
+	// Path is the workspace root directory.
+	Path string `json:"path"`
 
-        // Kind is an optional hint for the UI ("git", "local", ...).
-        Kind string `json:"kind,omitempty"`
+	// Kind is an optional hint for the UI ("git", "local", ...).
+	Kind string `json:"kind,omitempty"`
 
-        // LastOpened is an optional timestamp for MRU selection in UIs.
-        LastOpened string `json:"lastOpened,omitempty"`
+	// LastOpened is an optional timestamp for MRU selection in UIs.
+	LastOpened string `json:"lastOpened,omitempty"`
+}
+
+type WorkspaceEntry struct {
+	Name   string       `json:"name"`
+	Ref    WorkspaceRef `json:"ref"`
+	Legacy bool         `json:"legacy"`
 }
 
 func ConfigDir() (string, error) {
-        // Test/advanced override (keeps unit tests from touching ~/.clarity).
-        if v := strings.TrimSpace(os.Getenv("CLARITY_CONFIG_DIR")); v != "" {
-                return v, nil
-        }
-        home, err := os.UserHomeDir()
-        if err != nil {
-                return "", err
-        }
-        return filepath.Join(home, ".clarity"), nil
+	// Test/advanced override (keeps unit tests from touching ~/.clarity).
+	if v := strings.TrimSpace(os.Getenv("CLARITY_CONFIG_DIR")); v != "" {
+		return v, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".clarity"), nil
 }
 
 func ConfigPath() (string, error) {
-        dir, err := ConfigDir()
-        if err != nil {
-                return "", err
-        }
-        return filepath.Join(dir, "config.json"), nil
+	dir, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "config.json"), nil
 }
 
 func LoadConfig() (*GlobalConfig, error) {
-        path, err := ConfigPath()
-        if err != nil {
-                return nil, err
-        }
-        b, err := os.ReadFile(path)
-        if err != nil {
-                if errors.Is(err, os.ErrNotExist) {
-                        return &GlobalConfig{}, nil
-                }
-                return nil, err
-        }
-        var cfg GlobalConfig
-        if err := json.Unmarshal(b, &cfg); err != nil {
-                return nil, err
-        }
-        return &cfg, nil
+	path, err := ConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return &GlobalConfig{}, nil
+		}
+		return nil, err
+	}
+	var cfg GlobalConfig
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
 }
 
 func SaveConfig(cfg *GlobalConfig) error {
-        path, err := ConfigPath()
-        if err != nil {
-                return err
-        }
-        dir := filepath.Dir(path)
-        if err := os.MkdirAll(dir, 0o755); err != nil {
-                return err
-        }
-        b, err := json.MarshalIndent(cfg, "", "  ")
-        if err != nil {
-                return err
-        }
-        tmp := path + ".tmp"
-        if err := os.WriteFile(tmp, b, 0o644); err != nil {
-                return err
-        }
-        return os.Rename(tmp, path)
+	path, err := ConfigPath()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func NormalizeWorkspaceName(name string) (string, error) {
-        name = strings.TrimSpace(name)
-        if name == "" {
-                return "", errors.New("workspace name is empty")
-        }
-        // Keep it simple for now; treat it as a directory name.
-        return name, nil
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", errors.New("workspace name is empty")
+	}
+	// Keep it simple for now; treat it as a directory name.
+	return name, nil
 }
 
 func ListWorkspaces() ([]string, error) {
-        dir, err := ConfigDir()
-        if err != nil {
-                return nil, err
-        }
-        outSet := map[string]struct{}{}
+	dir, err := ConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	outSet := map[string]struct{}{}
 
-        wsRoot := filepath.Join(dir, "workspaces")
-        if ents, err := os.ReadDir(wsRoot); err == nil {
-                for _, e := range ents {
-                        if e.IsDir() {
-                                outSet[e.Name()] = struct{}{}
-                        }
-                }
-        } else if err != nil && !errors.Is(err, os.ErrNotExist) {
-                return nil, err
-        }
+	wsRoot := filepath.Join(dir, "workspaces")
+	if ents, err := os.ReadDir(wsRoot); err == nil {
+		for _, e := range ents {
+			if e.IsDir() {
+				outSet[e.Name()] = struct{}{}
+			}
+		}
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 
-        cfg, err := LoadConfig()
-        if err != nil {
-                return nil, err
-        }
-        for name := range cfg.Workspaces {
-                name = strings.TrimSpace(name)
-                if name == "" {
-                        continue
-                }
-                outSet[name] = struct{}{}
-        }
+	cfg, err := LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	for name := range cfg.Workspaces {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		outSet[name] = struct{}{}
+	}
 
-        out := make([]string, 0, len(outSet))
-        for name := range outSet {
-                out = append(out, name)
-        }
-        sort.Strings(out)
-        if out == nil {
-                out = []string{}
-        }
-        return out, nil
+	out := make([]string, 0, len(outSet))
+	for name := range outSet {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	if out == nil {
+		out = []string{}
+	}
+	return out, nil
+}
+
+// ListWorkspaceEntries returns a stable list of known workspaces with optional path details.
+//
+// It unions legacy workspaces from `~/.clarity/workspaces/<name>` and the global workspace registry
+// in `config.json`. If a name exists in both places, the registry entry wins (Legacy=false).
+func ListWorkspaceEntries() ([]WorkspaceEntry, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return nil, err
+	}
+
+	wsRoot := filepath.Join(dir, "workspaces")
+	legacy := map[string]WorkspaceEntry{}
+	if ents, err := os.ReadDir(wsRoot); err == nil {
+		for _, e := range ents {
+			if !e.IsDir() {
+				continue
+			}
+			name := strings.TrimSpace(e.Name())
+			if name == "" {
+				continue
+			}
+			legacy[name] = WorkspaceEntry{
+				Name: name,
+				Ref: WorkspaceRef{
+					Path: filepath.Join(wsRoot, name),
+					Kind: "legacy",
+				},
+				Legacy: true,
+			}
+		}
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	outMap := map[string]WorkspaceEntry{}
+	for name, ref := range cfg.Workspaces {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		ref.Path = filepath.Clean(strings.TrimSpace(ref.Path))
+		outMap[name] = WorkspaceEntry{
+			Name:   name,
+			Ref:    ref,
+			Legacy: false,
+		}
+	}
+	for name, entry := range legacy {
+		if _, ok := outMap[name]; ok {
+			continue
+		}
+		outMap[name] = entry
+	}
+
+	names := make([]string, 0, len(outMap))
+	for name := range outMap {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]WorkspaceEntry, 0, len(names))
+	for _, name := range names {
+		out = append(out, outMap[name])
+	}
+	if out == nil {
+		out = []WorkspaceEntry{}
+	}
+	return out, nil
 }
