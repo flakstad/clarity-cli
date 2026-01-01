@@ -61,6 +61,13 @@ Notes:
 - `target` is stored as `(workspace name, outline id)` for stability, but the TUI shows outline names (users shouldn’t need to think about ids).
 - During capture you can change the target outline (move) before saving; if the destination outline has different status definitions, capture will prompt you to pick a valid status.
 
+### Cross-workspace capture + Git sync (v1)
+Capture writes directly into the target workspace directory (which may be a Git-backed workspace repo).
+
+Rules:
+- If the target workspace repo has an in-progress merge/rebase or unmerged files, capture is blocked (reads are still fine elsewhere). Resolve Git first (e.g. `clarity sync resolve`).
+- If the target workspace is behind upstream, capture still works but the UI warns; run Sync soon to reduce the chance of future conflicts.
+
 ### Capturing while doing other work (agent-friendly)
 If you’re in the middle of working on an item and notice an unrelated issue, capture it as a new item and include where it came from:
 
