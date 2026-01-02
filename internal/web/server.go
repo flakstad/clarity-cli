@@ -28,7 +28,7 @@ import (
         "github.com/starfederation/datastar-go/datastar"
 )
 
-//go:embed templates/*.html static/*.js
+//go:embed templates/*.html static/*.js static/*.css
 var assetsFS embed.FS
 
 type ServerConfig struct {
@@ -102,6 +102,8 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("GET /projects/{projectId}/events", s.handleProjectEvents)
         mux.HandleFunc("GET /outlines/{outlineId}/events", s.handleOutlineEvents)
         mux.HandleFunc("GET /items/{itemId}/events", s.handleItemEvents)
+        mux.HandleFunc("GET /static/app.css", s.handleAppCSS)
+        mux.HandleFunc("GET /static/app.js", s.handleAppJS)
         mux.HandleFunc("GET /static/datastar.js", s.handleDatastarJS)
         mux.HandleFunc("GET /static/outline.js", s.handleOutlineJS)
         mux.HandleFunc("GET /", s.handleHome)
@@ -152,6 +154,28 @@ func (s *Server) handleDatastarJS(w http.ResponseWriter, r *http.Request) {
                 return
         }
         w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+        w.WriteHeader(http.StatusOK)
+        _, _ = w.Write(b)
+}
+
+func (s *Server) handleAppJS(w http.ResponseWriter, r *http.Request) {
+        b, err := assetsFS.ReadFile("static/app.js")
+        if err != nil || len(b) == 0 {
+                http.NotFound(w, r)
+                return
+        }
+        w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+        w.WriteHeader(http.StatusOK)
+        _, _ = w.Write(b)
+}
+
+func (s *Server) handleAppCSS(w http.ResponseWriter, r *http.Request) {
+        b, err := assetsFS.ReadFile("static/app.css")
+        if err != nil || len(b) == 0 {
+                http.NotFound(w, r)
+                return
+        }
+        w.Header().Set("Content-Type", "text/css; charset=utf-8")
         w.WriteHeader(http.StatusOK)
         _, _ = w.Write(b)
 }

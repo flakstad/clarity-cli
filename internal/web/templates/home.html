@@ -39,7 +39,7 @@
     {{if .Projects}}
       <ul>
         {{range .Projects}}
-            <li><a href="/projects/{{.ID}}"><code>{{.ID}}</code></a> — {{.Name}}</li>
+          <li><a data-kb-item data-focus-id="{{.ID}}" href="/projects/{{.ID}}"><code>{{.ID}}</code></a> — {{.Name}}</li>
           {{end}}
       </ul>
     {{else}}
@@ -53,7 +53,7 @@
     {{if .Ready}}
       <ul>
         {{range .Ready}}
-          <li><a href="/items/{{.ID}}"><code>{{.ID}}</code></a> — {{.Title}}</li>
+          <li><a data-kb-item data-focus-id="{{.ID}}" href="/items/{{.ID}}"><code>{{.ID}}</code></a> — {{.Title}}</li>
         {{end}}
       </ul>
     {{else}}
@@ -70,18 +70,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Clarity Web</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin: 24px; max-width: 980px; }
-    h1 { margin: 0 0 8px; }
-    .meta { opacity: 0.75; font-size: 14px; margin: 0 0 16px; }
-    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
-    .row { display: flex; gap: 16px; flex-wrap: wrap; }
-    .col { flex: 1 1 340px; }
-    code { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 0.95em; }
-    ul { margin: 8px 0 0 18px; }
-    .badge { display: inline-block; padding: 1px 8px; border: 1px solid rgba(127,127,127,.35); border-radius: 999px; font-size: 12px; margin-left: 8px; }
-  </style>
+  <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
   {{template "home_main" .}}
