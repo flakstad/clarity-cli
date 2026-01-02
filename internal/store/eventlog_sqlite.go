@@ -9,6 +9,7 @@ import (
         "fmt"
         "os"
         "path/filepath"
+        "sort"
         "strings"
         "time"
 
@@ -319,12 +320,31 @@ func (s Store) appendEventSQLite(ctx context.Context, actorID, typ, entityID str
         if err := rows.Err(); err != nil {
                 return err
         }
+        sort.Strings(heads)
+
+        // Auto-merge forks (multiple heads) by appending an explicit merge marker, then
+        // appending the intended event with the merge marker as its single parent.
+        //
+        // This keeps the per-entity stream append-only and resolves conflicts without
+        // requiring a manual merge for v1.
+        mergeID := ""
+        var mergeParentsJSON []byte
         if len(heads) > 1 {
-                return fmt.Errorf("conflict: entity has %d heads; requires explicit merge", len(heads))
+                mergeID, err = newUUIDv4()
+                if err != nil {
+                        return err
+                }
+                mergeParentsJSON, _ = json.Marshal(heads)
         }
+
         var parents []string
-        if len(heads) == 1 {
+        switch {
+        case mergeID != "":
+                parents = []string{mergeID}
+        case len(heads) == 1:
                 parents = []string{heads[0]}
+        default:
+                parents = nil
         }
         parentsJSON, _ := json.Marshal(parents)
 
@@ -342,14 +362,53 @@ func (s Store) appendEventSQLite(ctx context.Context, actorID, typ, entityID str
         default:
                 return err
         }
+        step := int64(1)
+        if mergeID != "" {
+                step = 2
+        }
+
         seq := next
-        if next > 1 {
-                if _, err := tx.ExecContext(ctx, `UPDATE entity_seq SET next_seq = ? WHERE entity_kind = ? AND entity_id = ?`, next+1, kind.String(), entityID); err != nil {
+        if next > 1 || step > 1 {
+                if _, err := tx.ExecContext(ctx, `UPDATE entity_seq SET next_seq = ? WHERE entity_kind = ? AND entity_id = ?`, next+step, kind.String(), entityID); err != nil {
                         return err
                 }
         }
 
-        // Insert event (server_status starts pending; local_status starts local).
+        // When we auto-merge, allocate the merge marker its own seq and the actual event
+        // becomes seq+1.
+        mergeSeq := int64(0)
+        eventSeq := seq
+        if mergeID != "" {
+                mergeSeq = seq
+                eventSeq = seq + 1
+        }
+
+        // Insert merge marker, if needed.
+        if mergeID != "" {
+                mp := map[string]any{
+                        "auto":  true,
+                        "heads": heads,
+                }
+                mb, err := json.Marshal(mp)
+                if err != nil {
+                        return err
+                }
+                mergeType := fmt.Sprintf("%s.merge", strings.TrimSpace(kind.String()))
+                if _, err := tx.ExecContext(ctx, `
+                        INSERT INTO events(
+                                event_id, workspace_id, replica_id,
+                                entity_kind, entity_id, entity_seq,
+                                type, parents_json,
+                                issued_at_unixms, actor_id, payload_json,
+                                local_status, server_status,
+                                rejection_reason, published_at_unixms, created_at_unixms
+                        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+                `, mergeID, wsID, repID, kind.String(), entityID, mergeSeq, mergeType, string(mergeParentsJSON), nowMs, actorID, string(mb), "local", "pending", nowMs); err != nil {
+                        return err
+                }
+        }
+
+        // Insert intended event (server_status starts pending; local_status starts local).
         if _, err := tx.ExecContext(ctx, `
                 INSERT INTO events(
                         event_id, workspace_id, replica_id,
@@ -359,7 +418,7 @@ func (s Store) appendEventSQLite(ctx context.Context, actorID, typ, entityID str
                         local_status, server_status,
                         rejection_reason, published_at_unixms, created_at_unixms
                 ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
-        `, eventID, wsID, repID, kind.String(), entityID, seq, typ, string(parentsJSON), nowMs, actorID, string(pb), "local", "pending", nowMs); err != nil {
+        `, eventID, wsID, repID, kind.String(), entityID, eventSeq, typ, string(parentsJSON), nowMs, actorID, string(pb), "local", "pending", nowMs); err != nil {
                 return err
         }
 

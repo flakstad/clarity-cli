@@ -1459,6 +1459,7 @@ type itemVM struct {
         ActorID   string
         Item      model.Item
         Comments  []model.Comment
+        ReplyTo   string
 
         CanEdit        bool
         StatusDefs     []model.OutlineStatusDef
@@ -1495,6 +1496,19 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
         if o, ok := db.FindOutline(it.OutlineID); ok && o != nil {
                 statusDefs = o.StatusDefs
         }
+        replyTo := strings.TrimSpace(r.URL.Query().Get("replyTo"))
+        if replyTo != "" {
+                ok := false
+                for _, c := range comments {
+                        if c.ID == replyTo {
+                                ok = true
+                                break
+                        }
+                }
+                if !ok {
+                        replyTo = ""
+                }
+        }
         errMsg := strings.TrimSpace(r.URL.Query().Get("err"))
         okMsg := strings.TrimSpace(r.URL.Query().Get("ok"))
 
@@ -1507,6 +1521,7 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 ActorID:        actorID,
                 Item:           *it,
                 Comments:       comments,
+                ReplyTo:        replyTo,
                 CanEdit:        canEdit,
                 StatusDefs:     statusDefs,
                 ErrorMessage:   errMsg,
@@ -1654,6 +1669,7 @@ func (s *Server) handleItemCommentAdd(w http.ResponseWriter, r *http.Request) {
                 return
         }
         body := strings.TrimSpace(r.Form.Get("body"))
+        replyTo := strings.TrimSpace(r.Form.Get("replyTo"))
         if body == "" {
                 http.Redirect(w, r, "/items/"+itemID, http.StatusSeeOther)
                 return
@@ -1673,6 +1689,18 @@ func (s *Server) handleItemCommentAdd(w http.ResponseWriter, r *http.Request) {
                 http.NotFound(w, r)
                 return
         }
+        if replyTo != "" {
+                ok := false
+                for _, c := range db.CommentsForItem(itemID) {
+                        if c.ID == replyTo {
+                                ok = true
+                                break
+                        }
+                }
+                if !ok {
+                        replyTo = ""
+                }
+        }
 
         c := model.Comment{
                 ID:        st.NextID(db, "cmt"),
@@ -1680,6 +1708,9 @@ func (s *Server) handleItemCommentAdd(w http.ResponseWriter, r *http.Request) {
                 AuthorID:  actorID,
                 Body:      body,
                 CreatedAt: time.Now().UTC(),
+        }
+        if replyTo != "" {
+                c.ReplyToCommentID = &replyTo
         }
         db.Comments = append(db.Comments, c)
         if err := st.AppendEvent(actorID, "comment.add", c.ID, c); err != nil {

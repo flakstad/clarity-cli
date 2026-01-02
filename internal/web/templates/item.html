@@ -77,7 +77,11 @@
   <div class="card">
     <div><strong>Comments</strong> ({{len .Comments}})</div>
     {{if and (not .ReadOnly) .ActorID}}
-      <form method="post" action="/items/{{.Item.ID}}/comments" style="margin-top: 12px;">
+      <form id="comment-form" method="post" action="/items/{{.Item.ID}}/comments" style="margin-top: 12px;">
+        {{if .ReplyTo}}
+          <div class="dim">Replying to <code>{{.ReplyTo}}</code> — <a href="/items/{{.Item.ID}}#comment-form">cancel</a></div>
+          <input type="hidden" name="replyTo" value="{{.ReplyTo}}">
+        {{end}}
         <div><label for="body"><span class="dim">Add comment</span></label></div>
         <div><textarea id="body" name="body" rows="4" style="width: 100%; max-width: 100%;"></textarea></div>
         <div style="margin-top: 8px;"><button type="submit">Post</button></div>
@@ -89,6 +93,8 @@
           <li>
             <span class="dim">{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</span>
             — <code>{{.AuthorID}}</code>
+            {{if .ReplyToCommentID}} <span class="dim">(reply to <code>{{.ReplyToCommentID}}</code>)</span>{{end}}
+            {{if and (not $.ReadOnly) $.ActorID}} <span class="dim">— <a href="/items/{{$.Item.ID}}?replyTo={{.ID}}#comment-form">reply</a></span>{{end}}
             <pre>{{.Body}}</pre>
           </li>
         {{end}}

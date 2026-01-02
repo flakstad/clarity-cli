@@ -117,6 +117,9 @@ func parseAddedJSONLines(diff string) []stagedEvent {
 
 func describeEvent(ev stagedEvent) string {
         typ := strings.TrimSpace(ev.Type)
+        if strings.HasSuffix(typ, ".merge") {
+                return "merge"
+        }
         switch typ {
         case "item.create":
                 var p struct {
@@ -128,14 +131,43 @@ func describeEvent(ev stagedEvent) string {
                 }
                 return "create item"
         case "item.set_title":
-                return "rename item"
+                var p struct {
+                        Title string `json:"title"`
+                }
+                _ = json.Unmarshal(ev.Payload, &p)
+                if strings.TrimSpace(p.Title) != "" {
+                        return `title "` + strings.TrimSpace(p.Title) + `"`
+                }
+                return "title item"
         case "item.set_status":
-                return "change status"
+                var p struct {
+                        StatusID string `json:"statusId"`
+                }
+                _ = json.Unmarshal(ev.Payload, &p)
+                if strings.TrimSpace(p.StatusID) != "" {
+                        return "status " + strings.TrimSpace(p.StatusID)
+                }
+                return "status"
+        case "item.set_description":
+                return "edit description"
         case "item.set_parent":
                 return "move item"
         case "item.move":
                 return "reorder item"
-        case "comments.add":
+        case "comment.add":
+                var p struct {
+                        Body string `json:"body"`
+                }
+                _ = json.Unmarshal(ev.Payload, &p)
+                body := strings.TrimSpace(p.Body)
+                if body != "" {
+                        // Keep commit messages readable at a glance.
+                        body = strings.ReplaceAll(body, "\n", " ")
+                        if len(body) > 40 {
+                                body = body[:40] + "…"
+                        }
+                        return `comment "` + body + `"`
+                }
                 return "comment"
         case "worklog.add":
                 return "worklog"
