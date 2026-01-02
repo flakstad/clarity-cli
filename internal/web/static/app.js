@@ -278,6 +278,17 @@
     }
   };
 
+  const parseOutlineOptions = (root) => {
+    const raw = (root && root.dataset ? root.dataset.outlineOptions : '') || '';
+    if (!raw.trim()) return [];
+    try {
+      const xs = JSON.parse(raw);
+      return Array.isArray(xs) ? xs : [];
+    } catch (_) {
+      return [];
+    }
+  };
+
   const tagsPicker = {
     open: false,
     rowId: '',
@@ -285,6 +296,9 @@
     options: [],
     selected: new Set(),
     idx: 0,
+    originalSelected: new Set(),
+    restoreFocusId: '',
+    saveTimer: 0,
   };
 
   const ensureTagsModal = () => {
@@ -306,22 +320,30 @@
       <div style="max-width:560px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
           <strong>Tags</strong>
-          <span class="dim" style="font-size:12px;">Esc to close</span>
+          <span class="dim" style="font-size:12px;">Esc to cancel</span>
         </div>
-        <div id="native-tags-list" style="margin-top:10px;max-height:40vh;overflow:auto;"></div>
+        <div id="native-tags-list" tabindex="0" style="margin-top:10px;max-height:40vh;overflow:auto;outline:none;"></div>
         <div style="margin-top:10px;display:flex;gap:10px;align-items:center;">
           <input id="native-tags-new" placeholder="Add tag (without #)" style="flex:1;">
           <button type="button" id="native-tags-add">Add</button>
         </div>
-        <div class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Space to toggle · Enter to save</div>
+        <div class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Space to toggle (saves) · a to add · Enter to close</div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;align-items:center;">
+          <button type="button" id="native-tags-cancel">Cancel</button>
+          <button type="button" id="native-tags-done">Done</button>
+        </div>
       </div>
     `;
     document.body.appendChild(el);
     el.addEventListener('click', (ev) => {
-      if (ev.target === el) closeTagsPicker(false);
+      if (ev.target === el) closeTagsPicker('cancel');
     });
     const addBtn = el.querySelector('#native-tags-add');
     addBtn && addBtn.addEventListener('click', () => addNewTagFromInput());
+    const cancelBtn = el.querySelector('#native-tags-cancel');
+    cancelBtn && cancelBtn.addEventListener('click', () => closeTagsPicker('cancel'));
+    const doneBtn = el.querySelector('#native-tags-done');
+    doneBtn && doneBtn.addEventListener('click', () => closeTagsPicker('done'));
     return el;
   };
 
@@ -373,6 +395,41 @@
     list.appendChild(ul);
   };
 
+  const restoreNativeFocusAfterModal = (id) => {
+    const focusId = (id || '').trim();
+    if (!focusId) return;
+    setTimeout(() => {
+      if (nativeOutlineRoot()) focusNativeRowById(focusId);
+    }, 0);
+  };
+
+  const tagsPickerSelectedOut = () => {
+    const tags = sortedTagList(new Set(Array.from(tagsPicker.selected).map((x) => x.toLowerCase())));
+    const casing = new Map();
+    for (const t of tagsPicker.options || []) {
+      const nt = normalizeTag(t);
+      if (!nt) continue;
+      casing.set(nt.toLowerCase(), nt);
+    }
+    return tags.map((t) => casing.get(t) || t);
+  };
+
+  const scheduleTagsPickerSave = () => {
+    if (!tagsPicker.open) return;
+    const root = tagsPicker.rootEl || nativeOutlineRoot();
+    const id = (tagsPicker.rowId || '').trim();
+    if (!root || !id) return;
+    const row = root.querySelector('[data-outline-row][data-id="' + CSS.escape(id) + '"]');
+    const out = tagsPickerSelectedOut();
+    if (row) nativeRowUpdateTags(row, out);
+    if (tagsPicker.saveTimer) clearTimeout(tagsPicker.saveTimer);
+    tagsPicker.saveTimer = setTimeout(() => {
+      outlineApply(root, 'outline:set_tags', { id, tags: out }).catch((err) => {
+        setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+      });
+    }, 250);
+  };
+
   const openTagsPicker = async (row) => {
     const root = nativeOutlineRootOrFromRow(row);
     if (!root || !row) return;
@@ -400,45 +457,59 @@
     tagsPicker.rowId = id;
     tagsPicker.rootEl = root;
     tagsPicker.selected = selected;
+    tagsPicker.originalSelected = new Set(Array.from(selected));
+    tagsPicker.restoreFocusId = id;
     tagsPicker.options = uniqueSortedStrings(all);
     tagsPicker.idx = 0;
+    tagsPicker.saveTimer = 0;
 
     const modal = ensureTagsModal();
     modal.style.display = 'flex';
     renderTagsPicker();
-    const input = modal.querySelector('#native-tags-new');
-    input && input.focus();
+    const list = modal.querySelector('#native-tags-list');
+    list && list.focus();
   };
 
-  const closeTagsPicker = (save) => {
+  const closeTagsPicker = (action) => {
     const modal = document.getElementById('native-tags-modal');
-    if (save && tagsPicker.open) {
-      const id = tagsPicker.rowId;
-      const root = tagsPicker.rootEl;
-      const row = root ? root.querySelector('[data-outline-row][data-id="' + CSS.escape(id) + '"]') : null;
-      const tags = sortedTagList(new Set(Array.from(tagsPicker.selected).map((x) => x.toLowerCase())));
-      // Recover original casing from options when possible.
-      const casing = new Map();
-      for (const t of tagsPicker.options || []) {
-        const nt = normalizeTag(t);
-        if (!nt) continue;
-        casing.set(nt.toLowerCase(), nt);
-      }
-      const out = tags.map((t) => casing.get(t) || t);
-      if (row) nativeRowUpdateTags(row, out);
-      if (root) {
-        outlineApply(root, 'outline:set_tags', { id, tags: out }).catch((err) => {
+    const act = (action || '').toLowerCase();
+    const cancel = act === 'cancel';
+    const done = act === 'done';
+    if (tagsPicker.saveTimer) clearTimeout(tagsPicker.saveTimer);
+    tagsPicker.saveTimer = 0;
+    if (cancel && tagsPicker.open) {
+      const root = tagsPicker.rootEl || nativeOutlineRoot();
+      const id = (tagsPicker.rowId || '').trim();
+      if (root && id) {
+        const row = root.querySelector('[data-outline-row][data-id="' + CSS.escape(id) + '"]');
+        const out = sortedTagList(new Set(Array.from(tagsPicker.originalSelected || []).map((x) => String(x || '').toLowerCase())));
+        const casing = new Map();
+        for (const t of tagsPicker.options || []) {
+          const nt = normalizeTag(t);
+          if (!nt) continue;
+          casing.set(nt.toLowerCase(), nt);
+        }
+        const restored = out.map((t) => casing.get(t) || t);
+        if (row) nativeRowUpdateTags(row, restored);
+        outlineApply(root, 'outline:set_tags', { id, tags: restored }).catch((err) => {
           setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
         });
       }
+    } else if (done && tagsPicker.open) {
+      // Ensure the final state is flushed.
+      scheduleTagsPickerSave();
     }
+    const restoreId = tagsPicker.restoreFocusId;
     tagsPicker.open = false;
     tagsPicker.rowId = '';
     tagsPicker.rootEl = null;
     tagsPicker.options = [];
     tagsPicker.selected = new Set();
+    tagsPicker.originalSelected = new Set();
     tagsPicker.idx = 0;
+    tagsPicker.restoreFocusId = '';
     if (modal) modal.style.display = 'none';
+    restoreNativeFocusAfterModal(restoreId);
   };
 
   const toggleSelectedTag = () => {
@@ -450,6 +521,7 @@
     if (tagsPicker.selected.has(key)) tagsPicker.selected.delete(key);
     else tagsPicker.selected.add(key);
     renderTagsPicker();
+    scheduleTagsPickerSave();
   };
 
   const addNewTagFromInput = () => {
@@ -465,6 +537,220 @@
     if (!exists) tagsPicker.options = uniqueSortedStrings([...tagsPicker.options, tag]);
     if (input) input.value = '';
     renderTagsPicker();
+    scheduleTagsPickerSave();
+  };
+
+  const moveOutlinePicker = {
+    open: false,
+    rowId: '',
+    outlineId: '',
+    rootEl: null,
+    options: [],
+    idx: 0,
+    restoreFocusId: '',
+  };
+
+  const ensureMoveOutlineModal = () => {
+    let el = document.getElementById('native-move-outline-modal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'native-move-outline-modal';
+    el.style.position = 'fixed';
+    el.style.left = '0';
+    el.style.top = '0';
+    el.style.right = '0';
+    el.style.bottom = '0';
+    el.style.background = 'rgba(0,0,0,.25)';
+    el.style.display = 'none';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+    el.style.zIndex = '9998';
+    el.innerHTML = `
+      <div style="max-width:680px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+          <strong>Move to outline</strong>
+          <span class="dim" style="font-size:12px;">Esc to cancel</span>
+        </div>
+        <div id="native-move-outline-list" style="margin-top:10px;max-height:46vh;overflow:auto;"></div>
+        <div class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Enter to select</div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;align-items:center;">
+          <button type="button" id="native-move-outline-cancel">Cancel</button>
+          <button type="button" id="native-move-outline-ok">Move</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(el);
+    el.addEventListener('click', (ev) => {
+      if (ev.target === el) closeMoveOutlinePicker();
+    });
+    const cancelBtn = el.querySelector('#native-move-outline-cancel');
+    cancelBtn && cancelBtn.addEventListener('click', () => closeMoveOutlinePicker());
+    const okBtn = el.querySelector('#native-move-outline-ok');
+    okBtn && okBtn.addEventListener('click', () => pickSelectedMoveOutline());
+    return el;
+  };
+
+  const renderMoveOutlinePicker = () => {
+    const modal = ensureMoveOutlineModal();
+    const list = modal.querySelector('#native-move-outline-list');
+    if (!list) return;
+    const opts = moveOutlinePicker.options || [];
+    list.innerHTML = '';
+    const ul = document.createElement('ul');
+    ul.style.listStyle = 'none';
+    ul.style.padding = '0';
+    ul.style.margin = '0';
+    opts.forEach((o, i) => {
+      const li = document.createElement('li');
+      li.style.padding = '6px 8px';
+      li.style.borderRadius = '8px';
+      li.style.cursor = 'pointer';
+      if (i === moveOutlinePicker.idx) {
+        li.style.background = 'color-mix(in oklab, Canvas, CanvasText 10%)';
+      }
+      const lbl = (o && typeof o.label === 'string') ? o.label : (o && o.id ? o.id : '');
+      li.textContent = lbl || '';
+      li.addEventListener('click', () => {
+        moveOutlinePicker.idx = i;
+        pickSelectedMoveOutline();
+      });
+      ul.appendChild(li);
+    });
+    list.appendChild(ul);
+  };
+
+  const closeMoveOutlinePicker = () => {
+    const restoreId = moveOutlinePicker.restoreFocusId;
+    moveOutlinePicker.open = false;
+    moveOutlinePicker.rowId = '';
+    moveOutlinePicker.outlineId = '';
+    moveOutlinePicker.rootEl = null;
+    moveOutlinePicker.options = [];
+    moveOutlinePicker.idx = 0;
+    moveOutlinePicker.restoreFocusId = '';
+    const modal = document.getElementById('native-move-outline-modal');
+    if (modal) modal.style.display = 'none';
+    restoreNativeFocusAfterModal(restoreId);
+  };
+
+  const fetchOutlineMeta = async (outlineId) => {
+    const id = (outlineId || '').trim();
+    if (!id) throw new Error('missing outline id');
+    const res = await fetch('/outlines/' + encodeURIComponent(id) + '/meta', {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  };
+
+  const removeRowFromNativeOutline = (root, row) => {
+    if (!root || !row) return;
+    const next = nativeRowSibling(row, +1) || nativeRowSibling(row, -1) || null;
+    const li = nativeLiFromRow(row);
+    li && li.remove();
+    next && next.focus && next.focus();
+  };
+
+  const openMoveOutlineStatusPicker = async (root, itemId, toOutlineId, toLabel) => {
+    if (!root) return;
+    let meta;
+    try {
+      meta = await fetchOutlineMeta(toOutlineId);
+    } catch (err) {
+      setOutlineStatus('Error: ' + (err && err.message ? err.message : 'load failed'));
+      return;
+    }
+    const raw = (meta && Array.isArray(meta.statusOptions)) ? meta.statusOptions : [];
+    const opts = raw.map((o) => ({
+      id: (o && o.id) ? String(o.id) : '',
+      label: (o && o.label) ? String(o.label) : '',
+      isEndState: !!(o && o.isEndState),
+      requiresNote: false,
+    })).filter((o) => (o.id || '').trim() !== '');
+    if (!opts.length) {
+      setOutlineStatus('Error: no statuses in target outline');
+      setTimeout(() => setOutlineStatus(''), 1500);
+      return;
+    }
+    statusPicker.open = true;
+    statusPicker.rowId = itemId;
+    statusPicker.rootEl = root;
+    statusPicker.options = opts;
+    statusPicker.idx = 0;
+    statusPicker.note = '';
+    statusPicker.mode = 'list';
+    statusPicker.title = 'Move: pick status';
+    statusPicker.submit = ({ statusID }) => {
+      const row = root.querySelector('[data-outline-row][data-id="' + CSS.escape(itemId) + '"]');
+      return outlineApply(root, 'outline:move_outline', { id: itemId, toOutlineId, status: statusID, applyStatusToInvalidSubtree: true }).then(() => {
+        if (row) removeRowFromNativeOutline(root, row);
+        setOutlineStatus('Moved to ' + (toLabel || toOutlineId));
+        setTimeout(() => setOutlineStatus(''), 1800);
+      });
+    };
+    const modal = ensureStatusModal();
+    modal.style.display = 'flex';
+    renderStatusPicker();
+  };
+
+  const pickSelectedMoveOutline = () => {
+    if (!moveOutlinePicker.open) return;
+    const sel = moveOutlinePicker.options[moveOutlinePicker.idx];
+    if (!sel) return;
+    const toOutlineId = (sel.id || '').trim();
+    if (!toOutlineId) return;
+    const id = (moveOutlinePicker.rowId || '').trim();
+    const root = moveOutlinePicker.rootEl || nativeOutlineRoot();
+    const fromOutlineId = (moveOutlinePicker.outlineId || '').trim();
+    const label = (sel.label || '').trim();
+    closeMoveOutlinePicker();
+    if (!root || !id) return;
+    if (toOutlineId === fromOutlineId) return;
+    const row = root.querySelector('[data-outline-row][data-id="' + CSS.escape(id) + '"]');
+    outlineApply(root, 'outline:move_outline', { id, toOutlineId }).then(() => {
+      if (row) removeRowFromNativeOutline(root, row);
+      setOutlineStatus('Moved to ' + (label || toOutlineId));
+      setTimeout(() => setOutlineStatus(''), 1800);
+    }).catch((err) => {
+      const msg = (err && err.message) ? String(err.message) : 'move failed';
+      if (msg.includes('pick a compatible status')) {
+        openMoveOutlineStatusPicker(root, id, toOutlineId, label);
+        return;
+      }
+      setOutlineStatus('Error: ' + msg);
+      setTimeout(() => setOutlineStatus(''), 2400);
+    });
+  };
+
+  const openMoveOutlinePicker = (row) => {
+    const root = nativeOutlineRootOrFromRow(row);
+    if (!root || !row) return;
+    const id = (row.dataset.id || '').trim();
+    if (!id) return;
+    if ((row.dataset.canEdit || '') !== 'true') {
+      setOutlineStatus('Error: owner-only');
+      setTimeout(() => setOutlineStatus(''), 1200);
+      return;
+    }
+    const opts = parseOutlineOptions(root);
+    if (!opts.length) {
+      setOutlineStatus('Error: no outlines');
+      setTimeout(() => setOutlineStatus(''), 1200);
+      return;
+    }
+    moveOutlinePicker.open = true;
+    moveOutlinePicker.rowId = id;
+    moveOutlinePicker.outlineId = (root.dataset.outlineId || '').trim();
+    moveOutlinePicker.rootEl = root;
+    moveOutlinePicker.options = opts;
+    moveOutlinePicker.restoreFocusId = id;
+    let idx = opts.findIndex((o) => String(o && o.id || '').trim() === moveOutlinePicker.outlineId);
+    if (idx < 0) idx = 0;
+    moveOutlinePicker.idx = idx;
+    const modal = ensureMoveOutlineModal();
+    modal.style.display = 'flex';
+    renderMoveOutlinePicker();
   };
 
   const assigneePicker = {
@@ -494,16 +780,24 @@
       <div style="max-width:520px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
           <strong>Assign</strong>
-          <span class="dim" style="font-size:12px;">Esc to close</span>
+          <span class="dim" style="font-size:12px;">Esc to cancel</span>
         </div>
         <div id="native-assignee-list" style="margin-top:10px;max-height:46vh;overflow:auto;"></div>
-        <div class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Enter to pick</div>
+        <div class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Enter to select</div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;align-items:center;">
+          <button type="button" id="native-assignee-cancel">Cancel</button>
+          <button type="button" id="native-assignee-ok">Select</button>
+        </div>
       </div>
     `;
     document.body.appendChild(el);
     el.addEventListener('click', (ev) => {
       if (ev.target === el) closeAssigneePicker();
     });
+    const cancelBtn = el.querySelector('#native-assignee-cancel');
+    cancelBtn && cancelBtn.addEventListener('click', () => closeAssigneePicker());
+    const okBtn = el.querySelector('#native-assignee-ok');
+    okBtn && okBtn.addEventListener('click', () => pickSelectedAssignee());
     return el;
   };
 
@@ -562,6 +856,7 @@
   };
 
   const closeAssigneePicker = () => {
+    const restoreId = assigneePicker.rowId;
     assigneePicker.open = false;
     assigneePicker.rowId = '';
     assigneePicker.rootEl = null;
@@ -569,10 +864,17 @@
     assigneePicker.idx = 0;
     const modal = document.getElementById('native-assignee-modal');
     if (modal) modal.style.display = 'none';
+    restoreNativeFocusAfterModal(restoreId);
+  };
+
+  const outlineRowRight = (row) => {
+    if (!row) return null;
+    return row.querySelector('.outline-right') || row;
   };
 
   const nativeRowUpdateAssignee = (row, opt) => {
     if (!row) return;
+    const root = outlineRowRight(row);
     const lbl = (opt && typeof opt.label === 'string') ? opt.label.trim() : '';
     const wrap = row.querySelector('.outline-assignee');
     if (lbl && lbl !== '(unassigned)') {
@@ -582,7 +884,7 @@
         const s = document.createElement('span');
         s.className = 'outline-assignee dim';
         s.textContent = '@' + lbl;
-        row.appendChild(s);
+        root && root.appendChild(s);
       }
     } else {
       wrap && wrap.remove();
@@ -620,6 +922,8 @@
     idx: 0,
     note: '',
     mode: 'list', // 'list' | 'note'
+    title: 'Status',
+    submit: null, // optional override: ({statusID, option, note}) => Promise
   };
 
   const ensureStatusModal = () => {
@@ -640,31 +944,51 @@
     el.innerHTML = `
       <div id="native-status-modal-box" style="max-width:520px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
-          <strong>Status</strong>
-          <span class="dim" style="font-size:12px;">Esc to close</span>
+          <strong id="native-status-title">Status</strong>
+          <span class="dim" style="font-size:12px;">Esc to cancel</span>
         </div>
         <div id="native-status-note-wrap" style="margin-top:10px;display:none;">
           <div class="dim" style="font-size:12px;margin-bottom:6px;">Note required</div>
           <input id="native-status-note" type="text" placeholder="Add a note…" style="width:100%;" />
         </div>
         <div id="native-status-list" style="margin-top:10px;max-height:46vh;overflow:auto;"></div>
-        <div id="native-status-hint" class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Enter to pick</div>
+        <div id="native-status-hint" class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Enter to select</div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;align-items:center;">
+          <button type="button" id="native-status-cancel">Cancel</button>
+          <button type="button" id="native-status-ok">Select</button>
+        </div>
       </div>
     `;
     document.body.appendChild(el);
     el.addEventListener('click', (ev) => {
       if (ev.target === el) closeStatusPicker();
     });
+    const cancelBtn = el.querySelector('#native-status-cancel');
+    cancelBtn && cancelBtn.addEventListener('click', () => {
+      if (statusPicker.mode === 'note') {
+        statusPicker.mode = 'list';
+        statusPicker.note = '';
+        renderStatusPicker();
+        return;
+      }
+      closeStatusPicker();
+    });
+    const okBtn = el.querySelector('#native-status-ok');
+    okBtn && okBtn.addEventListener('click', () => pickSelectedStatus());
     return el;
   };
 
   const renderStatusPicker = () => {
     const modal = ensureStatusModal();
+    const title = modal.querySelector('#native-status-title');
     const list = modal.querySelector('#native-status-list');
     const noteWrap = modal.querySelector('#native-status-note-wrap');
     const noteInput = modal.querySelector('#native-status-note');
     const hint = modal.querySelector('#native-status-hint');
+    const okBtn = modal.querySelector('#native-status-ok');
+    const cancelBtn = modal.querySelector('#native-status-cancel');
     if (!list) return;
+    if (title) title.textContent = statusPicker.title || 'Status';
 
     const opts = statusPicker.options || [];
     const sel = opts[statusPicker.idx] || null;
@@ -672,8 +996,10 @@
     const inNoteMode = statusPicker.mode === 'note';
     noteWrap.style.display = (inNoteMode && needsNote) ? 'block' : 'none';
     if (hint) {
-      hint.textContent = inNoteMode ? 'Type note · Enter to save · Esc to go back' : 'Up/Down or Ctrl+P/N to move · Enter to pick';
+      hint.textContent = inNoteMode ? 'Type note · Enter to save · Esc to go back' : 'Up/Down or Ctrl+P/N to move · Enter to select';
     }
+    if (okBtn) okBtn.textContent = inNoteMode ? 'Save' : 'Select';
+    if (cancelBtn) cancelBtn.textContent = inNoteMode ? 'Back' : 'Cancel';
     if (inNoteMode && needsNote) {
       noteInput.value = statusPicker.note || '';
       setTimeout(() => noteInput.focus(), 0);
@@ -730,6 +1056,8 @@
     statusPicker.options = opts;
     statusPicker.note = '';
     statusPicker.mode = 'list';
+    statusPicker.title = 'Status';
+    statusPicker.submit = null;
     // select current
     const cur = (row.dataset.status || '').trim();
     let idx = opts.findIndex((o) => (o.id || '').trim() === cur);
@@ -742,6 +1070,7 @@
   };
 
   const closeStatusPicker = () => {
+    const restoreId = statusPicker.rowId;
     statusPicker.open = false;
     statusPicker.rowId = '';
     statusPicker.rootEl = null;
@@ -749,8 +1078,11 @@
     statusPicker.idx = 0;
     statusPicker.note = '';
     statusPicker.mode = 'list';
+    statusPicker.title = 'Status';
+    statusPicker.submit = null;
     const modal = document.getElementById('native-status-modal');
     if (modal) modal.style.display = 'none';
+    restoreNativeFocusAfterModal(restoreId);
   };
 
   const nativeRowUpdateStatus = (row, opt) => {
@@ -798,6 +1130,17 @@
       statusPicker.note = note;
     }
 
+    if (typeof statusPicker.submit === 'function') {
+      const submit = statusPicker.submit;
+      const statusID2 = statusID;
+      const opt = sel;
+      closeStatusPicker();
+      submit({ statusID: statusID2, option: opt, note }).catch((err) => {
+        setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+      });
+      return;
+    }
+
     const root = statusPicker.rootEl || nativeOutlineRoot();
     if (!root) return;
     const row = root.querySelector('[data-outline-row][data-id="' + CSS.escape(id) + '"]');
@@ -834,17 +1177,26 @@
     if (next < 0) next += opts.length;
     const sel = opts[next];
     if (!sel) return;
+    if (!sel.requiresNote) {
+      nativeRowUpdateStatus(row, sel);
+      outlineApply(root, 'outline:toggle', { id, to: (sel.id || '').trim(), note: '' }).catch((err) => {
+        setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+      });
+      return;
+    }
+    // Requires a note: open picker preselected; require Enter to confirm.
     statusPicker.open = true;
     statusPicker.rowId = id;
     statusPicker.rootEl = root;
     statusPicker.options = opts;
     statusPicker.idx = next;
     statusPicker.note = '';
-    statusPicker.mode = sel.requiresNote ? 'note' : 'list';
+    statusPicker.mode = 'list';
+    statusPicker.title = 'Status';
+    statusPicker.submit = null;
     const modal = ensureStatusModal();
     modal.style.display = 'flex';
     renderStatusPicker();
-    if (!sel.requiresNote) pickSelectedStatus();
   };
 
   const prompt = {
@@ -934,13 +1286,14 @@
 
   const rowSetFlag = (row, flagClass, on) => {
     if (!row) return;
+    const root = outlineRowRight(row);
     const existing = row.querySelector('.' + flagClass);
     if (on) {
       if (existing) return;
       const s = document.createElement('span');
       s.className = 'outline-flag ' + flagClass;
       s.textContent = flagClass.includes('priority') ? 'P' : 'H';
-      row.appendChild(s);
+      root && root.appendChild(s);
     } else {
       existing && existing.remove();
     }
@@ -960,6 +1313,7 @@
 
   const nativeRowUpdateTags = (row, tags) => {
     if (!row) return;
+    const root = outlineRowRight(row);
     const raw = Array.isArray(tags) ? tags : [];
     const seen = new Set();
     const next = [];
@@ -980,13 +1334,14 @@
     if (!el) {
       el = document.createElement('span');
       el.className = 'outline-tags dim';
-      row.appendChild(el);
+      root && root.appendChild(el);
     }
     el.textContent = next.map((t) => '#' + t).join(' ');
   };
 
   const nativeRowUpdateDateTime = (row, kind, dt) => {
     if (!row || !row.dataset) return;
+    const root = outlineRowRight(row);
     const keyDate = kind === 'due' ? 'dueDate' : 'schDate';
     const keyTime = kind === 'due' ? 'dueTime' : 'schTime';
     row.dataset[keyDate] = dt && dt.date ? dt.date : '';
@@ -1001,7 +1356,7 @@
     if (!el) {
       el = document.createElement('span');
       el.className = 'outline-meta dim ' + cls;
-      row.appendChild(el);
+      root && root.appendChild(el);
     }
     el.textContent = label;
   };
@@ -1031,6 +1386,8 @@
     statusPicker.options = opts;
     statusPicker.note = '';
     statusPicker.mode = 'list';
+    statusPicker.title = 'Status';
+    statusPicker.submit = null;
     statusPicker.idx = idx;
     const modal = ensureStatusModal();
     modal.style.display = 'flex';
@@ -1583,6 +1940,28 @@
     el.textContent = msg || '';
   };
 
+  const copyTextToClipboard = async (text) => {
+    const txt = String(text == null ? '' : text);
+    if (!txt) throw new Error('empty');
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(txt);
+      return;
+    }
+    // Fallback for non-secure contexts.
+    const ta = document.createElement('textarea');
+    ta.value = txt;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '0';
+    ta.setAttribute('readonly', 'readonly');
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand && document.execCommand('copy');
+    ta.remove();
+    if (!ok) throw new Error('copy failed');
+  };
+
   const drainOutlineMoveOps = (outlineEl) => {
     if (!outlineEl) return [];
     const buf = outlineMoveBufferByEl.get(outlineEl);
@@ -1930,6 +2309,11 @@
       closeStatusPicker();
       return true;
     }
+    if (ev.ctrlKey && k === 'enter') {
+      ev.preventDefault();
+      pickSelectedStatus();
+      return true;
+    }
     if (k === 'enter') {
       ev.preventDefault();
       pickSelectedStatus();
@@ -1963,6 +2347,11 @@
       closeAssigneePicker();
       return true;
     }
+    if (ev.ctrlKey && k === 'enter') {
+      ev.preventDefault();
+      pickSelectedAssignee();
+      return true;
+    }
     if (k === 'enter') {
       ev.preventDefault();
       pickSelectedAssignee();
@@ -1990,14 +2379,22 @@
     const input = modal ? modal.querySelector('#native-tags-new') : null;
     const inInput = input && ev.target === input;
 
+    if (!inInput && input && !ev.ctrlKey && !ev.metaKey && !ev.altKey && k === 'a') {
+      // Quick "add tag" focus (keyboard-first).
+      ev.preventDefault();
+      input.focus();
+      input.select && input.select();
+      return true;
+    }
+
     if (k === 'escape') {
       ev.preventDefault();
-      closeTagsPicker(false);
+      closeTagsPicker('cancel');
       return true;
     }
     if (ev.ctrlKey && k === 'enter') {
       ev.preventDefault();
-      closeTagsPicker(true);
+      closeTagsPicker('done');
       return true;
     }
     if (k === 'enter') {
@@ -2005,7 +2402,7 @@
       if (inInput) {
         addNewTagFromInput();
       } else {
-        closeTagsPicker(true);
+        closeTagsPicker('done');
       }
       return true;
     }
@@ -2028,6 +2425,40 @@
     }
 
     // When modal is open, swallow other keys to avoid triggering app navigation.
+    return true;
+  };
+
+  const handleMoveOutlinePickerKeydown = (ev) => {
+    if (!moveOutlinePicker.open) return false;
+    const k = (ev.key || '').toLowerCase();
+    if (k === 'escape') {
+      ev.preventDefault();
+      closeMoveOutlinePicker();
+      return true;
+    }
+    if (ev.ctrlKey && k === 'enter') {
+      ev.preventDefault();
+      pickSelectedMoveOutline();
+      return true;
+    }
+    if (k === 'enter') {
+      ev.preventDefault();
+      pickSelectedMoveOutline();
+      return true;
+    }
+    if (k === 'arrowdown' || k === 'down' || k === 'j' || (ev.ctrlKey && k === 'n')) {
+      ev.preventDefault();
+      moveOutlinePicker.idx = Math.min((moveOutlinePicker.options.length || 1) - 1, moveOutlinePicker.idx + 1);
+      renderMoveOutlinePicker();
+      return true;
+    }
+    if (k === 'arrowup' || k === 'up' || k === 'k' || (ev.ctrlKey && k === 'p')) {
+      ev.preventDefault();
+      moveOutlinePicker.idx = Math.max(0, moveOutlinePicker.idx - 1);
+      renderMoveOutlinePicker();
+      return true;
+    }
+    // Keep modal isolated, but allow normal browser behavior (e.g. Tab) by not preventing default.
     return true;
   };
 
@@ -2171,6 +2602,11 @@
       openTagsPicker(nativeRow);
       return true;
     }
+    if (key === 'm') {
+      ev.preventDefault();
+      openMoveOutlinePicker(nativeRow);
+      return true;
+    }
     if (key === 'd' && !ev.shiftKey) {
       ev.preventDefault();
       openDatePrompt(nativeRow, 'due');
@@ -2237,6 +2673,30 @@
       nativeOutdent(nativeRow);
       return true;
     }
+    if (key === 'y' && !ev.shiftKey) {
+      ev.preventDefault();
+      const id = (nativeRow.dataset.id || '').trim();
+      if (!id) return true;
+      copyTextToClipboard(id).then(() => {
+        setOutlineStatus('Copied item id');
+        setTimeout(() => setOutlineStatus(''), 1200);
+      }).catch((err) => {
+        setOutlineStatus('Error: ' + (err && err.message ? err.message : 'copy failed'));
+      });
+      return true;
+    }
+    if (key === 'y' && ev.shiftKey) {
+      ev.preventDefault();
+      const id = (nativeRow.dataset.id || '').trim();
+      if (!id) return true;
+      copyTextToClipboard('clarity items show ' + id).then(() => {
+        setOutlineStatus('Copied command');
+        setTimeout(() => setOutlineStatus(''), 1200);
+      }).catch((err) => {
+        setOutlineStatus('Error: ' + (err && err.message ? err.message : 'copy failed'));
+      });
+      return true;
+    }
     return false;
   };
 
@@ -2265,6 +2725,27 @@
 
     const itemId = (root.dataset.itemId || '').trim();
     if (!itemId) return false;
+
+    if (key === 'y' && !ev.shiftKey) {
+      ev.preventDefault();
+      copyTextToClipboard(itemId).then(() => {
+        setOutlineStatus('Copied item id');
+        setTimeout(() => setOutlineStatus(''), 1200);
+      }).catch((err) => {
+        setOutlineStatus('Error: ' + (err && err.message ? err.message : 'copy failed'));
+      });
+      return true;
+    }
+    if (key === 'y' && ev.shiftKey) {
+      ev.preventDefault();
+      copyTextToClipboard('clarity items show ' + itemId).then(() => {
+        setOutlineStatus('Copied command');
+        setTimeout(() => setOutlineStatus(''), 1200);
+      }).catch((err) => {
+        setOutlineStatus('Error: ' + (err && err.message ? err.message : 'copy failed'));
+      });
+      return true;
+    }
 
     if (key === 'e') {
       ev.preventDefault();
@@ -2334,6 +2815,7 @@
     if (ev.defaultPrevented) return;
     if (ev.metaKey) return;
     if (handleTagsPickerKeydown(ev)) return;
+    if (handleMoveOutlinePickerKeydown(ev)) return;
     if (handlePromptKeydown(ev)) return;
     if (handleAssigneePickerKeydown(ev)) return;
     if (handleStatusPickerKeydown(ev)) return;

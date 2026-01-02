@@ -44,10 +44,11 @@
 {{end}}
 
 {{define "outline_node"}}
-<li data-node-id="{{.ID}}">
+<li id="outline-node-{{.ID}}" data-node-id="{{.ID}}">
   <div
     class="outline-row {{if not .CanEdit}}outline-row--readonly{{end}}"
     tabindex="0"
+    id="outline-row-{{.ID}}"
     data-outline-row
     data-kb-item
     data-focus-id="{{.ID}}"
@@ -69,15 +70,17 @@
       {{if .StatusLabel}}{{.StatusLabel}}{{else}}{{if .StatusID}}{{.StatusID}}{{else}}(none){{end}}{{end}}
     </span>
     <span class="outline-title">{{.Title}}</span>
-    {{if .Priority}}<span class="outline-flag outline-flag--priority">P</span>{{end}}
-    {{if .OnHold}}<span class="outline-flag outline-flag--hold">H</span>{{end}}
-    {{if .DueDate}}<span class="outline-meta outline-meta--due dim">Due {{.DueDate}}{{if .DueTime}} {{.DueTime}}{{end}}</span>{{end}}
-    {{if .SchDate}}<span class="outline-meta outline-meta--sch dim">Sch {{.SchDate}}{{if .SchTime}} {{.SchTime}}{{end}}</span>{{end}}
-    {{if .AssignedLabel}}<span class="outline-assignee dim">@{{.AssignedLabel}}</span>{{end}}
-    {{if .Tags}}<span class="outline-tags dim">{{range $i, $t := .Tags}}{{if $i}} {{end}}#{{$t}}{{end}}</span>{{end}}
+    <span class="outline-right">
+      {{if .Priority}}<span class="outline-flag outline-flag--priority">P</span>{{end}}
+      {{if .OnHold}}<span class="outline-flag outline-flag--hold">H</span>{{end}}
+      {{if .DueDate}}<span class="outline-meta outline-meta--due dim">Due {{.DueDate}}{{if .DueTime}} {{.DueTime}}{{end}}</span>{{end}}
+      {{if .SchDate}}<span class="outline-meta outline-meta--sch dim">Sch {{.SchDate}}{{if .SchTime}} {{.SchTime}}{{end}}</span>{{end}}
+      {{if .AssignedLabel}}<span class="outline-assignee dim">@{{.AssignedLabel}}</span>{{end}}
+      {{if .Tags}}<span class="outline-tags dim">{{range $i, $t := .Tags}}{{if $i}} {{end}}#{{$t}}{{end}}</span>{{end}}
+    </span>
   </div>
   {{if .Children}}
-    <ul class="outline-children">
+    <ul id="outline-children-{{.ID}}" class="outline-children" data-ds-preserve-attr="style">
       {{range .Children}}
         {{template "outline_node" .}}
       {{end}}
@@ -88,7 +91,7 @@
 
 {{define "outline_native_inner"}}
   <div class="dim" style="margin: 8px 0;">
-    Native outline: <code>j/k</code> or <code>↑/↓</code> select · <code>Enter</code> open · <code>e</code> edit · <code>Space</code> status · <code>Shift+←/→</code> cycle status · <code>n/N</code> new sib/child · <code>p/o</code> priority/hold · <code>t</code> tags · <code>d/s</code> due/sched · <code>C/w</code> comment/worklog · <code>D</code> desc · <code>r</code> archive · <code>Alt+j/k</code> reorder · <code>Ctrl+h/l</code> indent/outdent · <code>z/Z</code> collapse
+    Native outline: <code>j/k</code> or <code>↑/↓</code> select · <code>Enter</code> open · <code>e</code> edit · <code>Space</code> status · <code>Shift+←/→</code> cycle status · <code>n/N</code> new sib/child · <code>p/o</code> priority/hold · <code>t</code> tags · <code>m</code> move outline · <code>y/Y</code> copy id/cmd · <code>d/s</code> due/sched · <code>C/w</code> comment/worklog · <code>D</code> desc · <code>r</code> archive · <code>Alt+j/k</code> reorder · <code>Ctrl+h/l</code> indent/outdent · <code>z/Z</code> collapse
   </div>
   {{if .NativeNodes}}
     <ul class="outline-tree">
@@ -113,6 +116,7 @@
   data-status-options='{{.StatusOptionsJSON}}'
   data-actor-options='{{.ActorOptionsJSON}}'
   data-tag-options='{{.TagsJSON}}'
+  data-outline-options='{{.OutlineOptionsJSON}}'
 >
   {{template "outline_native_inner" .}}
 </div>

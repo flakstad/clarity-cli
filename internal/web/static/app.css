@@ -210,6 +210,8 @@ ul {
   border: 1px solid var(--border);
   opacity: 0.9;
   white-space: nowrap;
+  min-width: 8ch;
+  text-align: center;
 }
 
 .outline-status--end {
@@ -219,6 +221,16 @@ ul {
 .outline-title {
   min-width: 0;
   flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.outline-right {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  white-space: nowrap;
 }
 
 .outline-title input {

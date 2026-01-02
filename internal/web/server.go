@@ -171,6 +171,7 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("GET /projects", s.handleProjects)
         mux.HandleFunc("GET /projects/{projectId}", s.handleProject)
         mux.HandleFunc("GET /outlines/{outlineId}", s.handleOutline)
+        mux.HandleFunc("GET /outlines/{outlineId}/meta", s.handleOutlineMeta)
         mux.HandleFunc("POST /outlines/{outlineId}/items", s.handleOutlineItemCreate)
         mux.HandleFunc("POST /outlines/{outlineId}/apply", s.handleOutlineApply)
         mux.HandleFunc("GET /items/{itemId}", s.handleItem)
@@ -735,14 +736,15 @@ func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
                                 items = append(items, it)
                         }
                 }
-                openTo, endTo, openLbl, endLbl := outlineToggleTargets(*o)
-                nodes := buildOutlineNativeNodes(db, *o, actorID)
-                statusOptions := outlineStatusOptionsJSON(*o)
-                actorOptions := actorOptionsJSON(db)
+                                openTo, endTo, openLbl, endLbl := outlineToggleTargets(*o)
+                                nodes := buildOutlineNativeNodes(db, *o, actorID)
+                                statusOptions := outlineStatusOptionsJSON(*o)
+                                actorOptions := actorOptionsJSON(db)
+                                outlineOptions := outlineOptionsJSON(db)
 
-                vm := outlineVM{
-                        baseVM:              s.baseVMForRequest(r, "/outlines/"+o.ID+"/events?view=outline"),
-                        Outline:             *o,
+                                vm := outlineVM{
+                                        baseVM:              s.baseVMForRequest(r, "/outlines/"+o.ID+"/events?view=outline"),
+                                        Outline:             *o,
                         UseOutlineComponent: false,
                         ItemsJSON:           itemsJSON,
                         StatusLabelsJSON:    statusJSON,
@@ -753,10 +755,11 @@ func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
                         ToggleOpenTo:        openTo,
                         ToggleEndTo:         endTo,
                         ToggleOpenLbl:       openLbl,
-                        ToggleEndLbl:        endLbl,
-                        StatusOptionsJSON:   statusOptions,
-                        ActorOptionsJSON:    actorOptions,
-                }
+                                        ToggleEndLbl:        endLbl,
+                                        StatusOptionsJSON:   statusOptions,
+                                        ActorOptionsJSON:    actorOptions,
+                                        OutlineOptionsJSON:  outlineOptions,
+                                }
                 vm.ActorID = actorID
                 return s.renderTemplate("outline_native_inner", vm)
         })
@@ -1456,6 +1459,7 @@ type outlineVM struct {
 
         StatusOptionsJSON template.HTMLAttr
         ActorOptionsJSON  template.HTMLAttr
+        OutlineOptionsJSON template.HTMLAttr
 }
 
 type outlineNativeNode struct {
@@ -1523,6 +1527,53 @@ func actorOptionsJSON(db *store.DB) template.HTMLAttr {
                         }
                         return opts[i].Kind < opts[j].Kind
                 }
+                if opts[i].Label != opts[j].Label {
+                        return opts[i].Label < opts[j].Label
+                }
+                return opts[i].ID < opts[j].ID
+        })
+        b, _ := json.Marshal(opts)
+        return template.HTMLAttr(b)
+}
+
+func outlineOptionsJSON(db *store.DB) template.HTMLAttr {
+        type outlineOpt struct {
+                ID           string `json:"id"`
+                Label        string `json:"label"`
+                ProjectID    string `json:"projectId,omitempty"`
+                ProjectLabel string `json:"projectLabel,omitempty"`
+        }
+        opts := make([]outlineOpt, 0)
+        if db != nil {
+                for _, o := range db.Outlines {
+                        if o.Archived {
+                                continue
+                        }
+                        id := strings.TrimSpace(o.ID)
+                        if id == "" {
+                                continue
+                        }
+                        name := "(unnamed outline)"
+                        if o.Name != nil && strings.TrimSpace(*o.Name) != "" {
+                                name = strings.TrimSpace(*o.Name)
+                        }
+                        projID := strings.TrimSpace(o.ProjectID)
+                        projLabel := ""
+                        if projID != "" {
+                                if p, ok := db.FindProject(projID); ok && p != nil && strings.TrimSpace(p.Name) != "" {
+                                        projLabel = strings.TrimSpace(p.Name)
+                                } else {
+                                        projLabel = projID
+                                }
+                        }
+                        lbl := name
+                        if projLabel != "" {
+                                lbl = projLabel + " / " + name
+                        }
+                        opts = append(opts, outlineOpt{ID: id, Label: lbl, ProjectID: projID, ProjectLabel: projLabel})
+                }
+        }
+        sort.Slice(opts, func(i, j int) bool {
                 if opts[i].Label != opts[j].Label {
                         return opts[i].Label < opts[j].Label
                 }
@@ -1733,6 +1784,7 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
         nodes := buildOutlineNativeNodes(db, *o, actorID)
         statusOptions := outlineStatusOptionsJSON(*o)
         actorOptions := actorOptionsJSON(db)
+        outlineOptions := outlineOptionsJSON(db)
 
         vm := outlineVM{
                 baseVM:              s.baseVMForRequest(r, "/outlines/"+o.ID+"/events?view=outline"),
@@ -1750,6 +1802,7 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
                 ToggleEndLbl:        endLbl,
                 StatusOptionsJSON:   statusOptions,
                 ActorOptionsJSON:    actorOptions,
+                OutlineOptionsJSON:  outlineOptions,
         }
         vm.ActorID = actorID
         s.writeHTMLTemplate(w, "outline.html", vm)
@@ -2681,13 +2734,13 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                                 changed = true
                         }
 
-                case "outline:move":
-                        var d struct {
-                                ID       string  `json:"id"`
-                                ParentID *string `json:"parentId"`
-                                BeforeID *string `json:"beforeId"`
-                                AfterID  *string `json:"afterId"`
-                        }
+                                case "outline:move":
+                                        var d struct {
+                                                ID       string  `json:"id"`
+                                                ParentID *string `json:"parentId"`
+                                                BeforeID *string `json:"beforeId"`
+                                                AfterID  *string `json:"afterId"`
+                                        }
                         if err := json.Unmarshal(op.Detail, &d); err != nil {
                                 http.Error(w, err.Error(), http.StatusBadRequest)
                                 return
@@ -2709,16 +2762,64 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                         if d.AfterID != nil {
                                 after = strings.TrimSpace(*d.AfterID)
                         }
-                        if err := applyItemMoveOrReparent(db, actorID, itemID, outlineID, parentID, before, after, now, st); err != nil {
-                                http.Error(w, err.Error(), http.StatusConflict)
-                                return
-                        }
-                        changed = true
+                                        if err := applyItemMoveOrReparent(db, actorID, itemID, outlineID, parentID, before, after, now, st); err != nil {
+                                                http.Error(w, err.Error(), http.StatusConflict)
+                                                return
+                                        }
+                                        changed = true
 
-                default:
-                        http.Error(w, "unsupported type: "+op.Type, http.StatusBadRequest)
-                        return
-                }
+                                case "outline:move_outline":
+                                        var d struct {
+                                                ID                      string `json:"id"`
+                                                ToOutlineID             string `json:"toOutlineId"`
+                                                To                      string `json:"to"`
+                                                StatusOverride          string `json:"status"`
+                                                SetStatus               string `json:"setStatus"`
+                                                ApplyStatusToInvalidSub bool   `json:"applyStatusToInvalidSubtree"`
+                                        }
+                                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                                return
+                                        }
+                                        itemID := strings.TrimSpace(d.ID)
+                                        if itemID == "" {
+                                                http.Error(w, "missing id", http.StatusBadRequest)
+                                                return
+                                        }
+                                        to := strings.TrimSpace(d.ToOutlineID)
+                                        if to == "" {
+                                                to = strings.TrimSpace(d.To)
+                                        }
+                                        if to == "" {
+                                                http.Error(w, "missing toOutlineId", http.StatusBadRequest)
+                                                return
+                                        }
+                                        it, ok := db.FindItem(itemID)
+                                        if !ok || it == nil || it.Archived || it.OutlineID != outlineID {
+                                                http.NotFound(w, r)
+                                                return
+                                        }
+                                        statusOverride := strings.TrimSpace(d.StatusOverride)
+                                        if statusOverride == "" {
+                                                statusOverride = strings.TrimSpace(d.SetStatus)
+                                        }
+                                        changed2, payload, err := mutate.MoveItemToOutline(db, actorID, itemID, to, statusOverride, d.ApplyStatusToInvalidSub, now)
+                                        if err != nil {
+                                                http.Error(w, err.Error(), http.StatusConflict)
+                                                return
+                                        }
+                                        if changed2 {
+                                                if err := st.AppendEvent(actorID, "item.move_outline", itemID, payload); err != nil {
+                                                        http.Error(w, err.Error(), http.StatusConflict)
+                                                        return
+                                                }
+                                                changed = true
+                                        }
+
+                                default:
+                                        http.Error(w, "unsupported type: "+op.Type, http.StatusBadRequest)
+                                        return
+                                }
         }
 
         if changed {
@@ -3837,6 +3938,63 @@ func agendaItems(db *store.DB, actorID string) []model.Item {
                 }
         }
         return out
+}
+
+func (s *Server) handleOutlineMeta(w http.ResponseWriter, r *http.Request) {
+        id := strings.TrimSpace(r.PathValue("outlineId"))
+        if id == "" {
+                http.Error(w, "missing outline id", http.StatusBadRequest)
+                return
+        }
+        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        o, ok := db.FindOutline(id)
+        if !ok || o == nil || o.Archived {
+                http.NotFound(w, r)
+                return
+        }
+
+        name := "(unnamed outline)"
+        if o.Name != nil && strings.TrimSpace(*o.Name) != "" {
+                name = strings.TrimSpace(*o.Name)
+        }
+
+        type opt struct {
+                ID           string `json:"id"`
+                Label        string `json:"label"`
+                IsEndState   bool   `json:"isEndState"`
+                RequiresNote bool   `json:"requiresNote,omitempty"`
+        }
+        out := make([]opt, 0, len(o.StatusDefs)+1)
+        if len(o.StatusDefs) > 0 {
+                for _, sd := range o.StatusDefs {
+                        sid := strings.TrimSpace(sd.ID)
+                        if sid == "" {
+                                continue
+                        }
+                        lbl := strings.TrimSpace(sd.Label)
+                        if lbl == "" {
+                                lbl = sid
+                        }
+                        out = append(out, opt{ID: sid, Label: lbl, IsEndState: sd.IsEndState, RequiresNote: sd.RequiresNote})
+                }
+        } else {
+                out = append(out, opt{ID: "todo", Label: "TODO", IsEndState: false})
+                out = append(out, opt{ID: "doing", Label: "DOING", IsEndState: false})
+                out = append(out, opt{ID: "done", Label: "DONE", IsEndState: true})
+        }
+
+        res := map[string]any{
+                "id":            o.ID,
+                "name":          name,
+                "projectId":     o.ProjectID,
+                "statusOptions": out,
+        }
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        _ = json.NewEncoder(w).Encode(res)
 }
 
 func isEndState(db *store.DB, outlineID, statusID string) bool {
