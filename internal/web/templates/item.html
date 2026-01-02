@@ -34,6 +34,41 @@
     {{if .Item.ParentID}}<div><strong>Parent</strong>: <code>{{.Item.ParentID}}</code></div>{{end}}
   </div>
 
+  {{if .SuccessMessage}}
+    <div class="card"><div><strong>OK</strong> — {{.SuccessMessage}}</div></div>
+  {{end}}
+  {{if .ErrorMessage}}
+    <div class="card"><div><strong>Error</strong> — {{.ErrorMessage}}</div></div>
+  {{end}}
+
+  {{if and (not .ReadOnly) .ActorID .CanEdit}}
+    <div class="card">
+      <div><strong>Edit</strong></div>
+      <form method="post" action="/items/{{.Item.ID}}/edit" style="margin-top: 12px;">
+        <div style="margin-top: 8px;">
+          <label for="title"><span class="dim">Title</span></label>
+          <div><input id="title" name="title" value="{{.Item.Title}}" style="width: 100%; max-width: 100%;"></div>
+        </div>
+        <div style="margin-top: 8px;">
+          <label for="status"><span class="dim">Status</span></label>
+          <div>
+            <select id="status" name="status">
+              <option value="" {{if eq .Item.StatusID ""}}selected{{end}}>(none)</option>
+              {{range .StatusDefs}}
+                <option value="{{.ID}}" {{if eq $.Item.StatusID .ID}}selected{{end}}>{{if .Label}}{{.Label}}{{else}}{{.ID}}{{end}}</option>
+              {{end}}
+            </select>
+          </div>
+        </div>
+        <div style="margin-top: 8px;">
+          <label for="description"><span class="dim">Description (Markdown)</span></label>
+          <div><textarea id="description" name="description" rows="10" style="width: 100%; max-width: 100%;">{{.Item.Description}}</textarea></div>
+        </div>
+        <div style="margin-top: 8px;"><button type="submit">Save</button></div>
+      </form>
+    </div>
+  {{end}}
+
   <div class="card">
     <div><strong>Description</strong></div>
     {{if .Item.Description}}<pre>{{.Item.Description}}</pre>{{else}}<div>(none)</div>{{end}}
@@ -53,7 +88,7 @@
         {{range .Comments}}
           <li>
             <span class="dim">{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</span>
-            — <code>{{.AuthorActorID}}</code>
+            — <code>{{.AuthorID}}</code>
             <pre>{{.Body}}</pre>
           </li>
         {{end}}

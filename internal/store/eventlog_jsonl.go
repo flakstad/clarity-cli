@@ -92,13 +92,7 @@ func (s Store) appendEventJSONL(ctx context.Context, actorID, typ, entityID stri
                 return err
         }
         heads := computeHeads(ids, parentIDs)
-        if len(heads) > 1 {
-                return fmt.Errorf("conflict: entity has %d heads; requires explicit merge (try: clarity doctor --fail)", len(heads))
-        }
         var parents []string
-        if len(heads) == 1 {
-                parents = []string{heads[0]}
-        }
         seq := int64(1)
         switch {
         case len(ids) == 0:
@@ -109,6 +103,22 @@ func (s Store) appendEventJSONL(ctx context.Context, actorID, typ, entityID stri
                 // Legacy compatibility: if existing JSONL events have entitySeq=0, allocate a
                 // stable-ish seq based on count to keep per-entity ordering usable.
                 seq = int64(len(ids) + 1)
+        }
+
+        // Auto-merge forks by appending a merge marker that references all current heads.
+        // This keeps the log append-only and avoids blocking normal editing for transient concurrency.
+        //
+        // NOTE: Merge markers are currently treated as no-ops by reducers; they exist to linearize
+        // the per-entity append contract. Higher-level “semantic merge” can be added later.
+        if len(heads) > 1 {
+                mergeID, err := s.appendMergeMarkerJSONL(kind, wsID, repID, actorID, entityID, now, seq, heads)
+                if err != nil {
+                        return err
+                }
+                parents = []string{mergeID}
+                seq++
+        } else if len(heads) == 1 {
+                parents = []string{heads[0]}
         }
 
         pb, err := json.Marshal(payload)
@@ -159,6 +169,70 @@ func (s Store) appendEventJSONL(ctx context.Context, actorID, typ, entityID stri
                 return err
         }
         return nil
+}
+
+func (s Store) appendMergeMarkerJSONL(kind EntityKind, wsID, repID, actorID, entityID string, now time.Time, seq int64, heads []string) (string, error) {
+        if err := os.MkdirAll(s.eventsDir(), 0o755); err != nil {
+                return "", err
+        }
+
+        parents := make([]string, 0, len(heads))
+        for _, h := range heads {
+                h = strings.TrimSpace(h)
+                if h != "" {
+                        parents = append(parents, h)
+                }
+        }
+        sort.Strings(parents)
+
+        payload := map[string]any{
+                "auto":  true,
+                "heads": parents,
+        }
+        pb, err := json.Marshal(payload)
+        if err != nil {
+                return "", err
+        }
+        eventID, err := newUUIDv4()
+        if err != nil {
+                return "", err
+        }
+
+        ev := EventV1{
+                EventID:     eventID,
+                WorkspaceID: strings.TrimSpace(wsID),
+                ReplicaID:   strings.TrimSpace(repID),
+
+                EntityKind: kind,
+                EntityID:   strings.TrimSpace(entityID),
+                EntitySeq:  seq,
+
+                Type:    fmt.Sprintf("%s.merge", strings.TrimSpace(kind.String())),
+                Parents: parents,
+
+                IssuedAt: now,
+                ActorID:  strings.TrimSpace(actorID),
+                Payload:  json.RawMessage(pb),
+
+                LocalStatus:  "local",
+                ServerStatus: "pending",
+        }
+
+        path := s.shardPath(repID)
+        f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+        if err != nil {
+                return "", err
+        }
+        defer f.Close()
+
+        line, err := json.Marshal(ev)
+        if err != nil {
+                return "", err
+        }
+        if _, err := f.Write(append(line, '\n')); err != nil {
+                return "", err
+        }
+        return eventID, nil
 }
 
 func (s Store) readEventsJSONL(limit int) ([]model.Event, error) {

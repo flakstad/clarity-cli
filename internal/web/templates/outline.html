@@ -33,21 +33,156 @@
   <div class="card">
     <div><strong>Items</strong></div>
 
+    {{if and (not .ReadOnly) .ActorID}}
+      <form method="post" action="/outlines/{{.Outline.ID}}/items" style="margin: 12px 0;">
+        <label for="title"><span class="dim">New item</span></label>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <input id="title" name="title" placeholder="Title" style="flex: 1;">
+          <button type="submit">Add</button>
+        </div>
+      </form>
+    {{end}}
+
     {{if .UseOutlineComponent}}
       <script src="/static/outline.js"></script>
-      <clarity-outline id="outline"></clarity-outline>
+      <clarity-outline id="outline" data-outline-id="{{.Outline.ID}}"></clarity-outline>
+      <div id="outline-status" class="dim" style="margin-top: 10px;"></div>
       <script>
         (function () {
           const el = document.getElementById('outline');
           if (!el) return;
+          const statusEl = document.getElementById('outline-status');
+          let pending = Promise.resolve();
+
           el.setAttribute('data-current-user', {{printf "%q" .ActorID}});
           el.setAttribute('data-status-labels', JSON.stringify({{.StatusLabelsJSON}}));
           el.setAttribute('data-assignees', JSON.stringify({{.AssigneesJSON}}));
           el.setAttribute('data-tags', JSON.stringify({{.TagsJSON}}));
           el.setAttribute('data-features', JSON.stringify({
+            addButton: false,
+            comments: false,
+            worklog: false,
+            archive: false,
+            priority: false,
+            onHold: false,
+            due: false,
+            schedule: false,
+            assign: false,
+            tags: false,
             dragAndDrop: false
           }));
           el.setAttribute('data-items', JSON.stringify({{.ItemsJSON}}));
+
+          function setStatus(msg) {
+            if (!statusEl) return;
+            statusEl.textContent = msg || '';
+          }
+
+          function findLi(id) {
+            if (!el.shadowRoot) return null;
+            try {
+              return el.shadowRoot.querySelector('li[data-id="' + id.replaceAll('"', '\\"') + '"]');
+            } catch (e) {
+              return null;
+            }
+          }
+
+          function siblingId(node, dir) {
+            let cur = dir === 'prev' ? node.previousElementSibling : node.nextElementSibling;
+            while (cur) {
+              if (cur.tagName === 'LI') return cur.dataset.id || null;
+              cur = dir === 'prev' ? cur.previousElementSibling : cur.nextElementSibling;
+            }
+            return null;
+          }
+
+          async function apply(type, detail) {
+            pending = pending.then(async () => {
+              const outlineId = el.getAttribute('data-outline-id') || '';
+              if (!outlineId) return;
+              setStatus('Saving…');
+              const res = await fetch('/outlines/' + encodeURIComponent(outlineId) + '/apply', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type, detail })
+              });
+              if (!res.ok) {
+                const txt = await res.text();
+                throw new Error(txt || ('HTTP ' + res.status));
+              }
+              const payload = await res.json();
+              if (payload && payload.statusLabels) el.setAttribute('data-status-labels', JSON.stringify(payload.statusLabels));
+              if (payload && payload.assignees) el.setAttribute('data-assignees', JSON.stringify(payload.assignees));
+              if (payload && payload.tags) el.setAttribute('data-tags', JSON.stringify(payload.tags));
+              if (payload && payload.items) el.setAttribute('data-items', JSON.stringify(payload.items));
+              setStatus('Saved');
+              setTimeout(() => setStatus(''), 800);
+            });
+            return pending;
+          }
+
+          function handleReorderLikeEvent(e) {
+            const id = e.detail && e.detail.id;
+            if (!id) return;
+            const li = findLi(id);
+            if (!li) return;
+            const parentLi = li.parentElement ? li.parentElement.closest('li') : null;
+            const parentId = parentLi ? (parentLi.dataset.id || null) : null;
+            const prevId = siblingId(li, 'prev');
+            const nextId = siblingId(li, 'next');
+            const detail = {
+              id,
+              parentId,
+              afterId: prevId,
+              beforeId: (!prevId && nextId) ? nextId : null
+            };
+            const focusId = id;
+            apply('outline:move', detail).then(() => {
+              const newLi = findLi(focusId);
+              if (newLi) newLi.focus();
+            }).catch((err) => {
+              console.error(err);
+              setStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+            });
+          }
+
+          el.addEventListener('outline:edit:save', (e) => {
+            const id = e.detail && e.detail.id;
+            const newText = e.detail && e.detail.newText;
+            if (!id || !newText) return;
+            const focusId = id;
+            apply('outline:edit:save', { id, newText }).then(() => {
+              const newLi = findLi(focusId);
+              if (newLi) newLi.focus();
+            }).catch((err) => {
+              console.error(err);
+              setStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+            });
+          });
+
+          el.addEventListener('outline:toggle', (e) => {
+            const id = e.detail && e.detail.id;
+            const to = e.detail && e.detail.to;
+            if (!id) return;
+            const focusId = id;
+            apply('outline:toggle', { id, to }).then(() => {
+              const newLi = findLi(focusId);
+              if (newLi) newLi.focus();
+            }).catch((err) => {
+              console.error(err);
+              setStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+            });
+          });
+
+          el.addEventListener('outline:move', handleReorderLikeEvent);
+          el.addEventListener('outline:indent', handleReorderLikeEvent);
+          el.addEventListener('outline:outdent', handleReorderLikeEvent);
+
+          el.addEventListener('outline:open', (e) => {
+            const id = e.detail && e.detail.id;
+            if (!id) return;
+            window.location.href = '/items/' + encodeURIComponent(id);
+          });
         })();
       </script>
       <noscript>
