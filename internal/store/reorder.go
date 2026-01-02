@@ -161,6 +161,11 @@ func PlanReorderRanks(sibs []*model.Item, movedID string, insertAt int) (Reorder
         if hi+1 < len(final) {
                 upper = strings.TrimSpace(final[hi+1].Rank)
         }
+        if lower != "" && upper != "" && !(lower < upper) {
+                // Extremely defensive: ranks may be corrupted/duplicated such that even the chosen window
+                // yields invalid bounds. Fall back to full rebalance.
+                return rebalanceAllRanks(final)
+        }
 
         // Build existing ranks excluding window items (we're about to overwrite them).
         excl := map[string]bool{}
@@ -182,12 +187,43 @@ func PlanReorderRanks(sibs []*model.Item, movedID string, insertAt int) (Reorder
                 }
                 r, err := RankBetweenUnique(existing, curLower, upper)
                 if err != nil {
-                        return ReorderResult{}, err
+                        // If we can't find an in-between rank due to bad bounds, fully rebalance.
+                        return rebalanceAllRanks(final)
                 }
                 existing[strings.ToLower(strings.TrimSpace(r))] = true
                 res.RankByID[id] = r
                 res.WindowIDs = append(res.WindowIDs, id)
                 curLower = r
+        }
+        return res, nil
+}
+
+func rebalanceAllRanks(final []*model.Item) (ReorderResult, error) {
+        res := ReorderResult{
+                RankByID:     map[string]string{},
+                WindowIDs:    make([]string, 0, len(final)),
+                UsedFallback: true,
+        }
+        prev := ""
+        for _, it := range final {
+                if it == nil {
+                        continue
+                }
+                id := strings.TrimSpace(it.ID)
+                if id == "" {
+                        continue
+                }
+                r, err := RankAfter(prev)
+                if err != nil {
+                        return ReorderResult{}, err
+                }
+                r = strings.ToLower(strings.TrimSpace(r))
+                if r == "" {
+                        return ReorderResult{}, errors.New("generated empty rank")
+                }
+                res.RankByID[id] = r
+                res.WindowIDs = append(res.WindowIDs, id)
+                prev = r
         }
         return res, nil
 }

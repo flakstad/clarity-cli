@@ -1,5 +1,15 @@
 {{define "item_main"}}
 <main id="clarity-main">
+  <div
+    id="item-native"
+    data-item-page
+    data-item-id="{{.Item.ID}}"
+    data-outline-id="{{.Item.OutlineID}}"
+    data-can-edit="{{if .CanEdit}}true{{else}}false{{end}}"
+    data-status-options='{{.StatusOptionsJSON}}'
+    data-actor-options='{{.ActorOptionsJSON}}'
+    style="display:none;"
+  ></div>
   <h1>{{.Item.Title}}</h1>
 
   <div class="card">
@@ -8,6 +18,11 @@
     <div><strong>Owner</strong>: <code>{{.Item.OwnerActorID}}</code></div>
     {{if .Item.AssignedActorID}}<div><strong>Assignee</strong>: <code>{{.Item.AssignedActorID}}</code></div>{{end}}
     {{if .Item.ParentID}}<div><strong>Parent</strong>: <code>{{.Item.ParentID}}</code></div>{{end}}
+    {{if .Item.Priority}}<div><strong>Priority</strong>: <span class="dim">true</span></div>{{end}}
+    {{if .Item.OnHold}}<div><strong>On hold</strong>: <span class="dim">true</span></div>{{end}}
+    {{if .Item.Due}}<div><strong>Due</strong>: <code>{{.DueDate}}{{if .DueTime}} {{.DueTime}}{{end}}</code></div>{{end}}
+    {{if .Item.Schedule}}<div><strong>Schedule</strong>: <code>{{.SchDate}}{{if .SchTime}} {{.SchTime}}{{end}}</code></div>{{end}}
+    {{if .Item.Tags}}<div><strong>Tags</strong>: <span class="dim">{{range $i, $t := .Item.Tags}}{{if $i}} {{end}}#{{$t}}{{end}}</span></div>{{end}}
   </div>
 
   {{if .SuccessMessage}}
@@ -47,11 +62,26 @@
             </select>
           </div>
         </div>
+        <div style="margin-top: 8px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap;">
+          <label><input type="checkbox" name="priority" value="1" {{if .Item.Priority}}checked{{end}}> <span class="dim">Priority</span></label>
+          <label><input type="checkbox" name="onHold" value="1" {{if .Item.OnHold}}checked{{end}}> <span class="dim">On hold</span></label>
+        </div>
+        <div style="margin-top: 8px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap;">
+          <label class="dim">Due <input type="date" name="dueDate" value="{{.DueDate}}"> <input type="time" name="dueTime" value="{{.DueTime}}"></label>
+          <label class="dim">Schedule <input type="date" name="schDate" value="{{.SchDate}}"> <input type="time" name="schTime" value="{{.SchTime}}"></label>
+        </div>
+        <div style="margin-top: 8px;">
+          <label for="tags"><span class="dim">Tags</span></label>
+          <div><input id="tags" name="tags" value="{{.TagsInput}}" placeholder="#tag1 #tag2" style="width: 100%; max-width: 100%;"></div>
+        </div>
         <div style="margin-top: 8px;">
           <label for="description"><span class="dim">Description (Markdown)</span></label>
           <div><textarea id="description" name="description" rows="10" style="width: 100%; max-width: 100%;">{{.Item.Description}}</textarea></div>
         </div>
-        <div style="margin-top: 8px;"><button type="submit">Save</button></div>
+        <div style="margin-top: 8px; display: flex; gap: 10px; align-items: center;">
+          <button type="submit">Save</button>
+          <button type="submit" name="action" value="archive" onclick="return confirm('Archive this item?')">Archive</button>
+        </div>
       </form>
     </div>
   {{end}}

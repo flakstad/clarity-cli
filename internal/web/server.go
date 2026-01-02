@@ -113,6 +113,15 @@ func NewServer(cfg ServerConfig) (*Server, error) {
                 return nil, errors.New("web: invalid outline mode (expected native|component)")
         }
 
+        // Ensure repo hygiene so derived/local-only `.clarity/` state doesn't keep the workspace "dirty".
+        // This also makes web auth state safe to write locally without showing up in `git status`.
+        root := workspaceRootFromDir(cfg.Dir)
+        if root != "" {
+                if _, err := store.EnsureGitignoreHasClarityIgnores(filepath.Join(root, ".gitignore")); err != nil {
+                        return nil, err
+                }
+        }
+
         tmpl, err := template.New("base").Funcs(template.FuncMap{
                 "trim": strings.TrimSpace,
         }).ParseFS(assetsFS, "templates/*.html")
@@ -124,7 +133,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
         if !cfg.ReadOnly && gitrepo.AutoCommitEnabled() {
                 srv.autoCommit = gitrepo.NewDebouncedCommitter(gitrepo.DebouncedCommitterOpts{
                         WorkspaceDir:   cfg.Dir,
-                        Debounce:       1 * time.Second,
+                        Debounce:       8 * time.Second,
                         AutoPush:       gitrepo.AutoPushEnabled(),
                         AutoPullRebase: gitrepo.AutoPullRebaseEnabled(),
                 })
@@ -165,6 +174,7 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("POST /outlines/{outlineId}/items", s.handleOutlineItemCreate)
         mux.HandleFunc("POST /outlines/{outlineId}/apply", s.handleOutlineApply)
         mux.HandleFunc("GET /items/{itemId}", s.handleItem)
+        mux.HandleFunc("GET /items/{itemId}/meta", s.handleItemMeta)
         mux.HandleFunc("POST /items/{itemId}/edit", s.handleItemEdit)
         mux.HandleFunc("POST /items/{itemId}/comments", s.handleItemCommentAdd)
         mux.HandleFunc("POST /items/{itemId}/worklog", s.handleItemWorklogAdd)
@@ -668,8 +678,8 @@ func (s *Server) handleProjectEvents(w http.ResponseWriter, r *http.Request) {
                         return "", errors.New("project not found")
                 }
                 vm := projectVM{
-                        baseVM:  s.baseVMForRequest(r, "/projects/"+p.ID+"/events?view=project"),
-                        Project: *p,
+                        baseVM:   s.baseVMForRequest(r, "/projects/"+p.ID+"/events?view=project"),
+                        Project:  *p,
                         Outlines: unarchivedOutlines(db.Outlines, id),
                 }
                 return s.renderTemplate("project_main", vm)
@@ -707,7 +717,7 @@ func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
         }
 
         // Native mode: patch only the outline container.
-        s.serveDatastarElementsStream(w, r, resourceKey{kind: "outline", id: id}, "#outline-native", datastar.ElementPatchModeOuter, func() (string, error) {
+        s.serveDatastarElementsStream(w, r, resourceKey{kind: "outline", id: id}, "#outline-native", datastar.ElementPatchModeInner, func() (string, error) {
                 db, err := (store.Store{Dir: s.cfg.Dir}).Load()
                 if err != nil {
                         return "", err
@@ -748,7 +758,7 @@ func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
                         ActorOptionsJSON:    actorOptions,
                 }
                 vm.ActorID = actorID
-                return s.renderTemplate("outline_native", vm)
+                return s.renderTemplate("outline_native_inner", vm)
         })
 }
 
@@ -790,13 +800,13 @@ func (s *Server) handleItemEvents(w http.ResponseWriter, r *http.Request) {
                 }
 
                 vm := itemVM{
-                        baseVM:   s.baseVMForRequest(r, "/items/"+it.ID+"/events?view=item"),
-                        Item:     *it,
-                        AssignedID: assignedID,
+                        baseVM:       s.baseVMForRequest(r, "/items/"+it.ID+"/events?view=item"),
+                        Item:         *it,
+                        AssignedID:   assignedID,
                         ActorOptions: []actorOption(nil),
-                        Comments: comments,
-                        ReplyTo:  "",
-                        Worklog:  worklog,
+                        Comments:     comments,
+                        ReplyTo:      "",
+                        Worklog:      worklog,
 
                         CanEdit:        canEdit,
                         StatusDefs:     statusDefs,
@@ -838,8 +848,8 @@ func (s *Server) handleItemEvents(w http.ResponseWriter, r *http.Request) {
 
 type homeVM struct {
         baseVM
-        Projects  []model.Project
-        Ready     []model.Item
+        Projects []model.Project
+        Ready    []model.Item
 }
 
 func unarchivedProjects(projects []model.Project) []model.Project {
@@ -1101,7 +1111,7 @@ func (s *Server) handleVerifyGet(w http.ResponseWriter, r *http.Request) {
 
 type agendaVM struct {
         baseVM
-        Items     []model.Item
+        Items []model.Item
 }
 
 func (s *Server) handleAgenda(w http.ResponseWriter, r *http.Request) {
@@ -1124,7 +1134,7 @@ func (s *Server) handleAgenda(w http.ResponseWriter, r *http.Request) {
 
 type syncVM struct {
         baseVM
-        Message   string
+        Message string
 }
 
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
@@ -1368,7 +1378,7 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
 
 type projectsVM struct {
         baseVM
-        Projects  []model.Project
+        Projects []model.Project
 }
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
@@ -1387,8 +1397,8 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 
 type projectVM struct {
         baseVM
-        Project   model.Project
-        Outlines  []model.Outline
+        Project  model.Project
+        Outlines []model.Outline
 }
 
 func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
@@ -1416,8 +1426,8 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
         outlines := unarchivedOutlines(db.Outlines, projectID)
 
         vm := projectVM{
-                baseVM:  s.baseVMForRequest(r, "/projects/"+p.ID+"/events?view=project"),
-                Project: *p,
+                baseVM:   s.baseVMForRequest(r, "/projects/"+p.ID+"/events?view=project"),
+                Project:  *p,
                 Outlines: outlines,
         }
         s.writeHTMLTemplate(w, "project.html", vm)
@@ -1425,7 +1435,7 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 
 type outlineVM struct {
         baseVM
-        Outline   model.Outline
+        Outline model.Outline
 
         // Outline component view-model (progressive enhancement).
         UseOutlineComponent bool
@@ -1449,14 +1459,23 @@ type outlineVM struct {
 }
 
 type outlineNativeNode struct {
-        ID         string
-        Title      string
-        StatusID   string
-        StatusLabel string
-        IsEndState bool
-        CanEdit    bool
+        ID            string
+        Title         string
+        StatusID      string
+        StatusLabel   string
+        IsEndState    bool
+        CanEdit       bool
         AssignedLabel string
-        Children   []outlineNativeNode
+
+        Priority bool
+        OnHold   bool
+        DueDate  string
+        DueTime  string
+        SchDate  string
+        SchTime  string
+        Tags     []string
+
+        Children []outlineNativeNode
 }
 
 type actorOption struct {
@@ -1639,15 +1658,38 @@ func buildOutlineNativeNodes(db *store.DB, o model.Outline, actorID string) []ou
                         if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) != "" {
                                 assignedLabel = actorDisplayLabel(db, strings.TrimSpace(*it.AssignedActorID))
                         }
+                        dueDate := ""
+                        dueTime := ""
+                        if it.Due != nil {
+                                dueDate = strings.TrimSpace(it.Due.Date)
+                                if it.Due.Time != nil {
+                                        dueTime = strings.TrimSpace(*it.Due.Time)
+                                }
+                        }
+                        schDate := ""
+                        schTime := ""
+                        if it.Schedule != nil {
+                                schDate = strings.TrimSpace(it.Schedule.Date)
+                                if it.Schedule.Time != nil {
+                                        schTime = strings.TrimSpace(*it.Schedule.Time)
+                                }
+                        }
                         out = append(out, outlineNativeNode{
-                                ID:         it.ID,
-                                Title:      it.Title,
-                                StatusID:   it.StatusID,
-                                StatusLabel: lbl,
-                                IsEndState: statusutil.IsEndState(o, it.StatusID),
-                                CanEdit:    actorID != "" && perm.CanEditItem(db, actorID, it),
+                                ID:            it.ID,
+                                Title:         it.Title,
+                                StatusID:      it.StatusID,
+                                StatusLabel:   lbl,
+                                IsEndState:    statusutil.IsEndState(o, it.StatusID),
+                                CanEdit:       actorID != "" && perm.CanEditItem(db, actorID, it),
                                 AssignedLabel: assignedLabel,
-                                Children:   build(it.ID),
+                                Priority:      it.Priority,
+                                OnHold:        it.OnHold,
+                                DueDate:       dueDate,
+                                DueTime:       dueTime,
+                                SchDate:       schDate,
+                                SchTime:       schTime,
+                                Tags:          it.Tags,
+                                Children:      build(it.ID),
                         })
                 }
                 return out
@@ -2090,6 +2132,156 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                 }
 
                 switch op.Type {
+                case "outline:new_sibling":
+                        var d struct {
+                                Title   string `json:"title"`
+                                AfterID string `json:"afterId"`
+                                // Compatibility aliases.
+                                Text  string `json:"text"`
+                                ForID string `json:"forId"`
+                        }
+                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        title := strings.TrimSpace(d.Title)
+                        if title == "" {
+                                title = strings.TrimSpace(d.Text)
+                        }
+                        afterID := strings.TrimSpace(d.AfterID)
+                        if afterID == "" {
+                                afterID = strings.TrimSpace(d.ForID)
+                        }
+                        if title == "" {
+                                http.Error(w, "missing title", http.StatusBadRequest)
+                                return
+                        }
+
+                        parentPtr := (*string)(nil)
+                        if afterID != "" {
+                                ref, ok := db.FindItem(afterID)
+                                if !ok || ref == nil || ref.Archived || ref.OutlineID != outlineID {
+                                        http.NotFound(w, r)
+                                        return
+                                }
+                                parentPtr = ref.ParentID
+                        }
+                        rank := nextAppendRank(db, outlineID, parentPtr)
+                        if afterID != "" {
+                                if r2, ok := rankAfterSiblingWeb(db, outlineID, parentPtr, afterID); ok {
+                                        rank = r2
+                                }
+                        }
+
+                        statusID := store.FirstStatusID(o.StatusDefs)
+                        if strings.TrimSpace(statusID) == "" {
+                                statusID = "todo"
+                        }
+                        assigned := defaultAssignedActorIDWeb(db, actorID)
+                        itemID := st.NextID(db, "item")
+                        it := model.Item{
+                                ID:                itemID,
+                                ProjectID:         o.ProjectID,
+                                OutlineID:         o.ID,
+                                ParentID:          parentPtr,
+                                Rank:              rank,
+                                Title:             title,
+                                Description:       "",
+                                StatusID:          statusID,
+                                Priority:          false,
+                                OnHold:            false,
+                                Due:               nil,
+                                Schedule:          nil,
+                                LegacyDueAt:       nil,
+                                LegacyScheduledAt: nil,
+                                Tags:              nil,
+                                Archived:          false,
+                                OwnerActorID:      actorID,
+                                AssignedActorID:   assigned,
+                                CreatedBy:         actorID,
+                                CreatedAt:         now,
+                                UpdatedAt:         now,
+                        }
+                        db.Items = append(db.Items, it)
+                        if err := st.AppendEvent(actorID, "item.create", it.ID, it); err != nil {
+                                http.Error(w, err.Error(), http.StatusConflict)
+                                return
+                        }
+                        changed = true
+
+                case "outline:new_child":
+                        var d struct {
+                                Title    string `json:"title"`
+                                ParentID string `json:"parentId"`
+                                // Compatibility aliases.
+                                Text  string `json:"text"`
+                                ForID string `json:"forId"`
+                        }
+                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        title := strings.TrimSpace(d.Title)
+                        if title == "" {
+                                title = strings.TrimSpace(d.Text)
+                        }
+                        pid := strings.TrimSpace(d.ParentID)
+                        if pid == "" {
+                                pid = strings.TrimSpace(d.ForID)
+                        }
+                        if title == "" {
+                                http.Error(w, "missing title", http.StatusBadRequest)
+                                return
+                        }
+                        if pid == "" {
+                                http.Error(w, "missing parentId", http.StatusBadRequest)
+                                return
+                        }
+                        pit, ok := db.FindItem(pid)
+                        if !ok || pit == nil || pit.Archived || pit.OutlineID != outlineID {
+                                http.NotFound(w, r)
+                                return
+                        }
+                        parentPtr := &pid
+
+                        statusID := store.FirstStatusID(o.StatusDefs)
+                        if strings.TrimSpace(statusID) == "" {
+                                statusID = "todo"
+                        }
+                        assigned := defaultAssignedActorIDWeb(db, actorID)
+                        rank := nextAppendRank(db, outlineID, parentPtr)
+
+                        itemID := st.NextID(db, "item")
+                        it := model.Item{
+                                ID:                itemID,
+                                ProjectID:         o.ProjectID,
+                                OutlineID:         o.ID,
+                                ParentID:          parentPtr,
+                                Rank:              rank,
+                                Title:             title,
+                                Description:       "",
+                                StatusID:          statusID,
+                                Priority:          false,
+                                OnHold:            false,
+                                Due:               nil,
+                                Schedule:          nil,
+                                LegacyDueAt:       nil,
+                                LegacyScheduledAt: nil,
+                                Tags:              nil,
+                                Archived:          false,
+                                OwnerActorID:      actorID,
+                                AssignedActorID:   assigned,
+                                CreatedBy:         actorID,
+                                CreatedAt:         now,
+                                UpdatedAt:         now,
+                        }
+                        db.Items = append(db.Items, it)
+                        if err := st.AppendEvent(actorID, "item.create", it.ID, it); err != nil {
+                                http.Error(w, err.Error(), http.StatusConflict)
+                                return
+                        }
+                        changed = true
+
                 case "outline:edit:save":
                         var d struct {
                                 ID      string `json:"id"`
@@ -2123,6 +2315,275 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                                 it.Title = title
                                 it.UpdatedAt = now
                                 if err := st.AppendEvent(actorID, "item.set_title", it.ID, map[string]any{"title": it.Title}); err != nil {
+                                        http.Error(w, err.Error(), http.StatusConflict)
+                                        return
+                                }
+                                changed = true
+                        }
+
+                case "outline:set_description":
+                        var d struct {
+                                ID          string `json:"id"`
+                                Description string `json:"description"`
+                        }
+                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        itemID := strings.TrimSpace(d.ID)
+                        if itemID == "" {
+                                http.Error(w, "missing id", http.StatusBadRequest)
+                                return
+                        }
+                        it, ok := db.FindItem(itemID)
+                        if !ok || it == nil || it.Archived || it.OutlineID != outlineID {
+                                http.NotFound(w, r)
+                                return
+                        }
+                        if !perm.CanEditItem(db, actorID, it) {
+                                http.Error(w, "owner-only", http.StatusForbidden)
+                                return
+                        }
+                        if it.Description != d.Description {
+                                it.Description = d.Description
+                                it.UpdatedAt = now
+                                if err := st.AppendEvent(actorID, "item.set_description", it.ID, map[string]any{"description": it.Description}); err != nil {
+                                        http.Error(w, err.Error(), http.StatusConflict)
+                                        return
+                                }
+                                changed = true
+                        }
+
+                case "outline:toggle_priority":
+                        var d struct {
+                                ID string `json:"id"`
+                        }
+                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        itemID := strings.TrimSpace(d.ID)
+                        if itemID == "" {
+                                http.Error(w, "missing id", http.StatusBadRequest)
+                                return
+                        }
+                        it, ok := db.FindItem(itemID)
+                        if !ok || it == nil || it.Archived || it.OutlineID != outlineID {
+                                http.NotFound(w, r)
+                                return
+                        }
+                        if !perm.CanEditItem(db, actorID, it) {
+                                http.Error(w, "owner-only", http.StatusForbidden)
+                                return
+                        }
+                        it.Priority = !it.Priority
+                        it.UpdatedAt = now
+                        if err := st.AppendEvent(actorID, "item.set_priority", it.ID, map[string]any{"priority": it.Priority}); err != nil {
+                                http.Error(w, err.Error(), http.StatusConflict)
+                                return
+                        }
+                        changed = true
+
+                case "outline:toggle_on_hold":
+                        var d struct {
+                                ID string `json:"id"`
+                        }
+                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        itemID := strings.TrimSpace(d.ID)
+                        if itemID == "" {
+                                http.Error(w, "missing id", http.StatusBadRequest)
+                                return
+                        }
+                        it, ok := db.FindItem(itemID)
+                        if !ok || it == nil || it.Archived || it.OutlineID != outlineID {
+                                http.NotFound(w, r)
+                                return
+                        }
+                        if !perm.CanEditItem(db, actorID, it) {
+                                http.Error(w, "owner-only", http.StatusForbidden)
+                                return
+                        }
+                        it.OnHold = !it.OnHold
+                        it.UpdatedAt = now
+                        if err := st.AppendEvent(actorID, "item.set_on_hold", it.ID, map[string]any{"onHold": it.OnHold}); err != nil {
+                                http.Error(w, err.Error(), http.StatusConflict)
+                                return
+                        }
+                        changed = true
+
+                case "outline:set_due":
+                        var d struct {
+                                ID   string `json:"id"`
+                                Date string `json:"date"`
+                                Time string `json:"time"`
+                        }
+                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        itemID := strings.TrimSpace(d.ID)
+                        if itemID == "" {
+                                http.Error(w, "missing id", http.StatusBadRequest)
+                                return
+                        }
+                        it, ok := db.FindItem(itemID)
+                        if !ok || it == nil || it.Archived || it.OutlineID != outlineID {
+                                http.NotFound(w, r)
+                                return
+                        }
+                        if !perm.CanEditItem(db, actorID, it) {
+                                http.Error(w, "owner-only", http.StatusForbidden)
+                                return
+                        }
+                        dt, err := parseDateTimeWeb(d.Date, d.Time)
+                        if err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        if !sameDateTime(it.Due, dt) {
+                                it.Due = dt
+                                it.UpdatedAt = now
+                                if err := st.AppendEvent(actorID, "item.set_due", it.ID, map[string]any{"due": it.Due}); err != nil {
+                                        http.Error(w, err.Error(), http.StatusConflict)
+                                        return
+                                }
+                                changed = true
+                        }
+
+                case "outline:set_schedule":
+                        var d struct {
+                                ID   string `json:"id"`
+                                Date string `json:"date"`
+                                Time string `json:"time"`
+                        }
+                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        itemID := strings.TrimSpace(d.ID)
+                        if itemID == "" {
+                                http.Error(w, "missing id", http.StatusBadRequest)
+                                return
+                        }
+                        it, ok := db.FindItem(itemID)
+                        if !ok || it == nil || it.Archived || it.OutlineID != outlineID {
+                                http.NotFound(w, r)
+                                return
+                        }
+                        if !perm.CanEditItem(db, actorID, it) {
+                                http.Error(w, "owner-only", http.StatusForbidden)
+                                return
+                        }
+                        dt, err := parseDateTimeWeb(d.Date, d.Time)
+                        if err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        if !sameDateTime(it.Schedule, dt) {
+                                it.Schedule = dt
+                                it.UpdatedAt = now
+                                if err := st.AppendEvent(actorID, "item.set_schedule", it.ID, map[string]any{"schedule": it.Schedule}); err != nil {
+                                        http.Error(w, err.Error(), http.StatusConflict)
+                                        return
+                                }
+                                changed = true
+                        }
+
+                case "outline:set_tags":
+                        var d struct {
+                                ID   string   `json:"id"`
+                                Tags []string `json:"tags"`
+                        }
+                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        itemID := strings.TrimSpace(d.ID)
+                        if itemID == "" {
+                                http.Error(w, "missing id", http.StatusBadRequest)
+                                return
+                        }
+                        it, ok := db.FindItem(itemID)
+                        if !ok || it == nil || it.Archived || it.OutlineID != outlineID {
+                                http.NotFound(w, r)
+                                return
+                        }
+                        if !perm.CanEditItem(db, actorID, it) {
+                                http.Error(w, "owner-only", http.StatusForbidden)
+                                return
+                        }
+                        next := uniqueSortedStringsWeb(normalizeTagsWeb(d.Tags))
+                        cur := uniqueSortedStringsWeb(normalizeTagsWeb(it.Tags))
+                        if equalStrings(cur, next) {
+                                break
+                        }
+                        curSet := map[string]bool{}
+                        nextSet := map[string]bool{}
+                        for _, t := range cur {
+                                curSet[t] = true
+                        }
+                        for _, t := range next {
+                                nextSet[t] = true
+                        }
+                        for _, t := range cur {
+                                if !nextSet[t] {
+                                        it.Tags = removeString(it.Tags, t)
+                                        it.Tags = uniqueSortedStringsWeb(normalizeTagsWeb(it.Tags))
+                                        it.UpdatedAt = now
+                                        if err := st.AppendEvent(actorID, "item.tags_remove", it.ID, map[string]any{"tag": t}); err != nil {
+                                                http.Error(w, err.Error(), http.StatusConflict)
+                                                return
+                                        }
+                                        changed = true
+                                }
+                        }
+                        for _, t := range next {
+                                if !curSet[t] {
+                                        it.Tags = append(it.Tags, t)
+                                        it.Tags = uniqueSortedStringsWeb(normalizeTagsWeb(it.Tags))
+                                        it.UpdatedAt = now
+                                        if err := st.AppendEvent(actorID, "item.tags_add", it.ID, map[string]any{"tag": t}); err != nil {
+                                                http.Error(w, err.Error(), http.StatusConflict)
+                                                return
+                                        }
+                                        changed = true
+                                }
+                        }
+
+                case "outline:archive":
+                        var d struct {
+                                ID       string `json:"id"`
+                                Archived *bool  `json:"archived"`
+                        }
+                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        itemID := strings.TrimSpace(d.ID)
+                        if itemID == "" {
+                                http.Error(w, "missing id", http.StatusBadRequest)
+                                return
+                        }
+                        it, ok := db.FindItem(itemID)
+                        if !ok || it == nil || it.OutlineID != outlineID {
+                                http.NotFound(w, r)
+                                return
+                        }
+                        target := true
+                        if d.Archived != nil {
+                                target = *d.Archived
+                        }
+                        res, err := mutate.SetItemArchived(db, actorID, it.ID, target)
+                        if err != nil {
+                                http.Error(w, err.Error(), http.StatusForbidden)
+                                return
+                        }
+                        if res.Changed {
+                                it.UpdatedAt = now
+                                if err := st.AppendEvent(actorID, "item.archive", it.ID, res.EventPayload); err != nil {
                                         http.Error(w, err.Error(), http.StatusConflict)
                                         return
                                 }
@@ -2303,6 +2764,175 @@ func statusIDFromOutlineToggle(o model.Outline, to string) (string, error) {
         }
         // Fallback: treat as a status id-like string.
         return statusutil.NormalizeStatusID(to)
+}
+
+func defaultAssignedActorIDWeb(db *store.DB, actorID string) *string {
+        actorID = strings.TrimSpace(actorID)
+        if actorID == "" || db == nil {
+                return nil
+        }
+        a, ok := db.FindActor(actorID)
+        if !ok || a == nil {
+                return nil
+        }
+        if a.Kind == model.ActorKindAgent {
+                tmp := actorID
+                return &tmp
+        }
+        return nil
+}
+
+func normalizeTagWeb(tag string) string {
+        tag = strings.TrimSpace(tag)
+        tag = strings.TrimPrefix(tag, "#")
+        return strings.TrimSpace(tag)
+}
+
+func normalizeTagsWeb(tags []string) []string {
+        out := make([]string, 0, len(tags))
+        for _, t := range tags {
+                t = normalizeTagWeb(t)
+                if t != "" {
+                        out = append(out, t)
+                }
+        }
+        return out
+}
+
+func parseTagsInputWeb(raw string) []string {
+        raw = strings.TrimSpace(raw)
+        if raw == "" {
+                return nil
+        }
+        parts := strings.FieldsFunc(raw, func(r rune) bool {
+                switch r {
+                case ' ', '\t', '\n', '\r', ',':
+                        return true
+                default:
+                        return false
+                }
+        })
+        out := make([]string, 0, len(parts))
+        for _, p := range parts {
+                p = normalizeTagWeb(p)
+                if p != "" {
+                        out = append(out, p)
+                }
+        }
+        return out
+}
+
+func uniqueSortedStringsWeb(xs []string) []string {
+        seen := map[string]bool{}
+        out := make([]string, 0, len(xs))
+        for _, x := range xs {
+                x = strings.TrimSpace(x)
+                if x == "" || seen[x] {
+                        continue
+                }
+                seen[x] = true
+                out = append(out, x)
+        }
+        sort.Slice(out, func(i, j int) bool {
+                ai := strings.ToLower(out[i])
+                aj := strings.ToLower(out[j])
+                if ai == aj {
+                        return out[i] < out[j]
+                }
+                return ai < aj
+        })
+        return out
+}
+
+func equalStrings(a, b []string) bool {
+        if len(a) != len(b) {
+                return false
+        }
+        for i := range a {
+                if a[i] != b[i] {
+                        return false
+                }
+        }
+        return true
+}
+
+func removeString(xs []string, s string) []string {
+        s = strings.TrimSpace(s)
+        out := make([]string, 0, len(xs))
+        for _, x := range xs {
+                if strings.TrimSpace(x) == s {
+                        continue
+                }
+                out = append(out, x)
+        }
+        return out
+}
+
+func parseDateTimeWeb(date, timeStr string) (*model.DateTime, error) {
+        date = strings.TrimSpace(date)
+        timeStr = strings.TrimSpace(timeStr)
+        if date == "" {
+                return nil, nil
+        }
+        if _, err := time.Parse("2006-01-02", date); err != nil {
+                return nil, errors.New("invalid date (expected YYYY-MM-DD)")
+        }
+        if timeStr == "" {
+                return &model.DateTime{Date: date, Time: nil}, nil
+        }
+        if _, err := time.Parse("15:04", timeStr); err != nil {
+                return nil, errors.New("invalid time (expected HH:MM, 24h)")
+        }
+        tmp := timeStr
+        return &model.DateTime{Date: date, Time: &tmp}, nil
+}
+
+func sameDateTime(a, b *model.DateTime) bool {
+        if a == nil && b == nil {
+                return true
+        }
+        if a == nil || b == nil {
+                return false
+        }
+        if strings.TrimSpace(a.Date) != strings.TrimSpace(b.Date) {
+                return false
+        }
+        at := ""
+        bt := ""
+        if a.Time != nil {
+                at = strings.TrimSpace(*a.Time)
+        }
+        if b.Time != nil {
+                bt = strings.TrimSpace(*b.Time)
+        }
+        return at == bt
+}
+
+func rankAfterSiblingWeb(db *store.DB, outlineID string, parentPtr *string, afterID string) (string, bool) {
+        afterID = strings.TrimSpace(afterID)
+        if afterID == "" || db == nil {
+                return "", false
+        }
+        sibs := siblingItemsWeb(db, outlineID, parentPtr, "")
+        idx := indexOfItemWeb(sibs, afterID)
+        if idx < 0 {
+                return "", false
+        }
+        lower := strings.TrimSpace(sibs[idx].Rank)
+        upper := ""
+        if idx+1 < len(sibs) {
+                upper = strings.TrimSpace(sibs[idx+1].Rank)
+        }
+        if r, err := store.RankBetween(lower, upper); err == nil && strings.TrimSpace(r) != "" {
+                return r, true
+        }
+        if r, err := store.RankAfter(lower); err == nil && strings.TrimSpace(r) != "" {
+                return r, true
+        }
+        if lower != "" {
+                return lower + "0", true
+        }
+        return "h", true
 }
 
 func applyItemMoveOrReparent(db *store.DB, actorID, itemID, outlineID, parentID, before, after string, now time.Time, st store.Store) error {
@@ -2503,12 +3133,20 @@ func isAncestor(db *store.DB, itemID, ancestorID string) bool {
 
 type itemVM struct {
         baseVM
-        Item      model.Item
-        AssignedID string
+        Item         model.Item
+        AssignedID   string
         ActorOptions []actorOption
-        Comments  []model.Comment
-        ReplyTo   string
-        Worklog   []model.WorklogEntry
+        Comments     []model.Comment
+        ReplyTo      string
+        Worklog      []model.WorklogEntry
+
+        TagsInput         string
+        DueDate           string
+        DueTime           string
+        SchDate           string
+        SchTime           string
+        StatusOptionsJSON template.HTMLAttr
+        ActorOptionsJSON  template.HTMLAttr
 
         CanEdit        bool
         StatusDefs     []model.OutlineStatusDef
@@ -2542,8 +3180,10 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
         actorID := strings.TrimSpace(s.actorForRequest(r))
         canEdit := actorID != "" && perm.CanEditItem(db, actorID, it)
         statusDefs := []model.OutlineStatusDef{}
+        statusOptionsJSON := template.HTMLAttr("[]")
         if o, ok := db.FindOutline(it.OutlineID); ok && o != nil {
                 statusDefs = o.StatusDefs
+                statusOptionsJSON = outlineStatusOptionsJSON(*o)
         }
         replyTo := strings.TrimSpace(r.URL.Query().Get("replyTo"))
         if replyTo != "" {
@@ -2574,17 +3214,52 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
         if it.AssignedActorID != nil {
                 assignedID = strings.TrimSpace(*it.AssignedActorID)
         }
+        tagsInput := ""
+        if len(it.Tags) > 0 {
+                parts := make([]string, 0, len(it.Tags))
+                for _, t := range it.Tags {
+                        t = strings.TrimSpace(t)
+                        if t == "" {
+                                continue
+                        }
+                        parts = append(parts, "#"+t)
+                }
+                tagsInput = strings.Join(parts, " ")
+        }
+        dueDate := ""
+        dueTime := ""
+        if it.Due != nil {
+                dueDate = strings.TrimSpace(it.Due.Date)
+                if it.Due.Time != nil {
+                        dueTime = strings.TrimSpace(*it.Due.Time)
+                }
+        }
+        schDate := ""
+        schTime := ""
+        if it.Schedule != nil {
+                schDate = strings.TrimSpace(it.Schedule.Date)
+                if it.Schedule.Time != nil {
+                        schTime = strings.TrimSpace(*it.Schedule.Time)
+                }
+        }
         vm := itemVM{
-                baseVM:        s.baseVMForRequest(r, "/items/"+it.ID+"/events?view=item"),
-                Item:          *it,
-                AssignedID:    assignedID,
-                Comments:      comments,
-                ReplyTo:       replyTo,
-                Worklog:       worklog,
-                CanEdit:       canEdit,
-                StatusDefs:    statusDefs,
-                ErrorMessage:  errMsg,
-                SuccessMessage: okMsg,
+                baseVM:            s.baseVMForRequest(r, "/items/"+it.ID+"/events?view=item"),
+                Item:              *it,
+                AssignedID:        assignedID,
+                Comments:          comments,
+                ReplyTo:           replyTo,
+                Worklog:           worklog,
+                TagsInput:         tagsInput,
+                DueDate:           dueDate,
+                DueTime:           dueTime,
+                SchDate:           schDate,
+                SchTime:           schTime,
+                StatusOptionsJSON: statusOptionsJSON,
+                ActorOptionsJSON:  actorOptionsJSON(db),
+                CanEdit:           canEdit,
+                StatusDefs:        statusDefs,
+                ErrorMessage:      errMsg,
+                SuccessMessage:    okMsg,
         }
         vm.ActorID = actorID
         vm.ActorOptions = nil
@@ -2644,6 +3319,15 @@ func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {
         description := r.Form.Get("description")
         statusID := strings.TrimSpace(r.Form.Get("status"))
         assignedActorIDRaw := strings.TrimSpace(r.Form.Get("assignedActorId"))
+        action := strings.TrimSpace(r.Form.Get("action"))
+
+        priority := strings.TrimSpace(r.Form.Get("priority")) != ""
+        onHold := strings.TrimSpace(r.Form.Get("onHold")) != ""
+        dueDate := strings.TrimSpace(r.Form.Get("dueDate"))
+        dueTime := strings.TrimSpace(r.Form.Get("dueTime"))
+        schDate := strings.TrimSpace(r.Form.Get("schDate"))
+        schTime := strings.TrimSpace(r.Form.Get("schTime"))
+        tagsRaw := r.Form.Get("tags")
 
         st := store.Store{Dir: s.cfg.Dir}
         db, err := st.Load()
@@ -2667,6 +3351,37 @@ func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {
 
         now := time.Now().UTC()
         changed := false
+
+        if action == "archive" {
+                res, err := mutate.SetItemArchived(db, actorID, it.ID, true)
+                if err != nil {
+                        http.Redirect(w, r, "/items/"+itemID+"?err="+urlQueryEscape(err.Error()), http.StatusSeeOther)
+                        return
+                }
+                if res.Changed {
+                        it.UpdatedAt = now
+                        if err := st.AppendEvent(actorID, "item.archive", it.ID, res.EventPayload); err != nil {
+                                http.Error(w, err.Error(), http.StatusConflict)
+                                return
+                        }
+                        changed = true
+                }
+                if changed {
+                        if err := st.Save(db); err != nil {
+                                http.Error(w, err.Error(), http.StatusConflict)
+                                return
+                        }
+                        if s.autoCommit != nil {
+                                actorLabel := strings.TrimSpace(actorID)
+                                if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                                        actorLabel = strings.TrimSpace(a.Name)
+                                }
+                                s.autoCommit.Notify(actorLabel)
+                        }
+                }
+                http.Redirect(w, r, "/outlines/"+it.OutlineID+"?ok=archived", http.StatusSeeOther)
+                return
+        }
 
         if title != "" && strings.TrimSpace(it.Title) != title {
                 it.Title = title
@@ -2733,6 +3448,93 @@ func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {
                 }
         }
 
+        // Priority.
+        if it.Priority != priority {
+                it.Priority = priority
+                it.UpdatedAt = now
+                if err := st.AppendEvent(actorID, "item.set_priority", it.ID, map[string]any{"priority": it.Priority}); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                changed = true
+        }
+
+        // On-hold.
+        if it.OnHold != onHold {
+                it.OnHold = onHold
+                it.UpdatedAt = now
+                if err := st.AppendEvent(actorID, "item.set_on_hold", it.ID, map[string]any{"onHold": it.OnHold}); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                changed = true
+        }
+
+        // Due / Schedule.
+        if dt, err := parseDateTimeWeb(dueDate, dueTime); err != nil {
+                http.Redirect(w, r, "/items/"+itemID+"?err="+urlQueryEscape(err.Error()), http.StatusSeeOther)
+                return
+        } else if !sameDateTime(it.Due, dt) {
+                it.Due = dt
+                it.UpdatedAt = now
+                if err := st.AppendEvent(actorID, "item.set_due", it.ID, map[string]any{"due": it.Due}); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                changed = true
+        }
+        if dt, err := parseDateTimeWeb(schDate, schTime); err != nil {
+                http.Redirect(w, r, "/items/"+itemID+"?err="+urlQueryEscape(err.Error()), http.StatusSeeOther)
+                return
+        } else if !sameDateTime(it.Schedule, dt) {
+                it.Schedule = dt
+                it.UpdatedAt = now
+                if err := st.AppendEvent(actorID, "item.set_schedule", it.ID, map[string]any{"schedule": it.Schedule}); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                changed = true
+        }
+
+        // Tags.
+        nextTags := parseTagsInputWeb(tagsRaw)
+        nextTags = uniqueSortedStringsWeb(normalizeTagsWeb(nextTags))
+        curTags := uniqueSortedStringsWeb(normalizeTagsWeb(it.Tags))
+        if !equalStrings(curTags, nextTags) {
+                curSet := map[string]bool{}
+                nextSet := map[string]bool{}
+                for _, t := range curTags {
+                        curSet[t] = true
+                }
+                for _, t := range nextTags {
+                        nextSet[t] = true
+                }
+                for _, t := range curTags {
+                        if !nextSet[t] {
+                                it.Tags = removeString(it.Tags, t)
+                                it.Tags = uniqueSortedStringsWeb(normalizeTagsWeb(it.Tags))
+                                it.UpdatedAt = now
+                                if err := st.AppendEvent(actorID, "item.tags_remove", it.ID, map[string]any{"tag": t}); err != nil {
+                                        http.Error(w, err.Error(), http.StatusConflict)
+                                        return
+                                }
+                                changed = true
+                        }
+                }
+                for _, t := range nextTags {
+                        if !curSet[t] {
+                                it.Tags = append(it.Tags, t)
+                                it.Tags = uniqueSortedStringsWeb(normalizeTagsWeb(it.Tags))
+                                it.UpdatedAt = now
+                                if err := st.AppendEvent(actorID, "item.tags_add", it.ID, map[string]any{"tag": t}); err != nil {
+                                        http.Error(w, err.Error(), http.StatusConflict)
+                                        return
+                                }
+                                changed = true
+                        }
+                }
+        }
+
         if changed {
                 if err := st.Save(db); err != nil {
                         http.Error(w, err.Error(), http.StatusConflict)
@@ -2748,6 +3550,54 @@ func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {
         }
 
         http.Redirect(w, r, "/items/"+itemID+"?ok=updated", http.StatusSeeOther)
+}
+
+type itemMetaResp struct {
+        ID          string          `json:"id"`
+        Title       string          `json:"title"`
+        Description string          `json:"description"`
+        Priority    bool            `json:"priority"`
+        OnHold      bool            `json:"onHold"`
+        Due         *model.DateTime `json:"due,omitempty"`
+        Schedule    *model.DateTime `json:"schedule,omitempty"`
+        Tags        []string        `json:"tags,omitempty"`
+        CanEdit     bool            `json:"canEdit"`
+}
+
+func (s *Server) handleItemMeta(w http.ResponseWriter, r *http.Request) {
+        itemID := strings.TrimSpace(r.PathValue("itemId"))
+        if itemID == "" {
+                http.Error(w, "missing item id", http.StatusBadRequest)
+                return
+        }
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+
+        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        it, ok := db.FindItem(itemID)
+        if !ok || it == nil {
+                http.NotFound(w, r)
+                return
+        }
+        canEdit := false
+        if actorID != "" {
+                canEdit = perm.CanEditItem(db, actorID, it)
+        }
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        _ = json.NewEncoder(w).Encode(itemMetaResp{
+                ID:          it.ID,
+                Title:       it.Title,
+                Description: it.Description,
+                Priority:    it.Priority,
+                OnHold:      it.OnHold,
+                Due:         it.Due,
+                Schedule:    it.Schedule,
+                Tags:        it.Tags,
+                CanEdit:     canEdit,
+        })
 }
 
 func urlQueryEscape(s string) string {

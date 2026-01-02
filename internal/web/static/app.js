@@ -18,6 +18,33 @@
 
   const activeIsTyping = () => isTypingTarget(document.activeElement);
 
+  const escapeHTML = (s) => {
+    s = String(s ?? '');
+    return s
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  };
+
+  const escapeAttr = (s) => escapeHTML(s);
+
+  const uniqueSortedStrings = (xs) => {
+    const seen = new Set();
+    const out = [];
+    for (const x0 of (Array.isArray(xs) ? xs : [])) {
+      const x = String(x0 || '').trim();
+      if (!x) continue;
+      const key = x.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(x);
+    }
+    out.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()) || a.localeCompare(b));
+    return out;
+  };
+
   const eventTouchesOutlineComponent = (ev) => {
     if (!ev || typeof ev.composedPath !== 'function') return false;
     const path = ev.composedPath();
@@ -72,6 +99,7 @@
   };
 
   const nativeOutlineRoot = () => document.getElementById('outline-native');
+  const itemPageRoot = () => document.getElementById('item-native');
 
   const nativeRowFromEvent = (ev) => {
     const t = ev && ev.target;
@@ -91,7 +119,15 @@
   const nativeRows = () => {
     const root = nativeOutlineRoot();
     if (!root) return [];
-    return Array.from(root.querySelectorAll('[data-outline-row]'));
+    return Array.from(root.querySelectorAll('[data-outline-row]')).filter((el) => {
+      if (!el) return false;
+      // Filter out rows hidden by collapsed parents.
+      try {
+        return el.getClientRects().length > 0;
+      } catch (_) {
+        return true;
+      }
+    });
   };
 
   const focusNativeRowById = (id) => {
@@ -220,6 +256,17 @@
     }
   };
 
+  const parseTagOptions = (root) => {
+    const raw = (root && root.dataset ? root.dataset.tagOptions : '') || '';
+    if (!raw.trim()) return [];
+    try {
+      const xs = JSON.parse(raw);
+      return Array.isArray(xs) ? xs : [];
+    } catch (_) {
+      return [];
+    }
+  };
+
   const parseActorOptions = (root) => {
     const raw = (root && root.dataset ? root.dataset.actorOptions : '') || '';
     if (!raw.trim()) return [];
@@ -231,9 +278,199 @@
     }
   };
 
+  const tagsPicker = {
+    open: false,
+    rowId: '',
+    rootEl: null,
+    options: [],
+    selected: new Set(),
+    idx: 0,
+  };
+
+  const ensureTagsModal = () => {
+    let el = document.getElementById('native-tags-modal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'native-tags-modal';
+    el.style.position = 'fixed';
+    el.style.left = '0';
+    el.style.top = '0';
+    el.style.right = '0';
+    el.style.bottom = '0';
+    el.style.background = 'rgba(0,0,0,.25)';
+    el.style.display = 'none';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+    el.style.zIndex = '9998';
+    el.innerHTML = `
+      <div style="max-width:560px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+          <strong>Tags</strong>
+          <span class="dim" style="font-size:12px;">Esc to close</span>
+        </div>
+        <div id="native-tags-list" style="margin-top:10px;max-height:40vh;overflow:auto;"></div>
+        <div style="margin-top:10px;display:flex;gap:10px;align-items:center;">
+          <input id="native-tags-new" placeholder="Add tag (without #)" style="flex:1;">
+          <button type="button" id="native-tags-add">Add</button>
+        </div>
+        <div class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Space to toggle · Enter to save</div>
+      </div>
+    `;
+    document.body.appendChild(el);
+    el.addEventListener('click', (ev) => {
+      if (ev.target === el) closeTagsPicker(false);
+    });
+    const addBtn = el.querySelector('#native-tags-add');
+    addBtn && addBtn.addEventListener('click', () => addNewTagFromInput());
+    return el;
+  };
+
+  const normalizeTag = (t) => String(t || '').trim().replace(/^#+/, '').trim();
+
+  const sortedTagList = (set) => {
+    const xs = Array.from(set || []);
+    xs.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()) || a.localeCompare(b));
+    return xs;
+  };
+
+  const renderTagsPicker = () => {
+    const modal = ensureTagsModal();
+    const list = modal.querySelector('#native-tags-list');
+    if (!list) return;
+    const opts = tagsPicker.options || [];
+    list.innerHTML = '';
+    const ul = document.createElement('ul');
+    ul.style.listStyle = 'none';
+    ul.style.padding = '0';
+    ul.style.margin = '0';
+    opts.forEach((o, i) => {
+      const tag = normalizeTag(o);
+      if (!tag) return;
+      const li = document.createElement('li');
+      li.style.display = 'flex';
+      li.style.gap = '10px';
+      li.style.alignItems = 'center';
+      li.style.padding = '6px 8px';
+      li.style.borderRadius = '8px';
+      li.style.cursor = 'pointer';
+      if (i === tagsPicker.idx) {
+        li.style.background = 'color-mix(in oklab, Canvas, CanvasText 10%)';
+      }
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = tagsPicker.selected.has(tag.toLowerCase());
+      cb.tabIndex = -1;
+      const label = document.createElement('span');
+      label.textContent = '#' + tag;
+      li.appendChild(cb);
+      li.appendChild(label);
+      li.addEventListener('click', () => {
+        tagsPicker.idx = i;
+        toggleSelectedTag();
+      });
+      ul.appendChild(li);
+    });
+    list.appendChild(ul);
+  };
+
+  const openTagsPicker = async (row) => {
+    const root = nativeOutlineRootOrFromRow(row);
+    if (!root || !row) return;
+    const id = (row.dataset.id || '').trim();
+    if (!id) return;
+    if ((row.dataset.canEdit || '') !== 'true') {
+      setOutlineStatus('Error: owner-only');
+      setTimeout(() => setOutlineStatus(''), 1200);
+      return;
+    }
+    let meta;
+    try {
+      meta = await fetchItemMeta(id);
+    } catch (err) {
+      setOutlineStatus('Error: ' + (err && err.message ? err.message : 'load failed'));
+      return;
+    }
+
+    const all = parseTagOptions(root).map(normalizeTag).filter(Boolean);
+    const selected = new Set();
+    const cur = (meta && Array.isArray(meta.tags)) ? meta.tags : [];
+    cur.map(normalizeTag).filter(Boolean).forEach((t) => selected.add(t.toLowerCase()));
+
+    tagsPicker.open = true;
+    tagsPicker.rowId = id;
+    tagsPicker.rootEl = root;
+    tagsPicker.selected = selected;
+    tagsPicker.options = uniqueSortedStrings(all);
+    tagsPicker.idx = 0;
+
+    const modal = ensureTagsModal();
+    modal.style.display = 'flex';
+    renderTagsPicker();
+    const input = modal.querySelector('#native-tags-new');
+    input && input.focus();
+  };
+
+  const closeTagsPicker = (save) => {
+    const modal = document.getElementById('native-tags-modal');
+    if (save && tagsPicker.open) {
+      const id = tagsPicker.rowId;
+      const root = tagsPicker.rootEl;
+      const row = root ? root.querySelector('[data-outline-row][data-id="' + CSS.escape(id) + '"]') : null;
+      const tags = sortedTagList(new Set(Array.from(tagsPicker.selected).map((x) => x.toLowerCase())));
+      // Recover original casing from options when possible.
+      const casing = new Map();
+      for (const t of tagsPicker.options || []) {
+        const nt = normalizeTag(t);
+        if (!nt) continue;
+        casing.set(nt.toLowerCase(), nt);
+      }
+      const out = tags.map((t) => casing.get(t) || t);
+      if (row) nativeRowUpdateTags(row, out);
+      if (root) {
+        outlineApply(root, 'outline:set_tags', { id, tags: out }).catch((err) => {
+          setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+        });
+      }
+    }
+    tagsPicker.open = false;
+    tagsPicker.rowId = '';
+    tagsPicker.rootEl = null;
+    tagsPicker.options = [];
+    tagsPicker.selected = new Set();
+    tagsPicker.idx = 0;
+    if (modal) modal.style.display = 'none';
+  };
+
+  const toggleSelectedTag = () => {
+    if (!tagsPicker.open) return;
+    const opt = tagsPicker.options[tagsPicker.idx];
+    const tag = normalizeTag(opt);
+    if (!tag) return;
+    const key = tag.toLowerCase();
+    if (tagsPicker.selected.has(key)) tagsPicker.selected.delete(key);
+    else tagsPicker.selected.add(key);
+    renderTagsPicker();
+  };
+
+  const addNewTagFromInput = () => {
+    if (!tagsPicker.open) return;
+    const modal = document.getElementById('native-tags-modal');
+    const input = modal ? modal.querySelector('#native-tags-new') : null;
+    const raw = input ? input.value : '';
+    const tag = normalizeTag(raw);
+    if (!tag) return;
+    const key = tag.toLowerCase();
+    tagsPicker.selected.add(key);
+    const exists = (tagsPicker.options || []).some((t) => normalizeTag(t).toLowerCase() === key);
+    if (!exists) tagsPicker.options = uniqueSortedStrings([...tagsPicker.options, tag]);
+    if (input) input.value = '';
+    renderTagsPicker();
+  };
+
   const assigneePicker = {
     open: false,
     rowId: '',
+    rootEl: null,
     options: [],
     idx: 0,
   };
@@ -315,6 +552,7 @@
     if (!opts.length) return;
     assigneePicker.open = true;
     assigneePicker.rowId = id;
+    assigneePicker.rootEl = root;
     assigneePicker.options = opts;
     assigneePicker.idx = 0;
 
@@ -326,6 +564,7 @@
   const closeAssigneePicker = () => {
     assigneePicker.open = false;
     assigneePicker.rowId = '';
+    assigneePicker.rootEl = null;
     assigneePicker.options = [];
     assigneePicker.idx = 0;
     const modal = document.getElementById('native-assignee-modal');
@@ -355,15 +594,19 @@
     const sel = assigneePicker.options[assigneePicker.idx];
     if (!sel) return;
     const id = assigneePicker.rowId;
-    const root = nativeOutlineRoot();
+    const root = assigneePicker.rootEl || nativeOutlineRoot();
     if (!root || !id) return;
 
     const row = root.querySelector('[data-outline-row][data-id="' + CSS.escape(id) + '"]');
     if (row) nativeRowUpdateAssignee(row, sel);
-    closeAssigneePicker();
-    focusNativeRowById(id);
-
     const assignedActorId = (sel.id || '').trim();
+    if (root && root.id === 'item-native') {
+      const selEl = document.getElementById('assignedActorId');
+      if (selEl) selEl.value = assignedActorId;
+    }
+    closeAssigneePicker();
+    if (nativeOutlineRoot()) focusNativeRowById(id);
+
     outlineApply(root, 'outline:set_assign', { id, assignedActorId }).catch((err) => {
       setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
     });
@@ -372,6 +615,7 @@
   const statusPicker = {
     open: false,
     rowId: '',
+    rootEl: null,
     options: [],
     idx: 0,
     note: '',
@@ -482,6 +726,7 @@
 
     statusPicker.open = true;
     statusPicker.rowId = id;
+    statusPicker.rootEl = root;
     statusPicker.options = opts;
     statusPicker.note = '';
     statusPicker.mode = 'list';
@@ -499,6 +744,7 @@
   const closeStatusPicker = () => {
     statusPicker.open = false;
     statusPicker.rowId = '';
+    statusPicker.rootEl = null;
     statusPicker.options = [];
     statusPicker.idx = 0;
     statusPicker.note = '';
@@ -552,17 +798,713 @@
       statusPicker.note = note;
     }
 
-    const root = nativeOutlineRoot();
+    const root = statusPicker.rootEl || nativeOutlineRoot();
     if (!root) return;
     const row = root.querySelector('[data-outline-row][data-id="' + CSS.escape(id) + '"]');
     if (row) nativeRowUpdateStatus(row, sel);
+    if (root && root.id === 'item-native') {
+      const selEl = document.getElementById('status');
+      if (selEl) selEl.value = statusID;
+    }
     closeStatusPicker();
-    focusNativeRowById(id);
+    if (nativeOutlineRoot()) focusNativeRowById(id);
 
     // Persist async; SSE will converge state.
     outlineApply(root, 'outline:toggle', { id, to: statusID, note }).catch((err) => {
       setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
     });
+  };
+
+  const cycleStatus = (row, delta) => {
+    const root = nativeOutlineRootOrFromRow(row);
+    if (!root || !row) return;
+    const id = (row.dataset.id || '').trim();
+    if (!id) return;
+    if ((row.dataset.canEdit || '') !== 'true') {
+      setOutlineStatus('Error: owner-only');
+      setTimeout(() => setOutlineStatus(''), 1200);
+      return;
+    }
+    const opts = parseStatusOptions(root);
+    if (!opts.length) return;
+    const cur = (row.dataset.status || '').trim();
+    let idx = opts.findIndex((o) => (o.id || '').trim() === cur);
+    if (idx < 0) idx = 0;
+    let next = (idx + delta) % opts.length;
+    if (next < 0) next += opts.length;
+    const sel = opts[next];
+    if (!sel) return;
+    statusPicker.open = true;
+    statusPicker.rowId = id;
+    statusPicker.rootEl = root;
+    statusPicker.options = opts;
+    statusPicker.idx = next;
+    statusPicker.note = '';
+    statusPicker.mode = sel.requiresNote ? 'note' : 'list';
+    const modal = ensureStatusModal();
+    modal.style.display = 'flex';
+    renderStatusPicker();
+    if (!sel.requiresNote) pickSelectedStatus();
+  };
+
+  const prompt = {
+    open: false,
+    kind: '',
+    rowId: '',
+    outlineId: '',
+    submit: null,
+  };
+
+  const ensurePromptModal = () => {
+    let el = document.getElementById('native-prompt-modal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'native-prompt-modal';
+    el.style.position = 'fixed';
+    el.style.left = '0';
+    el.style.top = '0';
+    el.style.right = '0';
+    el.style.bottom = '0';
+    el.style.background = 'rgba(0,0,0,.25)';
+    el.style.display = 'none';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+    el.style.zIndex = '9998';
+    el.innerHTML = `
+      <div id="native-prompt-box" style="max-width:640px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+          <strong id="native-prompt-title"></strong>
+          <span class="dim" id="native-prompt-hint" style="font-size:12px;">Esc to close · Ctrl+Enter to save</span>
+        </div>
+        <div id="native-prompt-body" style="margin-top:10px;"></div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;align-items:center;">
+          <button type="button" id="native-prompt-cancel">Cancel</button>
+          <button type="button" id="native-prompt-save">Save</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(el);
+    el.addEventListener('click', (ev) => {
+      if (ev.target === el) closePrompt();
+    });
+    const cancel = el.querySelector('#native-prompt-cancel');
+    cancel && cancel.addEventListener('click', () => closePrompt());
+    const save = el.querySelector('#native-prompt-save');
+    save && save.addEventListener('click', () => submitPrompt());
+    return el;
+  };
+
+  const openPrompt = ({ title, hint, bodyHTML, onSubmit, focusSelector }) => {
+    const modal = ensurePromptModal();
+    modal.querySelector('#native-prompt-title').textContent = title || '';
+    modal.querySelector('#native-prompt-hint').textContent = hint || 'Esc to close · Ctrl+Enter to save';
+    modal.querySelector('#native-prompt-body').innerHTML = bodyHTML || '';
+    prompt.open = true;
+    prompt.submit = onSubmit || null;
+    modal.style.display = 'flex';
+    const focus = focusSelector ? modal.querySelector(focusSelector) : null;
+    focus && focus.focus();
+  };
+
+  const closePrompt = () => {
+    prompt.open = false;
+    prompt.kind = '';
+    prompt.rowId = '';
+    prompt.outlineId = '';
+    prompt.submit = null;
+    const modal = document.getElementById('native-prompt-modal');
+    if (modal) modal.style.display = 'none';
+  };
+
+  const submitPrompt = () => {
+    if (!prompt.open) return;
+    if (typeof prompt.submit === 'function') prompt.submit();
+  };
+
+  const fetchItemMeta = async (itemId) => {
+    const id = (itemId || '').trim();
+    if (!id) throw new Error('missing id');
+    const res = await fetch('/items/' + encodeURIComponent(id) + '/meta', {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  };
+
+  const rowSetFlag = (row, flagClass, on) => {
+    if (!row) return;
+    const existing = row.querySelector('.' + flagClass);
+    if (on) {
+      if (existing) return;
+      const s = document.createElement('span');
+      s.className = 'outline-flag ' + flagClass;
+      s.textContent = flagClass.includes('priority') ? 'P' : 'H';
+      row.appendChild(s);
+    } else {
+      existing && existing.remove();
+    }
+  };
+
+  const nativeRowUpdatePriority = (row, on) => {
+    if (!row || !row.dataset) return;
+    row.dataset.priority = on ? 'true' : 'false';
+    rowSetFlag(row, 'outline-flag--priority', on);
+  };
+
+  const nativeRowUpdateOnHold = (row, on) => {
+    if (!row || !row.dataset) return;
+    row.dataset.onHold = on ? 'true' : 'false';
+    rowSetFlag(row, 'outline-flag--hold', on);
+  };
+
+  const nativeRowUpdateTags = (row, tags) => {
+    if (!row) return;
+    const raw = Array.isArray(tags) ? tags : [];
+    const seen = new Set();
+    const next = [];
+    for (const t0 of raw) {
+      const t = String(t0 || '').trim().replace(/^#+/, '');
+      if (!t) continue;
+      const key = t.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      next.push(t);
+    }
+    next.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()) || a.localeCompare(b));
+    let el = row.querySelector('.outline-tags');
+    if (!next.length) {
+      el && el.remove();
+      return;
+    }
+    if (!el) {
+      el = document.createElement('span');
+      el.className = 'outline-tags dim';
+      row.appendChild(el);
+    }
+    el.textContent = next.map((t) => '#' + t).join(' ');
+  };
+
+  const nativeRowUpdateDateTime = (row, kind, dt) => {
+    if (!row || !row.dataset) return;
+    const keyDate = kind === 'due' ? 'dueDate' : 'schDate';
+    const keyTime = kind === 'due' ? 'dueTime' : 'schTime';
+    row.dataset[keyDate] = dt && dt.date ? dt.date : '';
+    row.dataset[keyTime] = dt && dt.time ? dt.time : '';
+    const cls = kind === 'due' ? 'outline-meta--due' : 'outline-meta--sch';
+    let el = row.querySelector('.' + cls);
+    if (!dt || !dt.date) {
+      el && el.remove();
+      return;
+    }
+    const label = (kind === 'due' ? 'Due ' : 'Sch ') + dt.date + (dt.time ? ' ' + dt.time : '');
+    if (!el) {
+      el = document.createElement('span');
+      el.className = 'outline-meta dim ' + cls;
+      row.appendChild(el);
+    }
+    el.textContent = label;
+  };
+
+  const parseTagsText = (txt) => {
+    const raw = (txt || '').trim();
+    if (!raw) return [];
+    const parts = raw.split(/[\s,]+/g).map((x) => x.trim()).filter(Boolean);
+    return parts.map((x) => x.replace(/^#+/, '').trim()).filter(Boolean);
+  };
+
+  const openStatusPickerForItemPage = (root) => {
+    if (!root) return;
+    const id = (root.dataset.itemId || '').trim();
+    if (!id) return;
+    if ((root.dataset.canEdit || '') !== 'true') return;
+    const opts = parseStatusOptions(root);
+    if (!opts.length) return;
+    let cur = '';
+    const sel = document.getElementById('status');
+    if (sel && sel.value != null) cur = String(sel.value || '').trim();
+    let idx = opts.findIndex((o) => (o.id || '').trim() === cur);
+    if (idx < 0) idx = 0;
+    statusPicker.open = true;
+    statusPicker.rowId = id;
+    statusPicker.rootEl = root;
+    statusPicker.options = opts;
+    statusPicker.note = '';
+    statusPicker.mode = 'list';
+    statusPicker.idx = idx;
+    const modal = ensureStatusModal();
+    modal.style.display = 'flex';
+    renderStatusPicker();
+  };
+
+  const openAssigneePickerForItemPage = (root) => {
+    if (!root) return;
+    const id = (root.dataset.itemId || '').trim();
+    if (!id) return;
+    if ((root.dataset.canEdit || '') !== 'true') return;
+    const opts = [{ id: '', label: '(unassigned)' }, ...parseActorOptions(root)];
+    if (!opts.length) return;
+    let cur = '';
+    const sel = document.getElementById('assignedActorId');
+    if (sel && sel.value != null) cur = String(sel.value || '').trim();
+    let idx = opts.findIndex((o) => (o.id || '').trim() === cur);
+    if (idx < 0) idx = 0;
+    assigneePicker.open = true;
+    assigneePicker.rowId = id;
+    assigneePicker.rootEl = root;
+    assigneePicker.options = opts;
+    assigneePicker.idx = idx;
+    const modal = ensureAssigneeModal();
+    modal.style.display = 'flex';
+    renderAssigneePicker();
+  };
+
+  const openItemTitlePrompt = (root) => {
+    if (!root) return;
+    const id = (root.dataset.itemId || '').trim();
+    if (!id) return;
+    if ((root.dataset.canEdit || '') !== 'true') return;
+    let cur = '';
+    const titleInput = document.getElementById('title');
+    if (titleInput && titleInput.value != null) cur = String(titleInput.value || '');
+    if (!cur) {
+      const h1 = document.querySelector('#clarity-main h1');
+      if (h1) cur = h1.textContent || '';
+    }
+    openPrompt({
+      title: 'Edit title',
+      hint: 'Esc to close · Enter to save',
+      bodyHTML: `<input id="native-prompt-input" placeholder="Title" style="width:100%;" value="${escapeAttr(cur)}">`,
+      focusSelector: '#native-prompt-input',
+      onSubmit: () => {
+        const modal = document.getElementById('native-prompt-modal');
+        const input = modal ? modal.querySelector('#native-prompt-input') : null;
+        const newText = input ? (input.value || '').trim() : '';
+        if (!newText) return;
+        if (titleInput) titleInput.value = newText;
+        const h1 = document.querySelector('#clarity-main h1');
+        if (h1) h1.textContent = newText;
+        closePrompt();
+        outlineApply(root, 'outline:edit:save', { id, newText }).catch(() => {});
+      },
+    });
+  };
+
+  const openItemDescriptionPrompt = async (root) => {
+    if (!root) return;
+    const id = (root.dataset.itemId || '').trim();
+    if (!id) return;
+    if ((root.dataset.canEdit || '') !== 'true') return;
+    let meta;
+    try {
+      meta = await fetchItemMeta(id);
+    } catch (_) {
+      return;
+    }
+    const initial = (meta && typeof meta.description === 'string') ? meta.description : '';
+    openPrompt({
+      title: 'Edit description',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `<textarea id="native-prompt-textarea" rows="10" style="width:100%;font-family:var(--mono);">${escapeHTML(initial)}</textarea>`,
+      focusSelector: '#native-prompt-textarea',
+      onSubmit: () => {
+        const modal = document.getElementById('native-prompt-modal');
+        const ta = modal ? modal.querySelector('#native-prompt-textarea') : null;
+        const description = ta ? (ta.value || '') : '';
+        const desc = document.getElementById('description');
+        if (desc) desc.value = description;
+        closePrompt();
+        outlineApply(root, 'outline:set_description', { id, description }).catch(() => {});
+      },
+    });
+  };
+
+  const openItemTagsPrompt = async (root) => {
+    if (!root) return;
+    const id = (root.dataset.itemId || '').trim();
+    if (!id) return;
+    if ((root.dataset.canEdit || '') !== 'true') return;
+    let meta;
+    try {
+      meta = await fetchItemMeta(id);
+    } catch (_) {
+      return;
+    }
+    const tags = (meta && Array.isArray(meta.tags)) ? meta.tags : [];
+    const initial = tags.map((t) => '#' + t).join(' ');
+    openPrompt({
+      title: 'Edit tags',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `<input id="native-prompt-tags" placeholder="#tag1 #tag2" style="width:100%;" value="${escapeAttr(initial)}">`,
+      focusSelector: '#native-prompt-tags',
+      onSubmit: () => {
+        const modal = document.getElementById('native-prompt-modal');
+        const input = modal ? modal.querySelector('#native-prompt-tags') : null;
+        const txt = input ? (input.value || '') : '';
+        const tags = parseTagsText(txt);
+        const t = document.getElementById('tags');
+        if (t) t.value = tags.map((x) => '#' + x).join(' ');
+        closePrompt();
+        outlineApply(root, 'outline:set_tags', { id, tags }).catch(() => {});
+      },
+    });
+  };
+
+  const openItemDatePrompt = (root, kind) => {
+    if (!root) return;
+    const id = (root.dataset.itemId || '').trim();
+    if (!id) return;
+    if ((root.dataset.canEdit || '') !== 'true') return;
+    const dateName = kind === 'due' ? 'dueDate' : 'schDate';
+    const timeName = kind === 'due' ? 'dueTime' : 'schTime';
+    const dateEl = document.querySelector('input[type="date"][name="' + dateName + '"]');
+    const timeEl = document.querySelector('input[type="time"][name="' + timeName + '"]');
+    const curDate = dateEl ? (dateEl.value || '').trim() : '';
+    const curTime = timeEl ? (timeEl.value || '').trim() : '';
+    openPrompt({
+      title: kind === 'due' ? 'Set due' : 'Set schedule',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <label class="dim" style="font-size:12px;">Date <input id="native-prompt-date" type="date" value="${escapeAttr(curDate)}"></label>
+          <label class="dim" style="font-size:12px;">Time <input id="native-prompt-time" type="time" value="${escapeAttr(curTime)}"></label>
+          <button type="button" id="native-prompt-clear">Clear</button>
+        </div>
+      `,
+      focusSelector: '#native-prompt-date',
+      onSubmit: () => {
+        const modal = document.getElementById('native-prompt-modal');
+        const di = modal ? modal.querySelector('#native-prompt-date') : null;
+        const ti = modal ? modal.querySelector('#native-prompt-time') : null;
+        const date = di ? (di.value || '').trim() : '';
+        const time = ti ? (ti.value || '').trim() : '';
+        if (dateEl) dateEl.value = date;
+        if (timeEl) timeEl.value = time;
+        closePrompt();
+        const typ = kind === 'due' ? 'outline:set_due' : 'outline:set_schedule';
+        outlineApply(root, typ, { id, date, time }).catch(() => {});
+      },
+    });
+    const modal = document.getElementById('native-prompt-modal');
+    const clear = modal ? modal.querySelector('#native-prompt-clear') : null;
+    clear && clear.addEventListener('click', () => {
+      const di = modal.querySelector('#native-prompt-date');
+      const ti = modal.querySelector('#native-prompt-time');
+      if (di) di.value = '';
+      if (ti) ti.value = '';
+      submitPrompt();
+    }, { once: true });
+  };
+
+  const openItemTextPostPrompt = (root, kind) => {
+    if (!root) return;
+    const id = (root.dataset.itemId || '').trim();
+    if (!id) return;
+    openPrompt({
+      title: kind === 'comment' ? 'Add comment' : 'Log work',
+      hint: 'Esc to close · Ctrl+Enter to post',
+      bodyHTML: `<textarea id="native-prompt-textarea" rows="8" style="width:100%;font-family:var(--mono);" placeholder="${kind === 'comment' ? 'Write a comment…' : 'Log work…'}"></textarea>`,
+      focusSelector: '#native-prompt-textarea',
+      onSubmit: () => {
+        const modal = document.getElementById('native-prompt-modal');
+        const ta = modal ? modal.querySelector('#native-prompt-textarea') : null;
+        const body = ta ? (ta.value || '').trim() : '';
+        if (!body) return;
+        closePrompt();
+        const path = kind === 'comment' ? '/items/' + encodeURIComponent(id) + '/comments' : '/items/' + encodeURIComponent(id) + '/worklog';
+        fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ body }).toString(),
+        }).catch(() => {});
+      },
+    });
+  };
+
+  const openNewItemPrompt = (mode, row) => {
+    const root = nativeOutlineRootOrFromRow(row);
+    if (!root) return;
+    const outlineId = (root.dataset.outlineId || '').trim();
+    if (!outlineId) return;
+    const refId = row ? (row.dataset.id || '').trim() : '';
+    openPrompt({
+      title: mode === 'child' ? 'New child' : 'New sibling',
+      hint: 'Esc to close · Enter to create',
+      bodyHTML: `<input id="native-prompt-input" placeholder="Title" style="width:100%;">`,
+      focusSelector: '#native-prompt-input',
+      onSubmit: () => {
+        const modal = document.getElementById('native-prompt-modal');
+        const input = modal ? modal.querySelector('#native-prompt-input') : null;
+        const title = input ? (input.value || '').trim() : '';
+        if (!title) return;
+        closePrompt();
+        const typ = mode === 'child' ? 'outline:new_child' : 'outline:new_sibling';
+        const detail = mode === 'child' ? { title, parentId: refId } : { title, afterId: refId };
+        outlineApply(root, typ, detail).catch((err) => {
+          setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+        });
+      },
+    });
+  };
+
+  const openEditDescriptionPrompt = async (row) => {
+    const root = nativeOutlineRootOrFromRow(row);
+    if (!root || !row) return;
+    const id = (row.dataset.id || '').trim();
+    if (!id) return;
+    if ((row.dataset.canEdit || '') !== 'true') {
+      setOutlineStatus('Error: owner-only');
+      setTimeout(() => setOutlineStatus(''), 1200);
+      return;
+    }
+    let meta;
+    try {
+      meta = await fetchItemMeta(id);
+    } catch (err) {
+      setOutlineStatus('Error: ' + (err && err.message ? err.message : 'load failed'));
+      return;
+    }
+    const initial = (meta && typeof meta.description === 'string') ? meta.description : '';
+    openPrompt({
+      title: 'Edit description',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `<textarea id="native-prompt-textarea" rows="10" style="width:100%;font-family:var(--mono);">${escapeHTML(initial)}</textarea>`,
+      focusSelector: '#native-prompt-textarea',
+      onSubmit: () => {
+        const modal = document.getElementById('native-prompt-modal');
+        const ta = modal ? modal.querySelector('#native-prompt-textarea') : null;
+        const description = ta ? (ta.value || '') : '';
+        closePrompt();
+        outlineApply(root, 'outline:set_description', { id, description }).catch((err) => {
+          setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+        });
+      },
+    });
+  };
+
+  const openTagsPrompt = async (row) => {
+    const root = nativeOutlineRootOrFromRow(row);
+    if (!root || !row) return;
+    const id = (row.dataset.id || '').trim();
+    if (!id) return;
+    if ((row.dataset.canEdit || '') !== 'true') {
+      setOutlineStatus('Error: owner-only');
+      setTimeout(() => setOutlineStatus(''), 1200);
+      return;
+    }
+    let meta;
+    try {
+      meta = await fetchItemMeta(id);
+    } catch (err) {
+      setOutlineStatus('Error: ' + (err && err.message ? err.message : 'load failed'));
+      return;
+    }
+    const tags = (meta && Array.isArray(meta.tags)) ? meta.tags : [];
+    const initial = tags.map((t) => '#' + t).join(' ');
+    openPrompt({
+      title: 'Edit tags',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `<input id="native-prompt-tags" placeholder="#tag1 #tag2" style="width:100%;" value="${escapeAttr(initial)}">`,
+      focusSelector: '#native-prompt-tags',
+      onSubmit: () => {
+        const modal = document.getElementById('native-prompt-modal');
+        const input = modal ? modal.querySelector('#native-prompt-tags') : null;
+        const txt = input ? (input.value || '') : '';
+        const tags = parseTagsText(txt);
+        nativeRowUpdateTags(row, tags);
+        closePrompt();
+        outlineApply(root, 'outline:set_tags', { id, tags }).catch((err) => {
+          setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+        });
+      },
+    });
+  };
+
+  const openDatePrompt = (row, kind) => {
+    const root = nativeOutlineRootOrFromRow(row);
+    if (!root || !row) return;
+    const id = (row.dataset.id || '').trim();
+    if (!id) return;
+    if ((row.dataset.canEdit || '') !== 'true') {
+      setOutlineStatus('Error: owner-only');
+      setTimeout(() => setOutlineStatus(''), 1200);
+      return;
+    }
+    const dateKey = kind === 'due' ? 'dueDate' : 'schDate';
+    const timeKey = kind === 'due' ? 'dueTime' : 'schTime';
+    const curDate = (row.dataset[dateKey] || '').trim();
+    const curTime = (row.dataset[timeKey] || '').trim();
+    openPrompt({
+      title: kind === 'due' ? 'Set due' : 'Set schedule',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <label class="dim" style="font-size:12px;">Date <input id="native-prompt-date" type="date" value="${escapeAttr(curDate)}"></label>
+          <label class="dim" style="font-size:12px;">Time <input id="native-prompt-time" type="time" value="${escapeAttr(curTime)}"></label>
+          <button type="button" id="native-prompt-clear">Clear</button>
+        </div>
+      `,
+      focusSelector: '#native-prompt-date',
+      onSubmit: () => {
+        const modal = document.getElementById('native-prompt-modal');
+        const di = modal ? modal.querySelector('#native-prompt-date') : null;
+        const ti = modal ? modal.querySelector('#native-prompt-time') : null;
+        const date = di ? (di.value || '').trim() : '';
+        const time = ti ? (ti.value || '').trim() : '';
+        nativeRowUpdateDateTime(row, kind, date ? { date, time: time || null } : null);
+        closePrompt();
+        const typ = kind === 'due' ? 'outline:set_due' : 'outline:set_schedule';
+        outlineApply(root, typ, { id, date, time }).catch((err) => {
+          setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+        });
+      },
+    });
+    const modal = document.getElementById('native-prompt-modal');
+    const clear = modal ? modal.querySelector('#native-prompt-clear') : null;
+    clear && clear.addEventListener('click', () => {
+      const di = modal.querySelector('#native-prompt-date');
+      const ti = modal.querySelector('#native-prompt-time');
+      if (di) di.value = '';
+      if (ti) ti.value = '';
+      submitPrompt();
+    }, { once: true });
+  };
+
+  const openTextPostPrompt = (row, kind) => {
+    const root = nativeOutlineRootOrFromRow(row);
+    if (!root || !row) return;
+    const id = (row.dataset.id || '').trim();
+    if (!id) return;
+    openPrompt({
+      title: kind === 'comment' ? 'Add comment' : 'Log work',
+      hint: 'Esc to close · Ctrl+Enter to post',
+      bodyHTML: `<textarea id="native-prompt-textarea" rows="8" style="width:100%;font-family:var(--mono);" placeholder="${kind === 'comment' ? 'Write a comment…' : 'Log work…'}"></textarea>`,
+      focusSelector: '#native-prompt-textarea',
+      onSubmit: () => {
+        const modal = document.getElementById('native-prompt-modal');
+        const ta = modal ? modal.querySelector('#native-prompt-textarea') : null;
+        const body = ta ? (ta.value || '').trim() : '';
+        if (!body) return;
+        closePrompt();
+        const path = kind === 'comment' ? '/items/' + encodeURIComponent(id) + '/comments' : '/items/' + encodeURIComponent(id) + '/worklog';
+        fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ body }).toString(),
+        }).catch((err) => {
+          setOutlineStatus('Error: ' + (err && err.message ? err.message : 'post failed'));
+        });
+      },
+    });
+  };
+
+  const openArchivePrompt = (row) => {
+    const root = nativeOutlineRootOrFromRow(row);
+    if (!root || !row) return;
+    const id = (row.dataset.id || '').trim();
+    if (!id) return;
+    if ((row.dataset.canEdit || '') !== 'true') {
+      setOutlineStatus('Error: owner-only');
+      setTimeout(() => setOutlineStatus(''), 1200);
+      return;
+    }
+    openPrompt({
+      title: 'Archive item',
+      hint: 'Esc to cancel · Enter to archive',
+      bodyHTML: `<div>Archive <code>${escapeHTML(id)}</code>?</div>`,
+      focusSelector: '#native-prompt-save',
+      onSubmit: () => {
+        closePrompt();
+        outlineApply(root, 'outline:archive', { id }).then(() => {
+          const li = nativeLiFromRow(row);
+          li && li.remove();
+        }).catch((err) => {
+          setOutlineStatus('Error: ' + (err && err.message ? err.message : 'archive failed'));
+        });
+      },
+    });
+  };
+
+  const outlineCollapseKey = (outlineId) => 'clarity:outline:' + outlineId + ':collapsed';
+
+  const loadCollapsedSet = (root) => {
+    const outlineId = (root && root.dataset ? root.dataset.outlineId : '') || '';
+    if (!outlineId) return new Set();
+    try {
+      const raw = localStorage.getItem(outlineCollapseKey(outlineId));
+      const xs = raw ? JSON.parse(raw) : [];
+      return new Set(Array.isArray(xs) ? xs : []);
+    } catch (_) {
+      return new Set();
+    }
+  };
+
+  const saveCollapsedSet = (root, set) => {
+    const outlineId = (root && root.dataset ? root.dataset.outlineId : '') || '';
+    if (!outlineId) return;
+    try {
+      localStorage.setItem(outlineCollapseKey(outlineId), JSON.stringify(Array.from(set)));
+    } catch (_) {}
+  };
+
+  const applyCollapsed = (root, set) => {
+    if (!root) return;
+    root.querySelectorAll('li[data-node-id]').forEach((li) => {
+      const id = (li.dataset.nodeId || '').trim();
+      const ul = li.querySelector(':scope > ul.outline-children');
+      if (!ul) return;
+      const collapsed = set.has(id);
+      ul.style.display = collapsed ? 'none' : '';
+      const row = li.querySelector(':scope > [data-outline-row]');
+      const caret = row ? row.querySelector('.outline-caret') : null;
+      if (caret) {
+        caret.textContent = collapsed ? '▸' : '▾';
+        caret.classList.remove('outline-caret--none');
+      }
+    });
+    // Mark carets for nodes without children.
+    root.querySelectorAll('[data-outline-row]').forEach((row) => {
+      const li = nativeLiFromRow(row);
+      if (!li) return;
+      const ul = li.querySelector(':scope > ul.outline-children');
+      const caret = row.querySelector('.outline-caret');
+      if (!caret) return;
+      if (!ul) {
+        caret.textContent = '';
+        caret.classList.add('outline-caret--none');
+      }
+    });
+  };
+
+  const toggleCollapseRow = (row) => {
+    const root = nativeOutlineRootOrFromRow(row);
+    const li = nativeLiFromRow(row);
+    if (!root || !li || !li.dataset) return;
+    const id = (li.dataset.nodeId || '').trim();
+    if (!id) return;
+    const set = loadCollapsedSet(root);
+    if (set.has(id)) set.delete(id);
+    else set.add(id);
+    saveCollapsedSet(root, set);
+    applyCollapsed(root, set);
+  };
+
+  const toggleCollapseAll = (root) => {
+    if (!root) return;
+    const ids = [];
+    root.querySelectorAll('li[data-node-id]').forEach((li) => {
+      const id = (li.dataset.nodeId || '').trim();
+      const ul = li.querySelector(':scope > ul.outline-children');
+      if (id && ul) ids.push(id);
+    });
+    const set = loadCollapsedSet(root);
+    const anyExpanded = ids.some((id) => !set.has(id));
+    const next = new Set();
+    if (anyExpanded) {
+      ids.forEach((id) => next.add(id));
+    }
+    saveCollapsedSet(root, next);
+    applyCollapsed(root, next);
   };
 
   const nativeReorder = (row, dir) => {
@@ -671,7 +1613,7 @@
       flushOutlineMoves(outlineEl).catch((err) => {
         setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
       });
-    }, 450);
+    }, 1500);
     outlineMoveBufferByEl.set(outlineEl, buf);
   };
 
@@ -847,6 +1789,10 @@
       state.restoreTimer = null;
       if (activeIsTyping()) return;
       restoreFocus();
+      const native = nativeOutlineRoot();
+      if (native) {
+        applyCollapsed(native, loadCollapsedSet(native));
+      }
     }, 50);
   };
 
@@ -870,6 +1816,18 @@
     bodyObs.observe(document.documentElement || document.body, { subtree: true, childList: true });
   } catch (_) {}
   scheduleRestoreFocus();
+
+  // Toggle collapse by clicking the caret.
+  document.addEventListener('click', (ev) => {
+    const t = ev && ev.target;
+    if (!t || typeof t.closest !== 'function') return;
+    const caret = t.closest('.outline-caret');
+    if (!caret) return;
+    const row = caret.closest('[data-outline-row]');
+    if (!row) return;
+    ev.preventDefault();
+    toggleCollapseRow(row);
+  }, { capture: true });
 
   // Outline component events (delegated so it survives Datastar morphs).
   document.addEventListener('focusin', (ev) => {
@@ -1025,6 +1983,79 @@
     return true;
   };
 
+  const handleTagsPickerKeydown = (ev) => {
+    if (!tagsPicker.open) return false;
+    const k = (ev.key || '').toLowerCase();
+    const modal = document.getElementById('native-tags-modal');
+    const input = modal ? modal.querySelector('#native-tags-new') : null;
+    const inInput = input && ev.target === input;
+
+    if (k === 'escape') {
+      ev.preventDefault();
+      closeTagsPicker(false);
+      return true;
+    }
+    if (ev.ctrlKey && k === 'enter') {
+      ev.preventDefault();
+      closeTagsPicker(true);
+      return true;
+    }
+    if (k === 'enter') {
+      ev.preventDefault();
+      if (inInput) {
+        addNewTagFromInput();
+      } else {
+        closeTagsPicker(true);
+      }
+      return true;
+    }
+    if (k === ' ') {
+      ev.preventDefault();
+      toggleSelectedTag();
+      return true;
+    }
+    if (k === 'arrowdown' || k === 'down' || k === 'j' || (ev.ctrlKey && k === 'n')) {
+      ev.preventDefault();
+      tagsPicker.idx = Math.min((tagsPicker.options.length || 1) - 1, tagsPicker.idx + 1);
+      renderTagsPicker();
+      return true;
+    }
+    if (k === 'arrowup' || k === 'up' || k === 'k' || (ev.ctrlKey && k === 'p')) {
+      ev.preventDefault();
+      tagsPicker.idx = Math.max(0, tagsPicker.idx - 1);
+      renderTagsPicker();
+      return true;
+    }
+
+    // When modal is open, swallow other keys to avoid triggering app navigation.
+    return true;
+  };
+
+  const handlePromptKeydown = (ev) => {
+    if (!prompt.open) return false;
+    const k = (ev.key || '').toLowerCase();
+    if (k === 'escape') {
+      ev.preventDefault();
+      closePrompt();
+      return true;
+    }
+    if (ev.ctrlKey && k === 'enter') {
+      ev.preventDefault();
+      submitPrompt();
+      return true;
+    }
+    if (k === 'enter') {
+      const tag = (ev.target && ev.target.tagName ? ev.target.tagName.toLowerCase() : '');
+      if (tag && tag !== 'textarea') {
+        ev.preventDefault();
+        submitPrompt();
+        return true;
+      }
+    }
+    // When modal is open, swallow other keys to avoid triggering app navigation.
+    return true;
+  };
+
   const handleNativeOutlineKeydown = (ev, key, nativeRow) => {
     if (!nativeRow) return false;
     // Native outline-specific shortcuts.
@@ -1085,6 +2116,101 @@
       openStatusPicker(nativeRow);
       return true;
     }
+    if (ev.shiftKey && (key === 'arrowright' || key === 'right')) {
+      ev.preventDefault();
+      cycleStatus(nativeRow, +1);
+      return true;
+    }
+    if (ev.shiftKey && (key === 'arrowleft' || key === 'left')) {
+      ev.preventDefault();
+      cycleStatus(nativeRow, -1);
+      return true;
+    }
+    if (key === 'n' && !ev.shiftKey) {
+      ev.preventDefault();
+      openNewItemPrompt('sibling', nativeRow);
+      return true;
+    }
+    if (key === 'n' && ev.shiftKey) {
+      ev.preventDefault();
+      openNewItemPrompt('child', nativeRow);
+      return true;
+    }
+    if (key === 'p') {
+      ev.preventDefault();
+      if ((nativeRow.dataset.canEdit || '') !== 'true') {
+        setOutlineStatus('Error: owner-only');
+        setTimeout(() => setOutlineStatus(''), 1200);
+        return true;
+      }
+      const on = (nativeRow.dataset.priority || '') !== 'true';
+      nativeRowUpdatePriority(nativeRow, on);
+      const root = nativeOutlineRootOrFromRow(nativeRow);
+      outlineApply(root, 'outline:toggle_priority', { id: nativeRow.dataset.id }).catch((err) => {
+        setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+      });
+      return true;
+    }
+    if (key === 'o') {
+      ev.preventDefault();
+      if ((nativeRow.dataset.canEdit || '') !== 'true') {
+        setOutlineStatus('Error: owner-only');
+        setTimeout(() => setOutlineStatus(''), 1200);
+        return true;
+      }
+      const on = (nativeRow.dataset.onHold || '') !== 'true';
+      nativeRowUpdateOnHold(nativeRow, on);
+      const root = nativeOutlineRootOrFromRow(nativeRow);
+      outlineApply(root, 'outline:toggle_on_hold', { id: nativeRow.dataset.id }).catch((err) => {
+        setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+      });
+      return true;
+    }
+    if (key === 't') {
+      ev.preventDefault();
+      openTagsPicker(nativeRow);
+      return true;
+    }
+    if (key === 'd' && !ev.shiftKey) {
+      ev.preventDefault();
+      openDatePrompt(nativeRow, 'due');
+      return true;
+    }
+    if (key === 's' && !ev.shiftKey) {
+      ev.preventDefault();
+      openDatePrompt(nativeRow, 'schedule');
+      return true;
+    }
+    if (key === 'c' && ev.shiftKey) {
+      ev.preventDefault();
+      openTextPostPrompt(nativeRow, 'comment');
+      return true;
+    }
+    if (key === 'w') {
+      ev.preventDefault();
+      openTextPostPrompt(nativeRow, 'worklog');
+      return true;
+    }
+    if (key === 'd' && ev.shiftKey) {
+      ev.preventDefault();
+      openEditDescriptionPrompt(nativeRow);
+      return true;
+    }
+    if (key === 'r') {
+      ev.preventDefault();
+      openArchivePrompt(nativeRow);
+      return true;
+    }
+    if (key === 'z' && !ev.shiftKey) {
+      ev.preventDefault();
+      toggleCollapseRow(nativeRow);
+      return true;
+    }
+    if (key === 'z' && ev.shiftKey) {
+      ev.preventDefault();
+      toggleCollapseAll(nativeOutlineRootOrFromRow(nativeRow));
+      return true;
+    }
     if (key === 'a') {
       ev.preventDefault();
       openAssigneePicker(nativeRow);
@@ -1133,9 +2259,82 @@
     return false;
   };
 
+  const handleItemPageKeydown = (ev, key) => {
+    const root = itemPageRoot();
+    if (!root) return false;
+
+    const itemId = (root.dataset.itemId || '').trim();
+    if (!itemId) return false;
+
+    if (key === 'e') {
+      ev.preventDefault();
+      openItemTitlePrompt(root);
+      return true;
+    }
+    if (key === 'd' && ev.shiftKey) {
+      ev.preventDefault();
+      openItemDescriptionPrompt(root);
+      return true;
+    }
+    if (key === ' ' || key === 'spacebar') {
+      ev.preventDefault();
+      openStatusPickerForItemPage(root);
+      return true;
+    }
+    if (key === 'a') {
+      ev.preventDefault();
+      openAssigneePickerForItemPage(root);
+      return true;
+    }
+    if (key === 't') {
+      ev.preventDefault();
+      openItemTagsPrompt(root);
+      return true;
+    }
+    if (key === 'p') {
+      ev.preventDefault();
+      if ((root.dataset.canEdit || '') !== 'true') return true;
+      const cb = document.querySelector('input[type="checkbox"][name="priority"]');
+      if (cb) cb.checked = !cb.checked;
+      outlineApply(root, 'outline:toggle_priority', { id: itemId }).catch(() => {});
+      return true;
+    }
+    if (key === 'o') {
+      ev.preventDefault();
+      if ((root.dataset.canEdit || '') !== 'true') return true;
+      const cb = document.querySelector('input[type="checkbox"][name="onHold"]');
+      if (cb) cb.checked = !cb.checked;
+      outlineApply(root, 'outline:toggle_on_hold', { id: itemId }).catch(() => {});
+      return true;
+    }
+    if (key === 'd' && !ev.shiftKey) {
+      ev.preventDefault();
+      openItemDatePrompt(root, 'due');
+      return true;
+    }
+    if (key === 's' && !ev.shiftKey) {
+      ev.preventDefault();
+      openItemDatePrompt(root, 'schedule');
+      return true;
+    }
+    if (key === 'c' && ev.shiftKey) {
+      ev.preventDefault();
+      openItemTextPostPrompt(root, 'comment');
+      return true;
+    }
+    if (key === 'w') {
+      ev.preventDefault();
+      openItemTextPostPrompt(root, 'worklog');
+      return true;
+    }
+    return false;
+  };
+
   const handleKeydown = (ev) => {
     if (ev.defaultPrevented) return;
     if (ev.metaKey) return;
+    if (handleTagsPickerKeydown(ev)) return;
+    if (handlePromptKeydown(ev)) return;
     if (handleAssigneePickerKeydown(ev)) return;
     if (handleStatusPickerKeydown(ev)) return;
     if (isTypingTarget(ev.target)) return;
@@ -1171,6 +2370,8 @@
 
     const inOutline = eventTouchesOutlineComponent(ev);
     if (inOutline) return;
+
+    if (handleItemPageKeydown(ev, key)) return;
 
     const nativeRow = nativeRowFromEvent(ev);
     if (handleNativeOutlineKeydown(ev, key, nativeRow)) return;

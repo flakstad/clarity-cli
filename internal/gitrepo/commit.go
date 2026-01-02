@@ -160,6 +160,8 @@ func stageWorkspaceCanonical(ctx context.Context, workspaceDir string, repoRoot 
         addIfExists("events")
         addIfExists(filepath.Join("meta", "workspace.json"))
         addIfExists("resources")
+        // Workspace-scoped ignore rules (important for keeping derived state out of Git status).
+        addIfExists(".gitignore")
 
         if len(targets) == 0 {
                 return false, nil
