@@ -7,6 +7,7 @@ import (
         "errors"
         "fmt"
         "html/template"
+        "io"
         "net/http"
         "net/url"
         "os"
@@ -432,6 +433,16 @@ func (s *Server) renderTemplate(name string, data any) (string, error) {
         return b.String(), nil
 }
 
+func (s *Server) writeHTMLTemplate(w http.ResponseWriter, name string, data any) {
+        html, err := s.renderTemplate(name, data)
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        w.Header().Set("Content-Type", "text/html; charset=utf-8")
+        _, _ = io.WriteString(w, html)
+}
+
 func (s *Server) serveDatastarStream(w http.ResponseWriter, r *http.Request, key resourceKey, renderMain func() (string, error)) {
         sse := datastar.NewSSE(w, r)
 
@@ -729,8 +740,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
         actorID := s.actorForRequest(r)
         ready := readyItems(db)
 
-        w.Header().Set("Content-Type", "text/html; charset=utf-8")
-        if err := s.tmpl.ExecuteTemplate(w, "home.html", homeVM{
+        s.writeHTMLTemplate(w, "home.html", homeVM{
                 Now:       time.Now().Format(time.RFC3339),
                 Workspace: s.cfg.Workspace,
                 Dir:       s.cfg.Dir,
@@ -741,10 +751,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
                 Projects:  unarchivedProjects(db.Projects),
                 Ready:     ready,
                 StreamURL: "/events?view=home",
-        }); err != nil {
-                http.Error(w, err.Error(), http.StatusInternalServerError)
-                return
-        }
+        })
 }
 
 type loginVM struct {
@@ -981,18 +988,14 @@ func (s *Server) handleAgenda(w http.ResponseWriter, r *http.Request) {
         actorID := strings.TrimSpace(s.actorForRequest(r))
         items := agendaItems(db, actorID)
 
-        w.Header().Set("Content-Type", "text/html; charset=utf-8")
-        if err := s.tmpl.ExecuteTemplate(w, "agenda.html", agendaVM{
+        s.writeHTMLTemplate(w, "agenda.html", agendaVM{
                 Now:       time.Now().Format(time.RFC3339),
                 Workspace: s.cfg.Workspace,
                 Dir:       s.cfg.Dir,
                 ActorID:   actorID,
                 Items:     items,
                 StreamURL: "/events?view=agenda",
-        }); err != nil {
-                http.Error(w, err.Error(), http.StatusInternalServerError)
-                return
-        }
+        })
 }
 
 type syncVM struct {
@@ -1012,8 +1015,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
         st, _ := gitrepo.GetStatus(ctx, s.cfg.Dir)
         msg := strings.TrimSpace(r.URL.Query().Get("msg"))
 
-        w.Header().Set("Content-Type", "text/html; charset=utf-8")
-        if err := s.tmpl.ExecuteTemplate(w, "sync.html", syncVM{
+        s.writeHTMLTemplate(w, "sync.html", syncVM{
                 Now:       time.Now().Format(time.RFC3339),
                 Workspace: s.cfg.Workspace,
                 Dir:       s.cfg.Dir,
@@ -1021,10 +1023,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
                 Git:       st,
                 Message:   msg,
                 StreamURL: "/events?view=sync",
-        }); err != nil {
-                http.Error(w, err.Error(), http.StatusInternalServerError)
-                return
-        }
+        })
 }
 
 func (s *Server) handleSyncInit(w http.ResponseWriter, r *http.Request) {
@@ -1272,17 +1271,13 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        w.Header().Set("Content-Type", "text/html; charset=utf-8")
-        if err := s.tmpl.ExecuteTemplate(w, "projects.html", projectsVM{
+        s.writeHTMLTemplate(w, "projects.html", projectsVM{
                 Now:       time.Now().Format(time.RFC3339),
                 Workspace: s.cfg.Workspace,
                 Dir:       s.cfg.Dir,
                 Projects:  unarchivedProjects(db.Projects),
                 StreamURL: "/events?view=projects",
-        }); err != nil {
-                http.Error(w, err.Error(), http.StatusInternalServerError)
-                return
-        }
+        })
 }
 
 type projectVM struct {
@@ -1318,18 +1313,14 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 
         outlines := unarchivedOutlines(db.Outlines, projectID)
 
-        w.Header().Set("Content-Type", "text/html; charset=utf-8")
-        if err := s.tmpl.ExecuteTemplate(w, "project.html", projectVM{
+        s.writeHTMLTemplate(w, "project.html", projectVM{
                 Now:       time.Now().Format(time.RFC3339),
                 Workspace: s.cfg.Workspace,
                 Dir:       s.cfg.Dir,
                 Project:   *p,
                 Outlines:  outlines,
                 StreamURL: "/projects/" + p.ID + "/events?view=project",
-        }); err != nil {
-                http.Error(w, err.Error(), http.StatusInternalServerError)
-                return
-        }
+        })
 }
 
 type outlineVM struct {
@@ -1385,8 +1376,7 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
         useComponent := strings.TrimSpace(s.cfg.ComponentsDir) != ""
         itemsJSON, statusJSON, assigneesJSON, tagsJSON := outlineComponentPayload(db, *o, actorID)
 
-        w.Header().Set("Content-Type", "text/html; charset=utf-8")
-        if err := s.tmpl.ExecuteTemplate(w, "outline.html", outlineVM{
+        s.writeHTMLTemplate(w, "outline.html", outlineVM{
                 Now:                 time.Now().Format(time.RFC3339),
                 Workspace:           s.cfg.Workspace,
                 Dir:                 s.cfg.Dir,
@@ -1400,10 +1390,7 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
                 AssigneesJSON:       assigneesJSON,
                 TagsJSON:            tagsJSON,
                 Items:               items,
-        }); err != nil {
-                http.Error(w, err.Error(), http.StatusInternalServerError)
-                return
-        }
+        })
 }
 
 func (s *Server) handleOutlineItemCreate(w http.ResponseWriter, r *http.Request) {
@@ -2184,8 +2171,7 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 }
         }
 
-        w.Header().Set("Content-Type", "text/html; charset=utf-8")
-        if err := s.tmpl.ExecuteTemplate(w, "item.html", itemVM{
+        s.writeHTMLTemplate(w, "item.html", itemVM{
                 Now:            time.Now().Format(time.RFC3339),
                 Workspace:      s.cfg.Workspace,
                 Dir:            s.cfg.Dir,
@@ -2200,10 +2186,7 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 StatusDefs:     statusDefs,
                 ErrorMessage:   errMsg,
                 SuccessMessage: okMsg,
-        }); err != nil {
-                http.Error(w, err.Error(), http.StatusInternalServerError)
-                return
-        }
+        })
 }
 
 func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,7 @@ import (
         "context"
         "encoding/json"
         "fmt"
+        "path/filepath"
         "sort"
         "strings"
 )
@@ -28,8 +29,31 @@ func StagedEventSummary(ctx context.Context, workspaceDir string, maxEvents int)
                 maxEvents = 25
         }
 
+        workspaceDir = filepath.Clean(workspaceDir)
+        repoRoot := filepath.Clean(st.Root)
+
+        // Normalize symlinks to avoid "outside repository" errors when the repo root is
+        // canonicalized but workspaceDir isn't (common on macOS with /var -> /private/var).
+        if v, err := filepath.EvalSymlinks(workspaceDir); err == nil {
+                workspaceDir = v
+        }
+        if v, err := filepath.EvalSymlinks(repoRoot); err == nil {
+                repoRoot = v
+        }
+
+        rel, err := filepath.Rel(repoRoot, workspaceDir)
+        if err != nil {
+                return "", nil, err
+        }
+        rel = filepath.Clean(rel)
+
+        pathspec := "events/*.jsonl"
+        if rel != "." {
+                pathspec = filepath.ToSlash(filepath.Join(rel, "events", "*.jsonl"))
+        }
+
         // We only care about added JSONL lines (new events) in staged diff.
-        diff, err := runGit(ctx, st.Root, "diff", "--cached", "--unified=0", "--no-color", "--", "events/*.jsonl")
+        diff, err := runGit(ctx, st.Root, "diff", "--cached", "--unified=0", "--no-color", "--", pathspec)
         if err != nil {
                 return "", nil, err
         }
