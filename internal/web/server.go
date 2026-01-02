@@ -5,6 +5,7 @@ import (
         "embed"
         "encoding/json"
         "errors"
+        "fmt"
         "html/template"
         "net/http"
         "net/url"
@@ -13,6 +14,7 @@ import (
         "sort"
         "strconv"
         "strings"
+        "sync"
         "time"
 
         "clarity-cli/internal/gitrepo"
@@ -46,6 +48,7 @@ type Server struct {
         tmpl *template.Template
 
         autoCommit *gitrepo.DebouncedCommitter
+        bc         *resourceBroadcaster
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -84,6 +87,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
                         AutoPullRebase: gitrepo.AutoPullRebaseEnabled(),
                 })
         }
+        srv.bc = newResourceBroadcaster(cfg.Dir)
+        go srv.bc.watchLoop()
         return srv, nil
 }
 
@@ -92,7 +97,10 @@ func (s *Server) Addr() string { return s.cfg.Addr }
 func (s *Server) Handler() http.Handler {
         mux := http.NewServeMux()
         mux.HandleFunc("GET /health", s.handleHealth)
-        mux.HandleFunc("GET /events", s.handleEvents)
+        mux.HandleFunc("GET /events", s.handleWorkspaceEvents)
+        mux.HandleFunc("GET /projects/{projectId}/events", s.handleProjectEvents)
+        mux.HandleFunc("GET /outlines/{outlineId}/events", s.handleOutlineEvents)
+        mux.HandleFunc("GET /items/{itemId}/events", s.handleItemEvents)
         mux.HandleFunc("GET /static/datastar.js", s.handleDatastarJS)
         mux.HandleFunc("GET /static/outline.js", s.handleOutlineJS)
         mux.HandleFunc("GET /", s.handleHome)
@@ -153,7 +161,87 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
         _, _ = w.Write([]byte("ok\n"))
 }
 
-func (s *Server) workspaceFingerprint() string {
+type resourceKey struct {
+        kind string
+        id   string
+}
+
+func (k resourceKey) String() string {
+        kind := strings.TrimSpace(k.kind)
+        id := strings.TrimSpace(k.id)
+        if id == "" {
+                return kind
+        }
+        return kind + ":" + id
+}
+
+type resourceHub struct {
+        mu   sync.Mutex
+        subs map[chan struct{}]struct{}
+}
+
+func newResourceHub() *resourceHub {
+        return &resourceHub{subs: map[chan struct{}]struct{}{}}
+}
+
+func (h *resourceHub) subscribe() (ch chan struct{}, cancel func()) {
+        ch = make(chan struct{}, 8)
+        h.mu.Lock()
+        h.subs[ch] = struct{}{}
+        h.mu.Unlock()
+        return ch, func() {
+                h.mu.Lock()
+                delete(h.subs, ch)
+                h.mu.Unlock()
+                close(ch)
+        }
+}
+
+func (h *resourceHub) broadcast() {
+        h.mu.Lock()
+        for ch := range h.subs {
+                select {
+                case ch <- struct{}{}:
+                default:
+                }
+        }
+        h.mu.Unlock()
+}
+
+type resourceBroadcaster struct {
+        dir string
+
+        mu      sync.Mutex
+        hubs    map[string]*resourceHub
+        fp      string
+        seen    map[string]struct{}
+        seenLRU []string
+}
+
+func newResourceBroadcaster(dir string) *resourceBroadcaster {
+        return &resourceBroadcaster{
+                dir:  filepath.Clean(strings.TrimSpace(dir)),
+                hubs: map[string]*resourceHub{},
+                seen: map[string]struct{}{},
+        }
+}
+
+func (b *resourceBroadcaster) hubFor(key resourceKey) *resourceHub {
+        k := key.String()
+        if k == "" {
+                k = "workspace"
+        }
+        b.mu.Lock()
+        h := b.hubs[k]
+        if h == nil {
+                h = newResourceHub()
+                b.hubs[k] = h
+        }
+        b.mu.Unlock()
+        return h
+}
+
+func (b *resourceBroadcaster) fingerprint() string {
         // Keep this cheap: only look at canonical content roots.
         type stamp struct {
                 modNano int64
@@ -184,7 +272,7 @@ func (s *Server) workspaceFingerprint() string {
                 }
         }
 
-        root := filepath.Clean(s.cfg.Dir)
+        root := filepath.Clean(b.dir)
         checkDir(filepath.Join(root, "events"))
         checkPath(filepath.Join(root, "meta", "workspace.json"))
 
@@ -194,20 +282,165 @@ func (s *Server) workspaceFingerprint() string {
         return strconv.FormatInt(max.modNano, 10) + ":" + strconv.FormatInt(max.size, 10)
 }
 
-func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+func (b *resourceBroadcaster) currentFingerprint() string {
+        b.mu.Lock()
+        defer b.mu.Unlock()
+        return b.fp
+}
+
+func (b *resourceBroadcaster) noteSeen(eventID string) bool {
+        eventID = strings.TrimSpace(eventID)
+        if eventID == "" {
+                return false
+        }
+        b.mu.Lock()
+        defer b.mu.Unlock()
+        if _, ok := b.seen[eventID]; ok {
+                return false
+        }
+        b.seen[eventID] = struct{}{}
+        b.seenLRU = append(b.seenLRU, eventID)
+        const capEvents = 1000
+        if len(b.seenLRU) > capEvents {
+                evict := b.seenLRU[:len(b.seenLRU)-capEvents]
+                b.seenLRU = b.seenLRU[len(b.seenLRU)-capEvents:]
+                for _, id := range evict {
+                        delete(b.seen, id)
+                }
+        }
+        return true
+}
+
+func (b *resourceBroadcaster) setFingerprint(fp string) {
+        b.mu.Lock()
+        b.fp = fp
+        b.mu.Unlock()
+}
+
+func (b *resourceBroadcaster) watchLoop() {
+        lastFP := ""
+        t := time.NewTicker(1 * time.Second)
+        defer t.Stop()
+
+        for range t.C {
+                fp := strings.TrimSpace(b.fingerprint())
+                if fp == "" {
+                        continue
+                }
+                if lastFP == "" {
+                        lastFP = fp
+                        b.setFingerprint(fp)
+                        continue
+                }
+                if fp == lastFP {
+                        continue
+                }
+                lastFP = fp
+                b.setFingerprint(fp)
+
+                // Read a tail window and broadcast newly observed events.
+                evs, err := store.ReadEventsTail(b.dir, 200)
+                if err != nil {
+                        continue
+                }
+
+                changed := map[resourceKey]struct{}{}
+                add := func(k resourceKey) {
+                        if strings.TrimSpace(k.String()) == "" {
+                                return
+                        }
+                        changed[k] = struct{}{}
+                }
+
+                db, _ := (store.Store{Dir: b.dir}).Load()
+                for _, ev := range evs {
+                        if !b.noteSeen(ev.ID) {
+                                continue
+                        }
+
+                        typ := strings.TrimSpace(ev.Type)
+                        switch {
+                        case strings.HasPrefix(typ, "item."):
+                                itemID := strings.TrimSpace(ev.EntityID)
+                                if itemID != "" {
+                                        add(resourceKey{kind: "item", id: itemID})
+                                        if db != nil {
+                                                if it, ok := db.FindItem(itemID); ok && it != nil {
+                                                        add(resourceKey{kind: "outline", id: it.OutlineID})
+                                                        add(resourceKey{kind: "project", id: it.ProjectID})
+                                                }
+                                        }
+                                }
+                                add(resourceKey{kind: "workspace"})
+                        case strings.HasPrefix(typ, "outline."):
+                                add(resourceKey{kind: "outline", id: ev.EntityID})
+                                add(resourceKey{kind: "workspace"})
+                        case strings.HasPrefix(typ, "project."):
+                                add(resourceKey{kind: "project", id: ev.EntityID})
+                                add(resourceKey{kind: "workspace"})
+                        case strings.HasPrefix(typ, "comment."):
+                                // comment.add includes itemId in payload.
+                                itemID := ""
+                                if p, ok := ev.Payload.(map[string]any); ok {
+                                        if id, ok := p["itemId"].(string); ok {
+                                                itemID = strings.TrimSpace(id)
+                                        }
+                                }
+                                if itemID != "" {
+                                        add(resourceKey{kind: "item", id: itemID})
+                                        if db != nil {
+                                                if it, ok := db.FindItem(itemID); ok && it != nil {
+                                                        add(resourceKey{kind: "outline", id: it.OutlineID})
+                                                        add(resourceKey{kind: "project", id: it.ProjectID})
+                                                }
+                                        }
+                                }
+                                add(resourceKey{kind: "workspace"})
+                        case strings.HasPrefix(typ, "worklog."):
+                                itemID := ""
+                                if p, ok := ev.Payload.(map[string]any); ok {
+                                        if id, ok := p["itemId"].(string); ok {
+                                                itemID = strings.TrimSpace(id)
+                                        }
+                                }
+                                if itemID != "" {
+                                        add(resourceKey{kind: "item", id: itemID})
+                                        if db != nil {
+                                                if it, ok := db.FindItem(itemID); ok && it != nil {
+                                                        add(resourceKey{kind: "outline", id: it.OutlineID})
+                                                        add(resourceKey{kind: "project", id: it.ProjectID})
+                                                }
+                                        }
+                                }
+                                add(resourceKey{kind: "workspace"})
+                        default:
+                                add(resourceKey{kind: "workspace"})
+                        }
+                }
+
+                for k := range changed {
+                        b.hubFor(k).broadcast()
+                }
+        }
+}
+
+func (s *Server) renderTemplate(name string, data any) (string, error) {
+        var b strings.Builder
+        if err := s.tmpl.ExecuteTemplate(&b, name, data); err != nil {
+                return "", err
+        }
+        return b.String(), nil
+}
+
+func (s *Server) serveDatastarStream(w http.ResponseWriter, r *http.Request, key resourceKey, renderMain func() (string, error)) {
         sse := datastar.NewSSE(w, r)
 
-        fp := strings.TrimSpace(s.workspaceFingerprint())
-        if err := sse.MarshalAndPatchSignals(map[string]any{
-                "wsVersion": fp,
-                "wsUpdated": false,
-        }); err != nil {
-                return
-        }
+        fp := strings.TrimSpace(s.bc.currentFingerprint())
+        _ = sse.MarshalAndPatchSignals(map[string]any{"wsVersion": fp})
 
-        last := fp
-        check := time.NewTicker(1 * time.Second)
-        defer check.Stop()
+        h := s.bc.hubFor(key)
+        ch, cancel := h.subscribe()
+        defer cancel()
 
         keepAlive := time.NewTicker(25 * time.Second)
         defer keepAlive.Stop()
@@ -218,18 +451,229 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
                         return
                 case <-keepAlive.C:
                         _ = sse.PatchSignals([]byte(`{}`))
-                case <-check.C:
-                        cur := strings.TrimSpace(s.workspaceFingerprint())
-                        if cur == "" || cur == last {
+                case <-ch:
+                        html, err := renderMain()
+                        if err != nil {
+                                _ = sse.ExecuteScript(fmt.Sprintf(`console.error(%q)`, err.Error()))
                                 continue
                         }
-                        last = cur
-                        _ = sse.MarshalAndPatchSignals(map[string]any{
-                                "wsVersion": cur,
-                                "wsUpdated": true,
-                        })
+                        if strings.TrimSpace(html) == "" {
+                                continue
+                        }
+                        _ = sse.PatchElements(html, datastar.WithSelector("#clarity-main"), datastar.WithMode(datastar.ElementPatchModeOuter))
+
+                        fp := strings.TrimSpace(s.bc.currentFingerprint())
+                        _ = sse.MarshalAndPatchSignals(map[string]any{"wsVersion": fp})
                 }
         }
+}
+
+func (s *Server) handleWorkspaceEvents(w http.ResponseWriter, r *http.Request) {
+        view := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("view")))
+        switch view {
+        case "home":
+                s.serveDatastarStream(w, r, resourceKey{kind: "workspace"}, func() (string, error) {
+                        ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+                        defer cancel()
+
+                        st, _ := gitrepo.GetStatus(ctx, s.cfg.Dir)
+                        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+                        if err != nil {
+                                return "", err
+                        }
+                        actorID := s.actorForRequest(r)
+                        vm := homeVM{
+                                Now:       time.Now().Format(time.RFC3339),
+                                Workspace: s.cfg.Workspace,
+                                Dir:       s.cfg.Dir,
+                                ReadOnly:  s.cfg.ReadOnly,
+                                ActorID:   actorID,
+                                AuthMode:  s.cfg.AuthMode,
+                                Git:       st,
+                                Projects:  unarchivedProjects(db.Projects),
+                                Ready:     readyItems(db),
+                                StreamURL: "/events?view=home",
+                        }
+                        return s.renderTemplate("home_main", vm)
+                })
+        case "projects":
+                s.serveDatastarStream(w, r, resourceKey{kind: "workspace"}, func() (string, error) {
+                        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+                        if err != nil {
+                                return "", err
+                        }
+                        vm := projectsVM{
+                                Now:       time.Now().Format(time.RFC3339),
+                                Workspace: s.cfg.Workspace,
+                                Dir:       s.cfg.Dir,
+                                Projects:  unarchivedProjects(db.Projects),
+                                StreamURL: "/events?view=projects",
+                        }
+                        return s.renderTemplate("projects_main", vm)
+                })
+        case "agenda":
+                s.serveDatastarStream(w, r, resourceKey{kind: "workspace"}, func() (string, error) {
+                        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+                        if err != nil {
+                                return "", err
+                        }
+                        actorID := strings.TrimSpace(s.actorForRequest(r))
+                        vm := agendaVM{
+                                Now:       time.Now().Format(time.RFC3339),
+                                Workspace: s.cfg.Workspace,
+                                Dir:       s.cfg.Dir,
+                                ActorID:   actorID,
+                                Items:     agendaItems(db, actorID),
+                                StreamURL: "/events?view=agenda",
+                        }
+                        return s.renderTemplate("agenda_main", vm)
+                })
+        case "sync":
+                s.serveDatastarStream(w, r, resourceKey{kind: "workspace"}, func() (string, error) {
+                        ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+                        defer cancel()
+                        st, _ := gitrepo.GetStatus(ctx, s.cfg.Dir)
+                        vm := syncVM{
+                                Now:       time.Now().Format(time.RFC3339),
+                                Workspace: s.cfg.Workspace,
+                                Dir:       s.cfg.Dir,
+                                ReadOnly:  s.cfg.ReadOnly,
+                                Git:       st,
+                                Message:   "",
+                                StreamURL: "/events?view=sync",
+                        }
+                        return s.renderTemplate("sync_main", vm)
+                })
+        default:
+                http.Error(w, "missing/invalid view (expected home|projects|agenda|sync)", http.StatusBadRequest)
+                return
+        }
+}
+
+func (s *Server) handleProjectEvents(w http.ResponseWriter, r *http.Request) {
+        id := strings.TrimSpace(r.PathValue("projectId"))
+        if id == "" {
+                http.Error(w, "missing project id", http.StatusBadRequest)
+                return
+        }
+        s.serveDatastarStream(w, r, resourceKey{kind: "project", id: id}, func() (string, error) {
+                db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+                if err != nil {
+                        return "", err
+                }
+                p, ok := db.FindProject(id)
+                if !ok || p == nil || p.Archived {
+                        return "", errors.New("project not found")
+                }
+                vm := projectVM{
+                        Now:       time.Now().Format(time.RFC3339),
+                        Workspace: s.cfg.Workspace,
+                        Dir:       s.cfg.Dir,
+                        Project:   *p,
+                        Outlines:  unarchivedOutlines(db.Outlines, id),
+                        StreamURL: "/projects/" + p.ID + "/events?view=project",
+                }
+                return s.renderTemplate("project_main", vm)
+        })
+}
+
+func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
+        id := strings.TrimSpace(r.PathValue("outlineId"))
+        if id == "" {
+                http.Error(w, "missing outline id", http.StatusBadRequest)
+                return
+        }
+        s.serveDatastarStream(w, r, resourceKey{kind: "outline", id: id}, func() (string, error) {
+                db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+                if err != nil {
+                        return "", err
+                }
+                o, ok := db.FindOutline(id)
+                if !ok || o == nil || o.Archived {
+                        return "", errors.New("outline not found")
+                }
+                actorID := strings.TrimSpace(s.actorForRequest(r))
+                useComponent := strings.TrimSpace(s.cfg.ComponentsDir) != ""
+                itemsJSON, statusJSON, assigneesJSON, tagsJSON := outlineComponentPayload(db, *o, actorID)
+
+                items := make([]model.Item, 0)
+                for _, it := range db.Items {
+                        if it.OutlineID == id && !it.Archived {
+                                items = append(items, it)
+                        }
+                }
+
+                vm := outlineVM{
+                        Now:                 time.Now().Format(time.RFC3339),
+                        Workspace:           s.cfg.Workspace,
+                        Dir:                 s.cfg.Dir,
+                        ActorID:             actorID,
+                        ReadOnly:            s.cfg.ReadOnly,
+                        Outline:             *o,
+                        StreamURL:           "/outlines/" + o.ID + "/events?view=outline",
+                        UseOutlineComponent: useComponent,
+                        ItemsJSON:           itemsJSON,
+                        StatusLabelsJSON:    statusJSON,
+                        AssigneesJSON:       assigneesJSON,
+                        TagsJSON:            tagsJSON,
+                        Items:               items,
+                }
+                return s.renderTemplate("outline_main", vm)
+        })
+}
+
+func (s *Server) handleItemEvents(w http.ResponseWriter, r *http.Request) {
+        id := strings.TrimSpace(r.PathValue("itemId"))
+        if id == "" {
+                http.Error(w, "missing item id", http.StatusBadRequest)
+                return
+        }
+        s.serveDatastarStream(w, r, resourceKey{kind: "item", id: id}, func() (string, error) {
+                db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+                if err != nil {
+                        return "", err
+                }
+                it, ok := db.FindItem(id)
+                if !ok || it == nil || it.Archived {
+                        return "", errors.New("item not found")
+                }
+
+                comments := db.CommentsForItem(id)
+                actorID := strings.TrimSpace(s.actorForRequest(r))
+                canEdit := actorID != "" && perm.CanEditItem(db, actorID, it)
+                statusDefs := []model.OutlineStatusDef{}
+                if o, ok := db.FindOutline(it.OutlineID); ok && o != nil {
+                        statusDefs = o.StatusDefs
+                }
+
+                var worklog []model.WorklogEntry
+                if actorID != "" {
+                        for _, w := range db.WorklogForItem(id) {
+                                if strings.TrimSpace(w.AuthorID) == actorID {
+                                        worklog = append(worklog, w)
+                                }
+                        }
+                }
+
+                vm := itemVM{
+                        Now:       time.Now().Format(time.RFC3339),
+                        Workspace: s.cfg.Workspace,
+                        Dir:       s.cfg.Dir,
+                        ReadOnly:  s.cfg.ReadOnly,
+                        ActorID:   actorID,
+                        Item:      *it,
+                        Comments:  comments,
+                        ReplyTo:   "",
+                        Worklog:   worklog,
+                        StreamURL: "/items/" + it.ID + "/events?view=item",
+
+                        CanEdit:        canEdit,
+                        StatusDefs:     statusDefs,
+                        ErrorMessage:   "",
+                        SuccessMessage: "",
+                }
+                return s.renderTemplate("item_main", vm)
+        })
 }
 
 type homeVM struct {
@@ -242,6 +686,7 @@ type homeVM struct {
         Git       gitrepo.Status
         Projects  []model.Project
         Ready     []model.Item
+        StreamURL string
 }
 
 func unarchivedProjects(projects []model.Project) []model.Project {
@@ -295,6 +740,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
                 Git:       st,
                 Projects:  unarchivedProjects(db.Projects),
                 Ready:     ready,
+                StreamURL: "/events?view=home",
         }); err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -522,6 +968,7 @@ type agendaVM struct {
         Dir       string
         ActorID   string
         Items     []model.Item
+        StreamURL string
 }
 
 func (s *Server) handleAgenda(w http.ResponseWriter, r *http.Request) {
@@ -541,6 +988,7 @@ func (s *Server) handleAgenda(w http.ResponseWriter, r *http.Request) {
                 Dir:       s.cfg.Dir,
                 ActorID:   actorID,
                 Items:     items,
+                StreamURL: "/events?view=agenda",
         }); err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -554,6 +1002,7 @@ type syncVM struct {
         ReadOnly  bool
         Git       gitrepo.Status
         Message   string
+        StreamURL string
 }
 
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
@@ -571,6 +1020,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
                 ReadOnly:  s.cfg.ReadOnly,
                 Git:       st,
                 Message:   msg,
+                StreamURL: "/events?view=sync",
         }); err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -812,6 +1262,7 @@ type projectsVM struct {
         Workspace string
         Dir       string
         Projects  []model.Project
+        StreamURL string
 }
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
@@ -827,6 +1278,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
                 Workspace: s.cfg.Workspace,
                 Dir:       s.cfg.Dir,
                 Projects:  unarchivedProjects(db.Projects),
+                StreamURL: "/events?view=projects",
         }); err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -839,6 +1291,7 @@ type projectVM struct {
         Dir       string
         Project   model.Project
         Outlines  []model.Outline
+        StreamURL string
 }
 
 func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
@@ -872,6 +1325,7 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
                 Dir:       s.cfg.Dir,
                 Project:   *p,
                 Outlines:  outlines,
+                StreamURL: "/projects/" + p.ID + "/events?view=project",
         }); err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -885,6 +1339,7 @@ type outlineVM struct {
         ActorID   string
         ReadOnly  bool
         Outline   model.Outline
+        StreamURL string
 
         // Outline component view-model (progressive enhancement).
         UseOutlineComponent bool
@@ -938,6 +1393,7 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
                 ActorID:             actorID,
                 ReadOnly:            s.cfg.ReadOnly,
                 Outline:             *o,
+                StreamURL:           "/outlines/" + o.ID + "/events?view=outline",
                 UseOutlineComponent: useComponent,
                 ItemsJSON:           itemsJSON,
                 StatusLabelsJSON:    statusJSON,
@@ -1666,6 +2122,7 @@ type itemVM struct {
         Comments  []model.Comment
         ReplyTo   string
         Worklog   []model.WorklogEntry
+        StreamURL string
 
         CanEdit        bool
         StatusDefs     []model.OutlineStatusDef
@@ -1738,6 +2195,7 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 Comments:       comments,
                 ReplyTo:        replyTo,
                 Worklog:        worklog,
+                StreamURL:      "/items/" + it.ID + "/events?view=item",
                 CanEdit:        canEdit,
                 StatusDefs:     statusDefs,
                 ErrorMessage:   errMsg,

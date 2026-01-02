@@ -1,10 +1,6 @@
 {{define "web_scripts"}}
 <script type="module" src="/static/datastar.js"></script>
-<div data-signals='{"wsVersion":"","wsUpdated":false}' data-on:load="@get('/events')"></div>
-<div class="msg" data-show="$wsUpdated" style="position: fixed; bottom: 16px; right: 16px; max-width: 380px;">
-  <div style="margin-bottom: 8px;">Workspace updated</div>
-  <button type="button" data-on:click="location.reload()">Reload</button>
-</div>
+<div data-signals='{"wsVersion":""}' data-init="@get('{{if .StreamURL}}{{.StreamURL}}{{else}}/events?view=home{{end}}')"></div>
 <script>
 (() => {
   // Keyboard-first navigation (does not interfere with form inputs).

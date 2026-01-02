@@ -1,22 +1,5 @@
-{{define "project.html"}}
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Clarity Web – Project</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin: 24px; max-width: 980px; }
-    h1 { margin: 0 0 8px; }
-    .meta { opacity: 0.75; font-size: 14px; margin: 0 0 16px; }
-    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
-    code { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 0.95em; }
-    a { color: inherit; }
-    ul { margin: 8px 0 0 18px; }
-  </style>
-</head>
-<body>
+{{define "project_main"}}
+<main id="clarity-main">
   <h1>{{.Project.Name}}</h1>
   <p class="meta">
     <a href="/">Home</a> · <a href="/projects">Projects</a>
@@ -41,6 +24,29 @@
       <div>(none)</div>
     {{end}}
   </div>
+</main>
+{{end}}
+
+{{define "project.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Clarity Web – Project</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin: 24px; max-width: 980px; }
+    h1 { margin: 0 0 8px; }
+    .meta { opacity: 0.75; font-size: 14px; margin: 0 0 16px; }
+    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+    code { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 0.95em; }
+    a { color: inherit; }
+    ul { margin: 8px 0 0 18px; }
+  </style>
+</head>
+<body>
+  {{template "project_main" .}}
   {{template "web_scripts" .}}
 </body>
 </html>

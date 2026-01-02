@@ -1,23 +1,5 @@
-{{define "outline.html"}}
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Clarity Web – Outline</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin: 24px; max-width: 980px; }
-    h1 { margin: 0 0 8px; }
-    .meta { opacity: 0.75; font-size: 14px; margin: 0 0 16px; }
-    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
-    code { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 0.95em; }
-    a { color: inherit; }
-    ul { margin: 8px 0 0 18px; }
-    .dim { opacity: 0.75; }
-  </style>
-</head>
-<body>
+{{define "outline_main"}}
+<main id="clarity-main">
   <h1>{{.Outline.Name}}</h1>
   <p class="meta">
     <a href="/">Home</a> · <a href="/projects">Projects</a>
@@ -138,38 +120,27 @@
             };
             const focusId = id;
             apply('outline:move', detail).then(() => {
-              const newLi = findLi(focusId);
-              if (newLi) newLi.focus();
+              const li2 = findLi(focusId);
+              if (li2) li2.focus();
             }).catch((err) => {
-              console.error(err);
               setStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
             });
           }
 
           el.addEventListener('outline:edit:save', (e) => {
             const id = e.detail && e.detail.id;
-            const newText = e.detail && e.detail.newText;
-            if (!id || !newText) return;
-            const focusId = id;
-            apply('outline:edit:save', { id, newText }).then(() => {
-              const newLi = findLi(focusId);
-              if (newLi) newLi.focus();
-            }).catch((err) => {
-              console.error(err);
+            const text = e.detail && e.detail.text;
+            if (!id) return;
+            apply('outline:edit:save', { id, text: text || '' }).catch((err) => {
               setStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
             });
           });
 
           el.addEventListener('outline:toggle', (e) => {
             const id = e.detail && e.detail.id;
-            const to = e.detail && e.detail.to;
+            const status = e.detail && e.detail.status;
             if (!id) return;
-            const focusId = id;
-            apply('outline:toggle', { id, to }).then(() => {
-              const newLi = findLi(focusId);
-              if (newLi) newLi.focus();
-            }).catch((err) => {
-              console.error(err);
+            apply('outline:toggle', { id, status: status || '' }).catch((err) => {
               setStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
             });
           });
@@ -206,6 +177,30 @@
       <div>(none)</div>
     {{end}}
   </div>
+</main>
+{{end}}
+
+{{define "outline.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Clarity Web – Outline</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin: 24px; max-width: 980px; }
+    h1 { margin: 0 0 8px; }
+    .meta { opacity: 0.75; font-size: 14px; margin: 0 0 16px; }
+    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+    code { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 0.95em; }
+    a { color: inherit; }
+    ul { margin: 8px 0 0 18px; }
+    .dim { opacity: 0.75; }
+  </style>
+</head>
+<body>
+  {{template "outline_main" .}}
   {{template "web_scripts" .}}
 </body>
 </html>
