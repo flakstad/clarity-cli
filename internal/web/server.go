@@ -21,10 +21,12 @@ import (
         "clarity-cli/internal/perm"
         "clarity-cli/internal/statusutil"
         "clarity-cli/internal/store"
+
+        "github.com/starfederation/datastar-go/datastar"
 )
 
-//go:embed templates/*.html
-var templatesFS embed.FS
+//go:embed templates/*.html static/*.js
+var assetsFS embed.FS
 
 type ServerConfig struct {
         Addr      string
@@ -68,7 +70,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
         tmpl, err := template.New("base").Funcs(template.FuncMap{
                 "trim": strings.TrimSpace,
-        }).ParseFS(templatesFS, "templates/*.html")
+        }).ParseFS(assetsFS, "templates/*.html")
         if err != nil {
                 return nil, err
         }
@@ -90,6 +92,8 @@ func (s *Server) Addr() string { return s.cfg.Addr }
 func (s *Server) Handler() http.Handler {
         mux := http.NewServeMux()
         mux.HandleFunc("GET /health", s.handleHealth)
+        mux.HandleFunc("GET /events", s.handleEvents)
+        mux.HandleFunc("GET /static/datastar.js", s.handleDatastarJS)
         mux.HandleFunc("GET /static/outline.js", s.handleOutlineJS)
         mux.HandleFunc("GET /", s.handleHome)
         mux.HandleFunc("GET /login", s.handleLoginGet)
@@ -132,10 +136,100 @@ func (s *Server) handleOutlineJS(w http.ResponseWriter, r *http.Request) {
         _, _ = w.Write(b)
 }
 
+func (s *Server) handleDatastarJS(w http.ResponseWriter, r *http.Request) {
+        b, err := assetsFS.ReadFile("static/datastar.js")
+        if err != nil || len(b) == 0 {
+                http.NotFound(w, r)
+                return
+        }
+        w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+        w.WriteHeader(http.StatusOK)
+        _, _ = w.Write(b)
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
         w.Header().Set("Content-Type", "text/plain; charset=utf-8")
         w.WriteHeader(http.StatusOK)
         _, _ = w.Write([]byte("ok\n"))
+}
+
+func (s *Server) workspaceFingerprint() string {
+        // Keep this cheap: only look at canonical content roots.
+        type stamp struct {
+                modNano int64
+                size    int64
+        }
+        var max stamp
+
+        checkPath := func(p string) {
+                st, err := os.Stat(p)
+                if err != nil {
+                        return
+                }
+                if st.ModTime().UnixNano() > max.modNano {
+                        max.modNano = st.ModTime().UnixNano()
+                }
+                max.size += st.Size()
+        }
+        checkDir := func(dir string) {
+                ents, err := os.ReadDir(dir)
+                if err != nil {
+                        return
+                }
+                for _, ent := range ents {
+                        if ent.IsDir() {
+                                continue
+                        }
+                        checkPath(filepath.Join(dir, ent.Name()))
+                }
+        }
+
+        root := filepath.Clean(s.cfg.Dir)
+        checkDir(filepath.Join(root, "events"))
+        checkPath(filepath.Join(root, "meta", "workspace.json"))
+
+        if max.modNano == 0 && max.size == 0 {
+                return ""
+        }
+        return strconv.FormatInt(max.modNano, 10) + ":" + strconv.FormatInt(max.size, 10)
+}
+
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+        sse := datastar.NewSSE(w, r)
+
+        fp := strings.TrimSpace(s.workspaceFingerprint())
+        if err := sse.MarshalAndPatchSignals(map[string]any{
+                "wsVersion": fp,
+                "wsUpdated": false,
+        }); err != nil {
+                return
+        }
+
+        last := fp
+        check := time.NewTicker(1 * time.Second)
+        defer check.Stop()
+
+        keepAlive := time.NewTicker(25 * time.Second)
+        defer keepAlive.Stop()
+
+        for {
+                select {
+                case <-sse.Context().Done():
+                        return
+                case <-keepAlive.C:
+                        _ = sse.PatchSignals([]byte(`{}`))
+                case <-check.C:
+                        cur := strings.TrimSpace(s.workspaceFingerprint())
+                        if cur == "" || cur == last {
+                                continue
+                        }
+                        last = cur
+                        _ = sse.MarshalAndPatchSignals(map[string]any{
+                                "wsVersion": cur,
+                                "wsUpdated": true,
+                        })
+                }
+        }
 }
 
 type homeVM struct {

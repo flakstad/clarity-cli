@@ -1,6 +1,8 @@
 module clarity-cli
 
-go 1.23.6
+go 1.24
+
+toolchain go1.24.11
 
 require (
         github.com/charmbracelet/bubbles v0.20.0
@@ -14,7 +16,9 @@ require (
 )
 
 require (
+        github.com/CAFxX/httpcompression v0.0.9 // indirect
         github.com/alecthomas/chroma/v2 v2.14.0 // indirect
+        github.com/andybalholm/brotli v1.0.5 // indirect
         github.com/atotto/clipboard v0.1.4 // indirect
         github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
         github.com/aymerick/douceur v0.2.0 // indirect
@@ -28,6 +32,7 @@ require (
         github.com/google/uuid v1.6.0 // indirect
         github.com/gorilla/css v1.0.1 // indirect
         github.com/inconshreveable/mousetrap v1.1.0 // indirect
+        github.com/klauspost/compress v1.18.0 // indirect
         github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
         github.com/mattn/go-isatty v0.0.20 // indirect
         github.com/mattn/go-localereader v0.0.1 // indirect
@@ -41,6 +46,8 @@ require (
         github.com/rivo/uniseg v0.4.7 // indirect
         github.com/sahilm/fuzzy v0.1.1 // indirect
         github.com/spf13/pflag v1.0.5 // indirect
+        github.com/starfederation/datastar-go v1.0.0 // indirect
+        github.com/valyala/bytebufferpool v1.0.0 // indirect
         github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
         github.com/yuin/goldmark v1.7.8 // indirect
         github.com/yuin/goldmark-emoji v1.0.5 // indirect
