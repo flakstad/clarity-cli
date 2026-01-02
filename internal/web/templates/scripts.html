@@ -1,5 +1,6 @@
 {{define "web_scripts"}}
 <script type="module" src="/static/datastar.js"></script>
 <div data-signals='{"wsVersion":""}' data-init="@get('{{if .StreamURL}}{{.StreamURL}}{{else}}/events?view=home{{end}}')"></div>
+<script src="/static/outline.js" defer></script>
 <script src="/static/app.js"></script>
 {{end}}

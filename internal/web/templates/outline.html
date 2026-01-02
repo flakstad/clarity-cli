@@ -26,157 +26,82 @@
     {{end}}
 
     {{if .UseOutlineComponent}}
-      <script src="/static/outline.js"></script>
-      <clarity-outline id="outline" data-outline-id="{{.Outline.ID}}"></clarity-outline>
+      <div data-signals='{"outlineItems": {{printf "%q" .ItemsJSON}}, "outlineStatusLabels": {{printf "%q" .StatusLabelsJSON}}, "outlineAssignees": {{printf "%q" .AssigneesJSON}}, "outlineTags": {{printf "%q" .TagsJSON}}}'></div>
+      <clarity-outline
+        id="outline"
+        data-outline-id="{{.Outline.ID}}"
+        data-current-user="{{.ActorID}}"
+        data-attr:data-status-labels="$outlineStatusLabels"
+        data-attr:data-assignees="$outlineAssignees"
+        data-attr:data-tags="$outlineTags"
+        data-features='{"addButton":false,"comments":false,"worklog":false,"archive":false,"priority":false,"onHold":false,"due":false,"schedule":false,"assign":false,"tags":false,"dragAndDrop":false}'
+        data-attr:data-items="$outlineItems"
+      ></clarity-outline>
       <div id="outline-status" class="dim" style="margin-top: 10px;"></div>
-      <script>
-        (function () {
-          const el = document.getElementById('outline');
-          if (!el) return;
-          const statusEl = document.getElementById('outline-status');
-          let pending = Promise.resolve();
-
-          el.setAttribute('data-current-user', {{printf "%q" .ActorID}});
-          el.setAttribute('data-status-labels', JSON.stringify({{.StatusLabelsJSON}}));
-          el.setAttribute('data-assignees', JSON.stringify({{.AssigneesJSON}}));
-          el.setAttribute('data-tags', JSON.stringify({{.TagsJSON}}));
-          el.setAttribute('data-features', JSON.stringify({
-            addButton: false,
-            comments: false,
-            worklog: false,
-            archive: false,
-            priority: false,
-            onHold: false,
-            due: false,
-            schedule: false,
-            assign: false,
-            tags: false,
-            dragAndDrop: false
-          }));
-          el.setAttribute('data-items', JSON.stringify({{.ItemsJSON}}));
-
-          function setStatus(msg) {
-            if (!statusEl) return;
-            statusEl.textContent = msg || '';
-          }
-
-          function findLi(id) {
-            if (!el.shadowRoot) return null;
-            try {
-              return el.shadowRoot.querySelector('li[data-id="' + id.replaceAll('"', '\\"') + '"]');
-            } catch (e) {
-              return null;
-            }
-          }
-
-          function siblingId(node, dir) {
-            let cur = dir === 'prev' ? node.previousElementSibling : node.nextElementSibling;
-            while (cur) {
-              if (cur.tagName === 'LI') return cur.dataset.id || null;
-              cur = dir === 'prev' ? cur.previousElementSibling : cur.nextElementSibling;
-            }
-            return null;
-          }
-
-          async function apply(type, detail) {
-            pending = pending.then(async () => {
-              const outlineId = el.getAttribute('data-outline-id') || '';
-              if (!outlineId) return;
-              setStatus('Saving…');
-              const res = await fetch('/outlines/' + encodeURIComponent(outlineId) + '/apply', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type, detail })
-              });
-              if (!res.ok) {
-                const txt = await res.text();
-                throw new Error(txt || ('HTTP ' + res.status));
-              }
-              const payload = await res.json();
-              if (payload && payload.statusLabels) el.setAttribute('data-status-labels', JSON.stringify(payload.statusLabels));
-              if (payload && payload.assignees) el.setAttribute('data-assignees', JSON.stringify(payload.assignees));
-              if (payload && payload.tags) el.setAttribute('data-tags', JSON.stringify(payload.tags));
-              if (payload && payload.items) el.setAttribute('data-items', JSON.stringify(payload.items));
-              setStatus('Saved');
-              setTimeout(() => setStatus(''), 800);
-            });
-            return pending;
-          }
-
-          function handleReorderLikeEvent(e) {
-            const id = e.detail && e.detail.id;
-            if (!id) return;
-            const li = findLi(id);
-            if (!li) return;
-            const parentLi = li.parentElement ? li.parentElement.closest('li') : null;
-            const parentId = parentLi ? (parentLi.dataset.id || null) : null;
-            const prevId = siblingId(li, 'prev');
-            const nextId = siblingId(li, 'next');
-            const detail = {
-              id,
-              parentId,
-              afterId: prevId,
-              beforeId: (!prevId && nextId) ? nextId : null
-            };
-            const focusId = id;
-            apply('outline:move', detail).then(() => {
-              const li2 = findLi(focusId);
-              if (li2) li2.focus();
-            }).catch((err) => {
-              setStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
-            });
-          }
-
-          el.addEventListener('outline:edit:save', (e) => {
-            const id = e.detail && e.detail.id;
-            const text = e.detail && e.detail.text;
-            if (!id) return;
-            apply('outline:edit:save', { id, text: text || '' }).catch((err) => {
-              setStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
-            });
-          });
-
-          el.addEventListener('outline:toggle', (e) => {
-            const id = e.detail && e.detail.id;
-            const status = e.detail && e.detail.status;
-            if (!id) return;
-            apply('outline:toggle', { id, status: status || '' }).catch((err) => {
-              setStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
-            });
-          });
-
-          el.addEventListener('outline:move', handleReorderLikeEvent);
-          el.addEventListener('outline:indent', handleReorderLikeEvent);
-          el.addEventListener('outline:outdent', handleReorderLikeEvent);
-
-          el.addEventListener('outline:open', (e) => {
-            const id = e.detail && e.detail.id;
-            if (!id) return;
-            window.location.href = '/items/' + encodeURIComponent(id);
-          });
-        })();
-      </script>
       <noscript>
         <div class="dim">JavaScript is disabled; showing a basic list.</div>
       </noscript>
     {{else}}
-      <div class="dim">Outline component is not configured (start `clarity web` with `--components-dir`).</div>
-      {{if .Items}}
-        <ul>
-          {{range .Items}}
-            <li>
-              <a data-kb-item data-focus-id="{{.ID}}" href="/items/{{.ID}}"><code>{{.ID}}</code></a>
-              — {{.Title}}
-              <span class="dim">({{.StatusID}})</span>
-            </li>
-          {{end}}
-        </ul>
-      {{else}}
-        <div>(none)</div>
-      {{end}}
+      {{template "outline_native" .}}
     {{end}}
   </div>
 </main>
+{{end}}
+
+{{define "outline_node"}}
+<li data-node-id="{{.ID}}">
+  <div
+    class="outline-row {{if not .CanEdit}}outline-row--readonly{{end}}"
+    tabindex="0"
+    data-outline-row
+    data-kb-item
+    data-focus-id="{{.ID}}"
+    data-id="{{.ID}}"
+    data-status="{{.StatusID}}"
+    data-end="{{if .IsEndState}}true{{else}}false{{end}}"
+    data-can-edit="{{if .CanEdit}}true{{else}}false{{end}}"
+    data-open-href="/items/{{.ID}}"
+    title="{{.ID}}"
+  >
+    <span class="outline-status {{if .IsEndState}}outline-status--end{{else}}outline-status--open{{end}}">
+      {{if .StatusLabel}}{{.StatusLabel}}{{else}}{{if .StatusID}}{{.StatusID}}{{else}}(none){{end}}{{end}}
+    </span>
+    <span class="outline-title">{{.Title}}</span>
+  </div>
+  {{if .Children}}
+    <ul class="outline-children">
+      {{range .Children}}
+        {{template "outline_node" .}}
+      {{end}}
+    </ul>
+  {{end}}
+</li>
+{{end}}
+
+{{define "outline_native"}}
+<div
+  id="outline-native"
+  data-outline-id="{{.Outline.ID}}"
+  data-toggle-open="{{.ToggleOpenTo}}"
+  data-toggle-end="{{.ToggleEndTo}}"
+  data-toggle-open-label="{{.ToggleOpenLbl}}"
+  data-toggle-end-label="{{.ToggleEndLbl}}"
+  data-status-options='{{.StatusOptionsJSON}}'
+>
+  <div class="dim" style="margin: 8px 0;">
+    Native outline: <code>j/k</code> move · <code>e</code> edit · <code>Space</code> status · <code>Alt+j/k</code> reorder · <code>Ctrl+h/l</code> indent/outdent
+  </div>
+  {{if .NativeNodes}}
+    <ul class="outline-tree">
+      {{range .NativeNodes}}
+        {{template "outline_node" .}}
+      {{end}}
+    </ul>
+  {{else}}
+    <div>(none)</div>
+  {{end}}
+  <div id="outline-status" class="dim" style="margin-top: 10px;"></div>
+</div>
 {{end}}
 
 {{define "outline.html"}}

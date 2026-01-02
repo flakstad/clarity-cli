@@ -123,3 +123,55 @@ button:hover {
 ul {
   margin: 8px 0 0 18px;
 }
+
+.outline-tree,
+.outline-children {
+  list-style: none;
+  margin: 8px 0 0 0;
+  padding-left: 18px;
+}
+
+.outline-tree {
+  padding-left: 0;
+}
+
+.outline-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border-radius: 8px;
+  outline: none;
+}
+
+.outline-row:focus {
+  background: color-mix(in oklab, var(--bg), var(--fg) 8%);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--fg), transparent 70%);
+}
+
+.outline-row--readonly {
+  opacity: 0.8;
+}
+
+.outline-status {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  opacity: 0.9;
+  white-space: nowrap;
+}
+
+.outline-status--end {
+  background: color-mix(in oklab, var(--bg), #2a7 18%);
+}
+
+.outline-title {
+  min-width: 0;
+  flex: 1;
+}
+
+.outline-title input {
+  width: 100%;
+}

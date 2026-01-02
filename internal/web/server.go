@@ -42,6 +42,11 @@ type ServerConfig struct {
         // ComponentsDir points at a local checkout of `clarity-components` (for now),
         // used to serve `outline.js` to the browser.
         ComponentsDir string
+
+        // OutlineMode selects the outline UI strategy.
+        // - native: server-rendered HTML + keyboard JS (preferred)
+        // - component: clarity-outline web component driven by Datastar signals
+        OutlineMode string // native|component
 }
 
 type Server struct {
@@ -59,6 +64,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
         cfg.ActorID = strings.TrimSpace(cfg.ActorID)
         cfg.AuthMode = strings.ToLower(strings.TrimSpace(cfg.AuthMode))
         cfg.ComponentsDir = strings.TrimSpace(cfg.ComponentsDir)
+        cfg.OutlineMode = strings.ToLower(strings.TrimSpace(cfg.OutlineMode))
         if cfg.Addr == "" {
                 return nil, errors.New("web: addr is empty")
         }
@@ -70,6 +76,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
         }
         if cfg.AuthMode != "none" && cfg.AuthMode != "dev" && cfg.AuthMode != "magic" {
                 return nil, errors.New("web: invalid auth mode (expected none|dev|magic)")
+        }
+        if cfg.OutlineMode == "" {
+                cfg.OutlineMode = "native"
+        }
+        if cfg.OutlineMode != "native" && cfg.OutlineMode != "component" {
+                return nil, errors.New("web: invalid outline mode (expected native|component)")
         }
 
         tmpl, err := template.New("base").Funcs(template.FuncMap{
@@ -133,7 +145,9 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) handleOutlineJS(w http.ResponseWriter, r *http.Request) {
         dir := strings.TrimSpace(s.cfg.ComponentsDir)
         if dir == "" {
-                http.NotFound(w, r)
+                // Avoid noisy 404s when templates include the component bundle unconditionally.
+                w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+                w.WriteHeader(http.StatusNoContent)
                 return
         }
         p := filepath.Join(dir, "outline.js")
@@ -467,11 +481,62 @@ func (s *Server) writeHTMLTemplate(w http.ResponseWriter, name string, data any)
         _, _ = io.WriteString(w, html)
 }
 
-func (s *Server) serveDatastarStream(w http.ResponseWriter, r *http.Request, key resourceKey, renderMain func() (string, error)) {
+func (s *Server) serveDatastarElementsStream(w http.ResponseWriter, r *http.Request, key resourceKey, selector string, mode datastar.ElementPatchMode, render func() (string, error)) {
         sse := datastar.NewSSE(w, r)
 
         fp := strings.TrimSpace(s.bc.currentFingerprint())
         _ = sse.MarshalAndPatchSignals(map[string]any{"wsVersion": fp})
+
+        h := s.bc.hubFor(key)
+        ch, cancel := h.subscribe()
+        defer cancel()
+
+        keepAlive := time.NewTicker(25 * time.Second)
+        defer keepAlive.Stop()
+
+        selector = strings.TrimSpace(selector)
+        if selector == "" {
+                selector = "#clarity-main"
+        }
+
+        for {
+                select {
+                case <-sse.Context().Done():
+                        return
+                case <-keepAlive.C:
+                        _ = sse.PatchSignals([]byte(`{}`))
+                case <-ch:
+                        html, err := render()
+                        if err != nil {
+                                _ = sse.ExecuteScript(fmt.Sprintf(`console.error(%q)`, err.Error()))
+                                continue
+                        }
+                        if strings.TrimSpace(html) == "" {
+                                continue
+                        }
+                        _ = sse.PatchElements(html, datastar.WithSelector(selector), datastar.WithMode(mode))
+
+                        fp := strings.TrimSpace(s.bc.currentFingerprint())
+                        _ = sse.MarshalAndPatchSignals(map[string]any{"wsVersion": fp})
+                }
+        }
+}
+
+func (s *Server) serveDatastarStream(w http.ResponseWriter, r *http.Request, key resourceKey, renderMain func() (string, error)) {
+        s.serveDatastarElementsStream(w, r, key, "#clarity-main", datastar.ElementPatchModeOuter, renderMain)
+}
+
+func (s *Server) serveDatastarSignalsStream(w http.ResponseWriter, r *http.Request, key resourceKey, renderSignals func() (map[string]any, error)) {
+        sse := datastar.NewSSE(w, r)
+
+        fp := strings.TrimSpace(s.bc.currentFingerprint())
+        _ = sse.MarshalAndPatchSignals(map[string]any{"wsVersion": fp})
+
+        // Initial state snapshot.
+        if sig, err := renderSignals(); err == nil && sig != nil {
+                sig["wsVersion"] = fp
+                _ = sse.MarshalAndPatchSignals(sig)
+        }
 
         h := s.bc.hubFor(key)
         ch, cancel := h.subscribe()
@@ -487,18 +552,17 @@ func (s *Server) serveDatastarStream(w http.ResponseWriter, r *http.Request, key
                 case <-keepAlive.C:
                         _ = sse.PatchSignals([]byte(`{}`))
                 case <-ch:
-                        html, err := renderMain()
+                        sig, err := renderSignals()
                         if err != nil {
                                 _ = sse.ExecuteScript(fmt.Sprintf(`console.error(%q)`, err.Error()))
                                 continue
                         }
-                        if strings.TrimSpace(html) == "" {
-                                continue
+                        if sig == nil {
+                                sig = map[string]any{}
                         }
-                        _ = sse.PatchElements(html, datastar.WithSelector("#clarity-main"), datastar.WithMode(datastar.ElementPatchModeOuter))
-
                         fp := strings.TrimSpace(s.bc.currentFingerprint())
-                        _ = sse.MarshalAndPatchSignals(map[string]any{"wsVersion": fp})
+                        sig["wsVersion"] = fp
+                        _ = sse.MarshalAndPatchSignals(sig)
                 }
         }
 }
@@ -618,7 +682,32 @@ func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
                 http.Error(w, "missing outline id", http.StatusBadRequest)
                 return
         }
-        s.serveDatastarStream(w, r, resourceKey{kind: "outline", id: id}, func() (string, error) {
+
+        // Component mode: drive the component via Datastar signals (no DOM morphing).
+        if s.cfg.OutlineMode == "component" && strings.TrimSpace(s.cfg.ComponentsDir) != "" {
+                s.serveDatastarSignalsStream(w, r, resourceKey{kind: "outline", id: id}, func() (map[string]any, error) {
+                        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+                        if err != nil {
+                                return nil, err
+                        }
+                        o, ok := db.FindOutline(id)
+                        if !ok || o == nil || o.Archived {
+                                return nil, fmt.Errorf("outline not found")
+                        }
+                        actorID := strings.TrimSpace(s.actorForRequest(r))
+                        itemsJSON, statusJSON, assigneesJSON, tagsJSON := outlineComponentPayload(db, *o, actorID)
+                        return map[string]any{
+                                "outlineItems":        string(itemsJSON),
+                                "outlineStatusLabels": string(statusJSON),
+                                "outlineAssignees":    string(assigneesJSON),
+                                "outlineTags":         string(tagsJSON),
+                        }, nil
+                })
+                return
+        }
+
+        // Native mode: patch only the outline container.
+        s.serveDatastarElementsStream(w, r, resourceKey{kind: "outline", id: id}, "#outline-native", datastar.ElementPatchModeOuter, func() (string, error) {
                 db, err := (store.Store{Dir: s.cfg.Dir}).Load()
                 if err != nil {
                         return "", err
@@ -628,7 +717,6 @@ func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
                         return "", errors.New("outline not found")
                 }
                 actorID := strings.TrimSpace(s.actorForRequest(r))
-                useComponent := strings.TrimSpace(s.cfg.ComponentsDir) != ""
                 itemsJSON, statusJSON, assigneesJSON, tagsJSON := outlineComponentPayload(db, *o, actorID)
 
                 items := make([]model.Item, 0)
@@ -637,8 +725,11 @@ func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
                                 items = append(items, it)
                         }
                 }
+        openTo, endTo, openLbl, endLbl := outlineToggleTargets(*o)
+        nodes := buildOutlineNativeNodes(db, *o, actorID)
+        statusOptions := outlineStatusOptionsJSON(*o)
 
-                vm := outlineVM{
+        vm := outlineVM{
                         Now:                 time.Now().Format(time.RFC3339),
                         Workspace:           s.cfg.Workspace,
                         Dir:                 s.cfg.Dir,
@@ -646,14 +737,20 @@ func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
                         ReadOnly:            s.cfg.ReadOnly,
                         Outline:             *o,
                         StreamURL:           "/outlines/" + o.ID + "/events?view=outline",
-                        UseOutlineComponent: useComponent,
+                        UseOutlineComponent: false,
                         ItemsJSON:           itemsJSON,
                         StatusLabelsJSON:    statusJSON,
                         AssigneesJSON:       assigneesJSON,
                         TagsJSON:            tagsJSON,
                         Items:               items,
-                }
-                return s.renderTemplate("outline_main", vm)
+                NativeNodes:         nodes,
+                ToggleOpenTo:        openTo,
+                ToggleEndTo:         endTo,
+                ToggleOpenLbl:       openLbl,
+                ToggleEndLbl:        endLbl,
+                StatusOptionsJSON:   statusOptions,
+        }
+                return s.renderTemplate("outline_native", vm)
         })
 }
 
@@ -1358,13 +1455,169 @@ type outlineVM struct {
 
         // Outline component view-model (progressive enhancement).
         UseOutlineComponent bool
-        ItemsJSON           template.JS
-        StatusLabelsJSON    template.JS
-        AssigneesJSON       template.JS
-        TagsJSON            template.JS
+        ItemsJSON           template.HTMLAttr
+        StatusLabelsJSON    template.HTMLAttr
+        AssigneesJSON       template.HTMLAttr
+        TagsJSON            template.HTMLAttr
 
         // Fallback list (no JS / no components).
         Items []model.Item
+
+        // Native outline (server-rendered HTML).
+        NativeNodes   []outlineNativeNode
+        ToggleOpenTo  string
+        ToggleEndTo   string
+        ToggleOpenLbl string
+        ToggleEndLbl  string
+
+        StatusOptionsJSON template.HTMLAttr
+}
+
+type outlineNativeNode struct {
+        ID         string
+        Title      string
+        StatusID   string
+        StatusLabel string
+        IsEndState bool
+        CanEdit    bool
+        Children   []outlineNativeNode
+}
+
+func outlineToggleTargets(o model.Outline) (openTo, endTo, openLbl, endLbl string) {
+        // Prefer explicit outline statuses when present (by stable index).
+        if len(o.StatusDefs) > 0 {
+                firstOpen := -1
+                firstEnd := -1
+                for i, sd := range o.StatusDefs {
+                        if sd.IsEndState && firstEnd < 0 {
+                                firstEnd = i
+                        }
+                        if !sd.IsEndState && firstOpen < 0 {
+                                firstOpen = i
+                        }
+                }
+                if firstOpen < 0 {
+                        firstOpen = 0
+                }
+                if firstEnd < 0 {
+                        if len(o.StatusDefs) > 1 {
+                                firstEnd = 1
+                        } else {
+                                firstEnd = 0
+                        }
+                }
+                openLbl = strings.TrimSpace(o.StatusDefs[firstOpen].Label)
+                if openLbl == "" {
+                        openLbl = strings.TrimSpace(o.StatusDefs[firstOpen].ID)
+                }
+                endLbl = strings.TrimSpace(o.StatusDefs[firstEnd].Label)
+                if endLbl == "" {
+                        endLbl = strings.TrimSpace(o.StatusDefs[firstEnd].ID)
+                }
+                return fmt.Sprintf("status-%d", firstOpen), fmt.Sprintf("status-%d", firstEnd), openLbl, endLbl
+        }
+        // Fallback: legacy/default statuses.
+        return "todo", "done", "TODO", "DONE"
+}
+
+func outlineStatusOptionsJSON(o model.Outline) template.HTMLAttr {
+        type opt struct {
+                ID           string `json:"id"`
+                Label        string `json:"label"`
+                IsEndState   bool   `json:"isEndState"`
+                RequiresNote bool   `json:"requiresNote,omitempty"`
+        }
+        out := make([]opt, 0, len(o.StatusDefs)+1)
+        if len(o.StatusDefs) > 0 {
+                for _, sd := range o.StatusDefs {
+                        id := strings.TrimSpace(sd.ID)
+                        if id == "" {
+                                continue
+                        }
+                        lbl := strings.TrimSpace(sd.Label)
+                        if lbl == "" {
+                                lbl = id
+                        }
+                        out = append(out, opt{ID: id, Label: lbl, IsEndState: sd.IsEndState, RequiresNote: sd.RequiresNote})
+                }
+        } else {
+                out = append(out, opt{ID: "todo", Label: "TODO", IsEndState: false})
+                out = append(out, opt{ID: "doing", Label: "DOING", IsEndState: false})
+                out = append(out, opt{ID: "done", Label: "DONE", IsEndState: true})
+        }
+        b, _ := json.Marshal(out)
+        return template.HTMLAttr(b)
+}
+
+func buildOutlineNativeNodes(db *store.DB, o model.Outline, actorID string) []outlineNativeNode {
+        actorID = strings.TrimSpace(actorID)
+
+        statusLabelByID := map[string]string{}
+        for _, sd := range o.StatusDefs {
+                if strings.TrimSpace(sd.ID) == "" {
+                        continue
+                }
+                lbl := strings.TrimSpace(sd.Label)
+                if lbl == "" {
+                        lbl = strings.TrimSpace(sd.ID)
+                }
+                statusLabelByID[strings.TrimSpace(sd.ID)] = lbl
+        }
+
+        // Group items in outline by parent.
+        byID := map[string]*model.Item{}
+        children := map[string][]*model.Item{} // parent id => items ("" for root)
+        for i := range db.Items {
+                it := &db.Items[i]
+                if it.OutlineID != o.ID || it.Archived {
+                        continue
+                }
+                byID[it.ID] = it
+        }
+        for _, it := range byID {
+                parent := ""
+                if it.ParentID != nil {
+                        pid := strings.TrimSpace(*it.ParentID)
+                        if pid != "" {
+                                if pit, ok := byID[pid]; ok && pit != nil && !pit.Archived {
+                                        parent = pid
+                                }
+                        }
+                }
+                children[parent] = append(children[parent], it)
+        }
+
+        // Sort siblings by rank.
+        for pid := range children {
+                store.SortItemsByRankOrder(children[pid])
+        }
+
+        var build func(parent string) []outlineNativeNode
+        build = func(parent string) []outlineNativeNode {
+                sibs := children[parent]
+                out := make([]outlineNativeNode, 0, len(sibs))
+                for _, it := range sibs {
+                        if it == nil {
+                                continue
+                        }
+                        sid := strings.TrimSpace(it.StatusID)
+                        lbl := sid
+                        if mapped, ok := statusLabelByID[sid]; ok && strings.TrimSpace(mapped) != "" {
+                                lbl = strings.TrimSpace(mapped)
+                        }
+                        out = append(out, outlineNativeNode{
+                                ID:         it.ID,
+                                Title:      it.Title,
+                                StatusID:   it.StatusID,
+                                StatusLabel: lbl,
+                                IsEndState: statusutil.IsEndState(o, it.StatusID),
+                                CanEdit:    actorID != "" && perm.CanEditItem(db, actorID, it),
+                                Children:   build(it.ID),
+                        })
+                }
+                return out
+        }
+        return build("")
 }
 
 func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
@@ -1397,8 +1650,11 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
         }
 
         actorID := strings.TrimSpace(s.actorForRequest(r))
-        useComponent := strings.TrimSpace(s.cfg.ComponentsDir) != ""
+        useComponent := s.cfg.OutlineMode == "component" && strings.TrimSpace(s.cfg.ComponentsDir) != ""
         itemsJSON, statusJSON, assigneesJSON, tagsJSON := outlineComponentPayload(db, *o, actorID)
+        openTo, endTo, openLbl, endLbl := outlineToggleTargets(*o)
+        nodes := buildOutlineNativeNodes(db, *o, actorID)
+        statusOptions := outlineStatusOptionsJSON(*o)
 
         s.writeHTMLTemplate(w, "outline.html", outlineVM{
                 Now:                 time.Now().Format(time.RFC3339),
@@ -1414,6 +1670,12 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
                 AssigneesJSON:       assigneesJSON,
                 TagsJSON:            tagsJSON,
                 Items:               items,
+                NativeNodes:         nodes,
+                ToggleOpenTo:        openTo,
+                ToggleEndTo:         endTo,
+                ToggleOpenLbl:       openLbl,
+                ToggleEndLbl:        endLbl,
+                StatusOptionsJSON:   statusOptions,
         })
 }
 
@@ -1561,7 +1823,7 @@ type outlineStatusLabel struct {
         IsEndState bool   `json:"isEndState"`
 }
 
-func outlineComponentPayload(db *store.DB, o model.Outline, actorID string) (items template.JS, statusLabels template.JS, assignees template.JS, tags template.JS) {
+func outlineComponentPayload(db *store.DB, o model.Outline, actorID string) (items template.HTMLAttr, statusLabels template.HTMLAttr, assignees template.HTMLAttr, tags template.HTMLAttr) {
         // Build status labels contract for the component.
         status := make([]outlineStatusLabel, 0, len(o.StatusDefs))
         for _, sd := range o.StatusDefs {
@@ -1705,10 +1967,18 @@ func outlineComponentPayload(db *store.DB, o model.Outline, actorID string) (ite
         bStatus, _ := json.Marshal(status)
         bAssignees, _ := json.Marshal(assigneeLabels)
         bTags, _ := json.Marshal(allTags)
-        return template.JS(bTodos), template.JS(bStatus), template.JS(bAssignees), template.JS(bTags)
+        return template.HTMLAttr(bTodos), template.HTMLAttr(bStatus), template.HTMLAttr(bAssignees), template.HTMLAttr(bTags)
 }
 
 type outlineApplyReq struct {
+        // Single-op request (legacy / simple clients).
+        Type   string          `json:"type"`
+        Detail json.RawMessage `json:"detail"`
+        // Batch request (preferred for debounced outline moves).
+        Ops []outlineApplyOp `json:"ops"`
+}
+
+type outlineApplyOp struct {
         Type   string          `json:"type"`
         Detail json.RawMessage `json:"detail"`
 }
@@ -1746,9 +2016,8 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                 return
         }
         req.Type = strings.TrimSpace(req.Type)
-        if req.Type == "" {
-                http.Error(w, "missing type", http.StatusBadRequest)
-                return
+        for i := range req.Ops {
+                req.Ops[i].Type = strings.TrimSpace(req.Ops[i].Type)
         }
 
         st := store.Store{Dir: s.cfg.Dir}
@@ -1767,119 +2036,153 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
+        ops := make([]outlineApplyOp, 0, 1+len(req.Ops))
+        if len(req.Ops) > 0 {
+                ops = append(ops, req.Ops...)
+        } else {
+                if req.Type == "" {
+                        http.Error(w, "missing type", http.StatusBadRequest)
+                        return
+                }
+                ops = append(ops, outlineApplyOp{Type: req.Type, Detail: req.Detail})
+        }
+
         changed := false
         now := time.Now().UTC()
+        for _, op := range ops {
+                if op.Type == "" {
+                        http.Error(w, "missing type", http.StatusBadRequest)
+                        return
+                }
 
-        switch req.Type {
-        case "outline:edit:save":
-                var d struct {
-                        ID      string `json:"id"`
-                        NewText string `json:"newText"`
-                }
-                if err := json.Unmarshal(req.Detail, &d); err != nil {
-                        http.Error(w, err.Error(), http.StatusBadRequest)
-                        return
-                }
-                itemID := strings.TrimSpace(d.ID)
-                title := strings.TrimSpace(d.NewText)
-                if itemID == "" || title == "" {
-                        http.Error(w, "missing id or newText", http.StatusBadRequest)
-                        return
-                }
-                it, ok := db.FindItem(itemID)
-                if !ok || it == nil || it.Archived || it.OutlineID != outlineID {
-                        http.NotFound(w, r)
-                        return
-                }
-                if !perm.CanEditItem(db, actorID, it) {
-                        http.Error(w, "owner-only", http.StatusForbidden)
-                        return
-                }
-                if strings.TrimSpace(it.Title) != title {
-                        it.Title = title
-                        it.UpdatedAt = now
-                        if err := st.AppendEvent(actorID, "item.set_title", it.ID, map[string]any{"title": it.Title}); err != nil {
+                switch op.Type {
+                case "outline:edit:save":
+                        var d struct {
+                                ID      string `json:"id"`
+                                NewText string `json:"newText"`
+                                Text    string `json:"text"`
+                        }
+                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        itemID := strings.TrimSpace(d.ID)
+                        title := strings.TrimSpace(d.NewText)
+                        if title == "" {
+                                // Compatibility: older client payload used `text`.
+                                title = strings.TrimSpace(d.Text)
+                        }
+                        if itemID == "" || title == "" {
+                                http.Error(w, "missing id or newText", http.StatusBadRequest)
+                                return
+                        }
+                        it, ok := db.FindItem(itemID)
+                        if !ok || it == nil || it.Archived || it.OutlineID != outlineID {
+                                http.NotFound(w, r)
+                                return
+                        }
+                        if !perm.CanEditItem(db, actorID, it) {
+                                http.Error(w, "owner-only", http.StatusForbidden)
+                                return
+                        }
+                        if strings.TrimSpace(it.Title) != title {
+                                it.Title = title
+                                it.UpdatedAt = now
+                                if err := st.AppendEvent(actorID, "item.set_title", it.ID, map[string]any{"title": it.Title}); err != nil {
+                                        http.Error(w, err.Error(), http.StatusConflict)
+                                        return
+                                }
+                                changed = true
+                        }
+
+                case "outline:toggle":
+                        var d struct {
+                                ID string `json:"id"`
+                                To string `json:"to"`
+                                // Compatibility: older client payload used `status`.
+                                Status string `json:"status"`
+                                Note   string `json:"note"`
+                        }
+                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        itemID := strings.TrimSpace(d.ID)
+                        if itemID == "" {
+                                http.Error(w, "missing id", http.StatusBadRequest)
+                                return
+                        }
+                        it, ok := db.FindItem(itemID)
+                        if !ok || it == nil || it.Archived || it.OutlineID != outlineID {
+                                http.NotFound(w, r)
+                                return
+                        }
+                        to := strings.TrimSpace(d.To)
+                        if to == "" {
+                                to = strings.TrimSpace(d.Status)
+                        }
+                        statusID, err := statusIDFromOutlineToggle(*o, to)
+                        if err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        var note *string
+                        if strings.TrimSpace(d.Note) != "" {
+                                n := strings.TrimSpace(d.Note)
+                                note = &n
+                        }
+                        res, err := mutate.SetItemStatus(db, actorID, it.ID, statusID, note)
+                        if err != nil {
+                                http.Error(w, err.Error(), http.StatusConflict)
+                                return
+                        }
+                        if res.Changed {
+                                it.UpdatedAt = now
+                                if err := st.AppendEvent(actorID, "item.set_status", it.ID, res.EventPayload); err != nil {
+                                        http.Error(w, err.Error(), http.StatusConflict)
+                                        return
+                                }
+                                changed = true
+                        }
+
+                case "outline:move":
+                        var d struct {
+                                ID       string  `json:"id"`
+                                ParentID *string `json:"parentId"`
+                                BeforeID *string `json:"beforeId"`
+                                AfterID  *string `json:"afterId"`
+                        }
+                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        itemID := strings.TrimSpace(d.ID)
+                        if itemID == "" {
+                                http.Error(w, "missing id", http.StatusBadRequest)
+                                return
+                        }
+                        parentID := ""
+                        if d.ParentID != nil {
+                                parentID = strings.TrimSpace(*d.ParentID)
+                        }
+                        before := ""
+                        after := ""
+                        if d.BeforeID != nil {
+                                before = strings.TrimSpace(*d.BeforeID)
+                        }
+                        if d.AfterID != nil {
+                                after = strings.TrimSpace(*d.AfterID)
+                        }
+                        if err := applyItemMoveOrReparent(db, actorID, itemID, outlineID, parentID, before, after, now, st); err != nil {
                                 http.Error(w, err.Error(), http.StatusConflict)
                                 return
                         }
                         changed = true
-                }
 
-        case "outline:toggle":
-                var d struct {
-                        ID string `json:"id"`
-                        To string `json:"to"`
-                }
-                if err := json.Unmarshal(req.Detail, &d); err != nil {
-                        http.Error(w, err.Error(), http.StatusBadRequest)
+                default:
+                        http.Error(w, "unsupported type: "+op.Type, http.StatusBadRequest)
                         return
                 }
-                itemID := strings.TrimSpace(d.ID)
-                if itemID == "" {
-                        http.Error(w, "missing id", http.StatusBadRequest)
-                        return
-                }
-                it, ok := db.FindItem(itemID)
-                if !ok || it == nil || it.Archived || it.OutlineID != outlineID {
-                        http.NotFound(w, r)
-                        return
-                }
-                statusID, err := statusIDFromOutlineToggle(*o, strings.TrimSpace(d.To))
-                if err != nil {
-                        http.Error(w, err.Error(), http.StatusBadRequest)
-                        return
-                }
-                res, err := mutate.SetItemStatus(db, actorID, it.ID, statusID, nil)
-                if err != nil {
-                        http.Error(w, err.Error(), http.StatusConflict)
-                        return
-                }
-                if res.Changed {
-                        it.UpdatedAt = now
-                        if err := st.AppendEvent(actorID, "item.set_status", it.ID, res.EventPayload); err != nil {
-                                http.Error(w, err.Error(), http.StatusConflict)
-                                return
-                        }
-                        changed = true
-                }
-
-        case "outline:move":
-                var d struct {
-                        ID       string  `json:"id"`
-                        ParentID *string `json:"parentId"`
-                        BeforeID *string `json:"beforeId"`
-                        AfterID  *string `json:"afterId"`
-                }
-                if err := json.Unmarshal(req.Detail, &d); err != nil {
-                        http.Error(w, err.Error(), http.StatusBadRequest)
-                        return
-                }
-                itemID := strings.TrimSpace(d.ID)
-                if itemID == "" {
-                        http.Error(w, "missing id", http.StatusBadRequest)
-                        return
-                }
-                parentID := ""
-                if d.ParentID != nil {
-                        parentID = strings.TrimSpace(*d.ParentID)
-                }
-                before := ""
-                after := ""
-                if d.BeforeID != nil {
-                        before = strings.TrimSpace(*d.BeforeID)
-                }
-                if d.AfterID != nil {
-                        after = strings.TrimSpace(*d.AfterID)
-                }
-                if err := applyItemMoveOrReparent(db, actorID, itemID, outlineID, parentID, before, after, now, st); err != nil {
-                        http.Error(w, err.Error(), http.StatusConflict)
-                        return
-                }
-                changed = true
-
-        default:
-                http.Error(w, "unsupported type: "+req.Type, http.StatusBadRequest)
-                return
         }
 
         if changed {
