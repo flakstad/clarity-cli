@@ -1,11 +1,6 @@
 {{define "sync_main"}}
 <main id="clarity-main">
   <h1>Sync</h1>
-  <p class="meta">
-    <a href="/">Home</a> · <a href="/projects">Projects</a> · <a href="/agenda">Agenda</a>
-    · now={{.Now}}
-    {{if .Workspace}} · workspace={{.Workspace}}{{end}}
-  </p>
 
   {{if .Message}}<div class="msg">{{.Message}}</div>{{end}}
 
@@ -85,6 +80,7 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
+  {{template "web_header" .}}
   {{template "sync_main" .}}
   {{template "web_scripts" .}}
 </body>

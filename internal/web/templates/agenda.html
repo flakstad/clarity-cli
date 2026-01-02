@@ -1,11 +1,6 @@
 {{define "agenda_main"}}
 <main id="clarity-main">
   <h1>Agenda</h1>
-  <p class="meta">
-    <a href="/">Home</a> · <a href="/projects">Projects</a>
-    · now={{.Now}}
-    {{if .Workspace}} · workspace={{.Workspace}}{{end}}
-  </p>
 
   <div class="card">
     <div><strong>Actor</strong>: {{if .ActorID}}<code>{{.ActorID}}</code>{{else}}(none){{end}}</div>
@@ -45,6 +40,7 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
+  {{template "web_header" .}}
   {{template "agenda_main" .}}
   {{template "web_scripts" .}}
 </body>

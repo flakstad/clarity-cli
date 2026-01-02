@@ -57,6 +57,35 @@ type Server struct {
         bc         *resourceBroadcaster
 }
 
+type baseVM struct {
+        Now       string
+        Workspace string
+        Dir       string
+        ReadOnly  bool
+        ActorID   string
+        AuthMode  string
+        Git       gitrepo.Status
+        StreamURL string
+}
+
+func (s *Server) baseVMForRequest(r *http.Request, streamURL string) baseVM {
+        ctx, cancel := context.WithTimeout(r.Context(), 1200*time.Millisecond)
+        defer cancel()
+
+        st, _ := gitrepo.GetStatus(ctx, s.cfg.Dir)
+
+        return baseVM{
+                Now:       time.Now().Format(time.RFC3339),
+                Workspace: s.cfg.Workspace,
+                Dir:       s.cfg.Dir,
+                ReadOnly:  s.cfg.ReadOnly,
+                ActorID:   strings.TrimSpace(s.actorForRequest(r)),
+                AuthMode:  s.cfg.AuthMode,
+                Git:       st,
+                StreamURL: streamURL,
+        }
+}
+
 func NewServer(cfg ServerConfig) (*Server, error) {
         cfg.Addr = strings.TrimSpace(cfg.Addr)
         cfg.Dir = strings.TrimSpace(cfg.Dir)
@@ -572,26 +601,14 @@ func (s *Server) handleWorkspaceEvents(w http.ResponseWriter, r *http.Request) {
         switch view {
         case "home":
                 s.serveDatastarStream(w, r, resourceKey{kind: "workspace"}, func() (string, error) {
-                        ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-                        defer cancel()
-
-                        st, _ := gitrepo.GetStatus(ctx, s.cfg.Dir)
                         db, err := (store.Store{Dir: s.cfg.Dir}).Load()
                         if err != nil {
                                 return "", err
                         }
-                        actorID := s.actorForRequest(r)
                         vm := homeVM{
-                                Now:       time.Now().Format(time.RFC3339),
-                                Workspace: s.cfg.Workspace,
-                                Dir:       s.cfg.Dir,
-                                ReadOnly:  s.cfg.ReadOnly,
-                                ActorID:   actorID,
-                                AuthMode:  s.cfg.AuthMode,
-                                Git:       st,
-                                Projects:  unarchivedProjects(db.Projects),
-                                Ready:     readyItems(db),
-                                StreamURL: "/events?view=home",
+                                baseVM:   s.baseVMForRequest(r, "/events?view=home"),
+                                Projects: unarchivedProjects(db.Projects),
+                                Ready:    readyItems(db),
                         }
                         return s.renderTemplate("home_main", vm)
                 })
@@ -602,11 +619,8 @@ func (s *Server) handleWorkspaceEvents(w http.ResponseWriter, r *http.Request) {
                                 return "", err
                         }
                         vm := projectsVM{
-                                Now:       time.Now().Format(time.RFC3339),
-                                Workspace: s.cfg.Workspace,
-                                Dir:       s.cfg.Dir,
-                                Projects:  unarchivedProjects(db.Projects),
-                                StreamURL: "/events?view=projects",
+                                baseVM:   s.baseVMForRequest(r, "/events?view=projects"),
+                                Projects: unarchivedProjects(db.Projects),
                         }
                         return s.renderTemplate("projects_main", vm)
                 })
@@ -618,28 +632,17 @@ func (s *Server) handleWorkspaceEvents(w http.ResponseWriter, r *http.Request) {
                         }
                         actorID := strings.TrimSpace(s.actorForRequest(r))
                         vm := agendaVM{
-                                Now:       time.Now().Format(time.RFC3339),
-                                Workspace: s.cfg.Workspace,
-                                Dir:       s.cfg.Dir,
-                                ActorID:   actorID,
-                                Items:     agendaItems(db, actorID),
-                                StreamURL: "/events?view=agenda",
+                                baseVM: s.baseVMForRequest(r, "/events?view=agenda"),
+                                Items:  agendaItems(db, actorID),
                         }
+                        vm.ActorID = actorID
                         return s.renderTemplate("agenda_main", vm)
                 })
         case "sync":
                 s.serveDatastarStream(w, r, resourceKey{kind: "workspace"}, func() (string, error) {
-                        ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-                        defer cancel()
-                        st, _ := gitrepo.GetStatus(ctx, s.cfg.Dir)
                         vm := syncVM{
-                                Now:       time.Now().Format(time.RFC3339),
-                                Workspace: s.cfg.Workspace,
-                                Dir:       s.cfg.Dir,
-                                ReadOnly:  s.cfg.ReadOnly,
-                                Git:       st,
-                                Message:   "",
-                                StreamURL: "/events?view=sync",
+                                baseVM:  s.baseVMForRequest(r, "/events?view=sync"),
+                                Message: "",
                         }
                         return s.renderTemplate("sync_main", vm)
                 })
@@ -665,12 +668,9 @@ func (s *Server) handleProjectEvents(w http.ResponseWriter, r *http.Request) {
                         return "", errors.New("project not found")
                 }
                 vm := projectVM{
-                        Now:       time.Now().Format(time.RFC3339),
-                        Workspace: s.cfg.Workspace,
-                        Dir:       s.cfg.Dir,
-                        Project:   *p,
-                        Outlines:  unarchivedOutlines(db.Outlines, id),
-                        StreamURL: "/projects/" + p.ID + "/events?view=project",
+                        baseVM:  s.baseVMForRequest(r, "/projects/"+p.ID+"/events?view=project"),
+                        Project: *p,
+                        Outlines: unarchivedOutlines(db.Outlines, id),
                 }
                 return s.renderTemplate("project_main", vm)
         })
@@ -725,31 +725,29 @@ func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
                                 items = append(items, it)
                         }
                 }
-        openTo, endTo, openLbl, endLbl := outlineToggleTargets(*o)
-        nodes := buildOutlineNativeNodes(db, *o, actorID)
-        statusOptions := outlineStatusOptionsJSON(*o)
+                openTo, endTo, openLbl, endLbl := outlineToggleTargets(*o)
+                nodes := buildOutlineNativeNodes(db, *o, actorID)
+                statusOptions := outlineStatusOptionsJSON(*o)
+                actorOptions := actorOptionsJSON(db)
 
-        vm := outlineVM{
-                        Now:                 time.Now().Format(time.RFC3339),
-                        Workspace:           s.cfg.Workspace,
-                        Dir:                 s.cfg.Dir,
-                        ActorID:             actorID,
-                        ReadOnly:            s.cfg.ReadOnly,
+                vm := outlineVM{
+                        baseVM:              s.baseVMForRequest(r, "/outlines/"+o.ID+"/events?view=outline"),
                         Outline:             *o,
-                        StreamURL:           "/outlines/" + o.ID + "/events?view=outline",
                         UseOutlineComponent: false,
                         ItemsJSON:           itemsJSON,
                         StatusLabelsJSON:    statusJSON,
                         AssigneesJSON:       assigneesJSON,
                         TagsJSON:            tagsJSON,
                         Items:               items,
-                NativeNodes:         nodes,
-                ToggleOpenTo:        openTo,
-                ToggleEndTo:         endTo,
-                ToggleOpenLbl:       openLbl,
-                ToggleEndLbl:        endLbl,
-                StatusOptionsJSON:   statusOptions,
-        }
+                        NativeNodes:         nodes,
+                        ToggleOpenTo:        openTo,
+                        ToggleEndTo:         endTo,
+                        ToggleOpenLbl:       openLbl,
+                        ToggleEndLbl:        endLbl,
+                        StatusOptionsJSON:   statusOptions,
+                        ActorOptionsJSON:    actorOptions,
+                }
+                vm.ActorID = actorID
                 return s.renderTemplate("outline_native", vm)
         })
 }
@@ -786,39 +784,62 @@ func (s *Server) handleItemEvents(w http.ResponseWriter, r *http.Request) {
                                 }
                         }
                 }
+                assignedID := ""
+                if it.AssignedActorID != nil {
+                        assignedID = strings.TrimSpace(*it.AssignedActorID)
+                }
 
                 vm := itemVM{
-                        Now:       time.Now().Format(time.RFC3339),
-                        Workspace: s.cfg.Workspace,
-                        Dir:       s.cfg.Dir,
-                        ReadOnly:  s.cfg.ReadOnly,
-                        ActorID:   actorID,
-                        Item:      *it,
-                        Comments:  comments,
-                        ReplyTo:   "",
-                        Worklog:   worklog,
-                        StreamURL: "/items/" + it.ID + "/events?view=item",
+                        baseVM:   s.baseVMForRequest(r, "/items/"+it.ID+"/events?view=item"),
+                        Item:     *it,
+                        AssignedID: assignedID,
+                        ActorOptions: []actorOption(nil),
+                        Comments: comments,
+                        ReplyTo:  "",
+                        Worklog:  worklog,
 
                         CanEdit:        canEdit,
                         StatusDefs:     statusDefs,
                         ErrorMessage:   "",
                         SuccessMessage: "",
                 }
+                vm.ActorOptions = nil
+                if db != nil {
+                        // include options so the edit form can render an assignee picker
+                        opts := make([]actorOption, 0, len(db.Actors))
+                        for _, a := range db.Actors {
+                                id := strings.TrimSpace(a.ID)
+                                if id == "" {
+                                        continue
+                                }
+                                opts = append(opts, actorOption{ID: id, Label: actorDisplayLabel(db, id), Kind: string(a.Kind)})
+                        }
+                        sort.Slice(opts, func(i, j int) bool {
+                                if opts[i].Kind != opts[j].Kind {
+                                        if opts[i].Kind == string(model.ActorKindHuman) {
+                                                return true
+                                        }
+                                        if opts[j].Kind == string(model.ActorKindHuman) {
+                                                return false
+                                        }
+                                        return opts[i].Kind < opts[j].Kind
+                                }
+                                if opts[i].Label != opts[j].Label {
+                                        return opts[i].Label < opts[j].Label
+                                }
+                                return opts[i].ID < opts[j].ID
+                        })
+                        vm.ActorOptions = opts
+                }
+                vm.ActorID = actorID
                 return s.renderTemplate("item_main", vm)
         })
 }
 
 type homeVM struct {
-        Now       string
-        Workspace string
-        Dir       string
-        ReadOnly  bool
-        ActorID   string
-        AuthMode  string
-        Git       gitrepo.Status
+        baseVM
         Projects  []model.Project
         Ready     []model.Item
-        StreamURL string
 }
 
 func unarchivedProjects(projects []model.Project) []model.Project {
@@ -847,32 +868,20 @@ func unarchivedOutlines(outlines []model.Outline, projectID string) []model.Outl
 }
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
-        ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-        defer cancel()
-
-        st, _ := gitrepo.GetStatus(ctx, s.cfg.Dir)
-
         db, err := (store.Store{Dir: s.cfg.Dir}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
         }
 
-        actorID := s.actorForRequest(r)
         ready := readyItems(db)
 
-        s.writeHTMLTemplate(w, "home.html", homeVM{
-                Now:       time.Now().Format(time.RFC3339),
-                Workspace: s.cfg.Workspace,
-                Dir:       s.cfg.Dir,
-                ReadOnly:  s.cfg.ReadOnly,
-                ActorID:   actorID,
-                AuthMode:  s.cfg.AuthMode,
-                Git:       st,
-                Projects:  unarchivedProjects(db.Projects),
-                Ready:     ready,
-                StreamURL: "/events?view=home",
-        })
+        vm := homeVM{
+                baseVM:   s.baseVMForRequest(r, "/events?view=home"),
+                Projects: unarchivedProjects(db.Projects),
+                Ready:    ready,
+        }
+        s.writeHTMLTemplate(w, "home.html", vm)
 }
 
 type loginVM struct {
@@ -1091,12 +1100,8 @@ func (s *Server) handleVerifyGet(w http.ResponseWriter, r *http.Request) {
 }
 
 type agendaVM struct {
-        Now       string
-        Workspace string
-        Dir       string
-        ActorID   string
+        baseVM
         Items     []model.Item
-        StreamURL string
 }
 
 func (s *Server) handleAgenda(w http.ResponseWriter, r *http.Request) {
@@ -1108,43 +1113,27 @@ func (s *Server) handleAgenda(w http.ResponseWriter, r *http.Request) {
 
         actorID := strings.TrimSpace(s.actorForRequest(r))
         items := agendaItems(db, actorID)
-
-        s.writeHTMLTemplate(w, "agenda.html", agendaVM{
-                Now:       time.Now().Format(time.RFC3339),
-                Workspace: s.cfg.Workspace,
-                Dir:       s.cfg.Dir,
-                ActorID:   actorID,
-                Items:     items,
-                StreamURL: "/events?view=agenda",
-        })
+        vm := agendaVM{
+                baseVM: s.baseVMForRequest(r, "/events?view=agenda"),
+                Items:  items,
+        }
+        // Preserve explicit actor resolution semantics used elsewhere.
+        vm.ActorID = actorID
+        s.writeHTMLTemplate(w, "agenda.html", vm)
 }
 
 type syncVM struct {
-        Now       string
-        Workspace string
-        Dir       string
-        ReadOnly  bool
-        Git       gitrepo.Status
+        baseVM
         Message   string
-        StreamURL string
 }
 
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
-        ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-        defer cancel()
-
-        st, _ := gitrepo.GetStatus(ctx, s.cfg.Dir)
         msg := strings.TrimSpace(r.URL.Query().Get("msg"))
-
-        s.writeHTMLTemplate(w, "sync.html", syncVM{
-                Now:       time.Now().Format(time.RFC3339),
-                Workspace: s.cfg.Workspace,
-                Dir:       s.cfg.Dir,
-                ReadOnly:  s.cfg.ReadOnly,
-                Git:       st,
-                Message:   msg,
-                StreamURL: "/events?view=sync",
-        })
+        vm := syncVM{
+                baseVM:  s.baseVMForRequest(r, "/events?view=sync"),
+                Message: msg,
+        }
+        s.writeHTMLTemplate(w, "sync.html", vm)
 }
 
 func (s *Server) handleSyncInit(w http.ResponseWriter, r *http.Request) {
@@ -1378,11 +1367,8 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
 }
 
 type projectsVM struct {
-        Now       string
-        Workspace string
-        Dir       string
+        baseVM
         Projects  []model.Project
-        StreamURL string
 }
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
@@ -1392,22 +1378,17 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        s.writeHTMLTemplate(w, "projects.html", projectsVM{
-                Now:       time.Now().Format(time.RFC3339),
-                Workspace: s.cfg.Workspace,
-                Dir:       s.cfg.Dir,
-                Projects:  unarchivedProjects(db.Projects),
-                StreamURL: "/events?view=projects",
-        })
+        vm := projectsVM{
+                baseVM:   s.baseVMForRequest(r, "/events?view=projects"),
+                Projects: unarchivedProjects(db.Projects),
+        }
+        s.writeHTMLTemplate(w, "projects.html", vm)
 }
 
 type projectVM struct {
-        Now       string
-        Workspace string
-        Dir       string
+        baseVM
         Project   model.Project
         Outlines  []model.Outline
-        StreamURL string
 }
 
 func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
@@ -1434,24 +1415,17 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 
         outlines := unarchivedOutlines(db.Outlines, projectID)
 
-        s.writeHTMLTemplate(w, "project.html", projectVM{
-                Now:       time.Now().Format(time.RFC3339),
-                Workspace: s.cfg.Workspace,
-                Dir:       s.cfg.Dir,
-                Project:   *p,
-                Outlines:  outlines,
-                StreamURL: "/projects/" + p.ID + "/events?view=project",
-        })
+        vm := projectVM{
+                baseVM:  s.baseVMForRequest(r, "/projects/"+p.ID+"/events?view=project"),
+                Project: *p,
+                Outlines: outlines,
+        }
+        s.writeHTMLTemplate(w, "project.html", vm)
 }
 
 type outlineVM struct {
-        Now       string
-        Workspace string
-        Dir       string
-        ActorID   string
-        ReadOnly  bool
+        baseVM
         Outline   model.Outline
-        StreamURL string
 
         // Outline component view-model (progressive enhancement).
         UseOutlineComponent bool
@@ -1471,6 +1445,7 @@ type outlineVM struct {
         ToggleEndLbl  string
 
         StatusOptionsJSON template.HTMLAttr
+        ActorOptionsJSON  template.HTMLAttr
 }
 
 type outlineNativeNode struct {
@@ -1480,7 +1455,62 @@ type outlineNativeNode struct {
         StatusLabel string
         IsEndState bool
         CanEdit    bool
+        AssignedLabel string
         Children   []outlineNativeNode
+}
+
+type actorOption struct {
+        ID    string `json:"id"`
+        Label string `json:"label"`
+        Kind  string `json:"kind,omitempty"`
+}
+
+func actorDisplayLabel(db *store.DB, actorID string) string {
+        actorID = strings.TrimSpace(actorID)
+        if db == nil || actorID == "" {
+                return ""
+        }
+        if a, ok := db.FindActor(actorID); ok && a != nil {
+                if strings.TrimSpace(a.Name) != "" {
+                        return strings.TrimSpace(a.Name)
+                }
+        }
+        return actorID
+}
+
+func actorOptionsJSON(db *store.DB) template.HTMLAttr {
+        opts := make([]actorOption, 0)
+        if db != nil {
+                for _, a := range db.Actors {
+                        id := strings.TrimSpace(a.ID)
+                        if id == "" {
+                                continue
+                        }
+                        lbl := strings.TrimSpace(a.Name)
+                        if lbl == "" {
+                                lbl = id
+                        }
+                        opts = append(opts, actorOption{ID: id, Label: lbl, Kind: string(a.Kind)})
+                }
+        }
+        sort.Slice(opts, func(i, j int) bool {
+                // Humans first.
+                if opts[i].Kind != opts[j].Kind {
+                        if opts[i].Kind == string(model.ActorKindHuman) {
+                                return true
+                        }
+                        if opts[j].Kind == string(model.ActorKindHuman) {
+                                return false
+                        }
+                        return opts[i].Kind < opts[j].Kind
+                }
+                if opts[i].Label != opts[j].Label {
+                        return opts[i].Label < opts[j].Label
+                }
+                return opts[i].ID < opts[j].ID
+        })
+        b, _ := json.Marshal(opts)
+        return template.HTMLAttr(b)
 }
 
 func outlineToggleTargets(o model.Outline) (openTo, endTo, openLbl, endLbl string) {
@@ -1605,6 +1635,10 @@ func buildOutlineNativeNodes(db *store.DB, o model.Outline, actorID string) []ou
                         if mapped, ok := statusLabelByID[sid]; ok && strings.TrimSpace(mapped) != "" {
                                 lbl = strings.TrimSpace(mapped)
                         }
+                        assignedLabel := ""
+                        if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) != "" {
+                                assignedLabel = actorDisplayLabel(db, strings.TrimSpace(*it.AssignedActorID))
+                        }
                         out = append(out, outlineNativeNode{
                                 ID:         it.ID,
                                 Title:      it.Title,
@@ -1612,6 +1646,7 @@ func buildOutlineNativeNodes(db *store.DB, o model.Outline, actorID string) []ou
                                 StatusLabel: lbl,
                                 IsEndState: statusutil.IsEndState(o, it.StatusID),
                                 CanEdit:    actorID != "" && perm.CanEditItem(db, actorID, it),
+                                AssignedLabel: assignedLabel,
                                 Children:   build(it.ID),
                         })
                 }
@@ -1655,15 +1690,11 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
         openTo, endTo, openLbl, endLbl := outlineToggleTargets(*o)
         nodes := buildOutlineNativeNodes(db, *o, actorID)
         statusOptions := outlineStatusOptionsJSON(*o)
+        actorOptions := actorOptionsJSON(db)
 
-        s.writeHTMLTemplate(w, "outline.html", outlineVM{
-                Now:                 time.Now().Format(time.RFC3339),
-                Workspace:           s.cfg.Workspace,
-                Dir:                 s.cfg.Dir,
-                ActorID:             actorID,
-                ReadOnly:            s.cfg.ReadOnly,
+        vm := outlineVM{
+                baseVM:              s.baseVMForRequest(r, "/outlines/"+o.ID+"/events?view=outline"),
                 Outline:             *o,
-                StreamURL:           "/outlines/" + o.ID + "/events?view=outline",
                 UseOutlineComponent: useComponent,
                 ItemsJSON:           itemsJSON,
                 StatusLabelsJSON:    statusJSON,
@@ -1676,7 +1707,10 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
                 ToggleOpenLbl:       openLbl,
                 ToggleEndLbl:        endLbl,
                 StatusOptionsJSON:   statusOptions,
-        })
+                ActorOptionsJSON:    actorOptions,
+        }
+        vm.ActorID = actorID
+        s.writeHTMLTemplate(w, "outline.html", vm)
 }
 
 func (s *Server) handleOutlineItemCreate(w http.ResponseWriter, r *http.Request) {
@@ -2145,6 +2179,47 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                                 changed = true
                         }
 
+                case "outline:set_assign":
+                        var d struct {
+                                ID              string  `json:"id"`
+                                AssignedActorID *string `json:"assignedActorId"`
+                                Assigned        *string `json:"assigned"`
+                        }
+                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        itemID := strings.TrimSpace(d.ID)
+                        if itemID == "" {
+                                http.Error(w, "missing id", http.StatusBadRequest)
+                                return
+                        }
+                        it, ok := db.FindItem(itemID)
+                        if !ok || it == nil || it.Archived || it.OutlineID != outlineID {
+                                http.NotFound(w, r)
+                                return
+                        }
+                        target := d.AssignedActorID
+                        if target == nil {
+                                target = d.Assigned
+                        }
+                        if target != nil && strings.TrimSpace(*target) == "" {
+                                target = nil
+                        }
+                        res, err := mutate.SetAssignedActor(db, actorID, it.ID, target, mutate.AssignOpts{TakeAssigned: false})
+                        if err != nil {
+                                http.Error(w, err.Error(), http.StatusConflict)
+                                return
+                        }
+                        if res.Changed {
+                                it.UpdatedAt = now
+                                if err := st.AppendEvent(actorID, "item.set_assign", it.ID, res.EventPayload); err != nil {
+                                        http.Error(w, err.Error(), http.StatusConflict)
+                                        return
+                                }
+                                changed = true
+                        }
+
                 case "outline:move":
                         var d struct {
                                 ID       string  `json:"id"`
@@ -2427,16 +2502,13 @@ func isAncestor(db *store.DB, itemID, ancestorID string) bool {
 }
 
 type itemVM struct {
-        Now       string
-        Workspace string
-        Dir       string
-        ReadOnly  bool
-        ActorID   string
+        baseVM
         Item      model.Item
+        AssignedID string
+        ActorOptions []actorOption
         Comments  []model.Comment
         ReplyTo   string
         Worklog   []model.WorklogEntry
-        StreamURL string
 
         CanEdit        bool
         StatusDefs     []model.OutlineStatusDef
@@ -2498,22 +2570,51 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 }
         }
 
-        s.writeHTMLTemplate(w, "item.html", itemVM{
-                Now:            time.Now().Format(time.RFC3339),
-                Workspace:      s.cfg.Workspace,
-                Dir:            s.cfg.Dir,
-                ReadOnly:       s.cfg.ReadOnly,
-                ActorID:        actorID,
-                Item:           *it,
-                Comments:       comments,
-                ReplyTo:        replyTo,
-                Worklog:        worklog,
-                StreamURL:      "/items/" + it.ID + "/events?view=item",
-                CanEdit:        canEdit,
-                StatusDefs:     statusDefs,
-                ErrorMessage:   errMsg,
+        assignedID := ""
+        if it.AssignedActorID != nil {
+                assignedID = strings.TrimSpace(*it.AssignedActorID)
+        }
+        vm := itemVM{
+                baseVM:        s.baseVMForRequest(r, "/items/"+it.ID+"/events?view=item"),
+                Item:          *it,
+                AssignedID:    assignedID,
+                Comments:      comments,
+                ReplyTo:       replyTo,
+                Worklog:       worklog,
+                CanEdit:       canEdit,
+                StatusDefs:    statusDefs,
+                ErrorMessage:  errMsg,
                 SuccessMessage: okMsg,
-        })
+        }
+        vm.ActorID = actorID
+        vm.ActorOptions = nil
+        if db != nil {
+                opts := make([]actorOption, 0, len(db.Actors))
+                for _, a := range db.Actors {
+                        id := strings.TrimSpace(a.ID)
+                        if id == "" {
+                                continue
+                        }
+                        opts = append(opts, actorOption{ID: id, Label: actorDisplayLabel(db, id), Kind: string(a.Kind)})
+                }
+                sort.Slice(opts, func(i, j int) bool {
+                        if opts[i].Kind != opts[j].Kind {
+                                if opts[i].Kind == string(model.ActorKindHuman) {
+                                        return true
+                                }
+                                if opts[j].Kind == string(model.ActorKindHuman) {
+                                        return false
+                                }
+                                return opts[i].Kind < opts[j].Kind
+                        }
+                        if opts[i].Label != opts[j].Label {
+                                return opts[i].Label < opts[j].Label
+                        }
+                        return opts[i].ID < opts[j].ID
+                })
+                vm.ActorOptions = opts
+        }
+        s.writeHTMLTemplate(w, "item.html", vm)
 }
 
 func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {
@@ -2542,6 +2643,7 @@ func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {
         title := strings.TrimSpace(r.Form.Get("title"))
         description := r.Form.Get("description")
         statusID := strings.TrimSpace(r.Form.Get("status"))
+        assignedActorIDRaw := strings.TrimSpace(r.Form.Get("assignedActorId"))
 
         st := store.Store{Dir: s.cfg.Dir}
         db, err := st.Load()
@@ -2602,6 +2704,28 @@ func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {
                 if res.Changed {
                         it.UpdatedAt = now
                         if err := st.AppendEvent(actorID, "item.set_status", it.ID, res.EventPayload); err != nil {
+                                http.Error(w, err.Error(), http.StatusConflict)
+                                return
+                        }
+                        changed = true
+                }
+        }
+
+        // Assignment (optional).
+        if assignedActorIDRaw != "" || it.AssignedActorID != nil {
+                var target *string
+                if assignedActorIDRaw != "" {
+                        tmp := assignedActorIDRaw
+                        target = &tmp
+                }
+                res, err := mutate.SetAssignedActor(db, actorID, it.ID, target, mutate.AssignOpts{TakeAssigned: false})
+                if err != nil {
+                        http.Redirect(w, r, "/items/"+itemID+"?err="+urlQueryEscape(err.Error()), http.StatusSeeOther)
+                        return
+                }
+                if res.Changed {
+                        it.UpdatedAt = now
+                        if err := st.AppendEvent(actorID, "item.set_assign", it.ID, res.EventPayload); err != nil {
                                 http.Error(w, err.Error(), http.StatusConflict)
                                 return
                         }

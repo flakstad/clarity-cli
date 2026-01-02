@@ -1,0 +1,34 @@
+{{define "web_header"}}
+<header class="topbar">
+  <div class="topbar-left">
+    <a class="topbar-brand" href="/">Clarity</a>
+    <span class="dim">{{if .Workspace}}{{.Workspace}}{{else}}(auto){{end}}</span>
+    {{if .ActorID}}<span class="badge"><code>{{.ActorID}}</code></span>{{end}}
+    {{if .ReadOnly}}<span class="badge">read-only</span>{{end}}
+    {{if .Git.IsRepo}}
+      {{if .Git.Dirty}}<span class="badge">git: dirty</span>{{else}}<span class="badge">git: clean</span>{{end}}
+      {{if .Git.Unmerged}}<span class="badge">unmerged</span>{{end}}
+      {{if .Git.InProgress}}<span class="badge">in-progress</span>{{end}}
+    {{end}}
+  </div>
+
+  <nav class="topbar-nav">
+    <a href="/projects">Projects</a>
+    <a href="/agenda">Agenda</a>
+    <a href="/sync">Sync</a>
+  </nav>
+
+  <div class="topbar-right">
+    <span class="dim"><code>?</code> help</span>
+    {{if or (eq .AuthMode "dev") (eq .AuthMode "magic")}}
+      {{if .ActorID}}
+        <form method="post" action="/logout" style="display:inline;">
+          <button type="submit">Logout</button>
+        </form>
+      {{else}}
+        <a href="/login">Login</a>
+      {{end}}
+    {{end}}
+  </div>
+</header>
+{{end}}

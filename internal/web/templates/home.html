@@ -1,19 +1,6 @@
 {{define "home_main"}}
 <main id="clarity-main">
   <h1>Clarity Web <span class="badge">v1 experimental</span></h1>
-  <p class="meta">
-    <a href="/projects">Projects</a>
-    · <a href="/agenda">Agenda</a>
-    · <a href="/sync">Sync</a>
-    · now={{.Now}}
-    {{if or (eq .AuthMode "dev") (eq .AuthMode "magic")}}
-      {{if .ActorID}}
-        · <form method="post" action="/logout" style="display:inline;"><button type="submit">Logout</button></form>
-      {{else}}
-        · <a href="/login">Login</a>
-      {{end}}
-    {{end}}
-  </p>
 
   <div class="card">
     <div><strong>Workspace</strong>: {{if .Workspace}}{{.Workspace}}{{else}}(auto){{end}}</div>
@@ -73,6 +60,7 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
+  {{template "web_header" .}}
   {{template "home_main" .}}
   {{template "web_scripts" .}}
 </body>

@@ -1,11 +1,6 @@
 {{define "item_main"}}
 <main id="clarity-main">
   <h1>{{.Item.Title}}</h1>
-  <p class="meta">
-    <a href="/">Home</a> · <a href="/projects">Projects</a>
-    · now={{.Now}}
-    {{if .Workspace}} · workspace={{.Workspace}}{{end}}
-  </p>
 
   <div class="card">
     <div><strong>Item</strong>: <code>{{.Item.ID}}</code> <span class="dim">({{.Item.StatusID}})</span></div>
@@ -37,6 +32,17 @@
               <option value="" {{if eq .Item.StatusID ""}}selected{{end}}>(none)</option>
               {{range .StatusDefs}}
                 <option value="{{.ID}}" {{if eq $.Item.StatusID .ID}}selected{{end}}>{{if .Label}}{{.Label}}{{else}}{{.ID}}{{end}}</option>
+              {{end}}
+            </select>
+          </div>
+        </div>
+        <div style="margin-top: 8px;">
+          <label for="assignedActorId"><span class="dim">Assignee</span></label>
+          <div>
+            <select id="assignedActorId" name="assignedActorId">
+              <option value="" {{if eq .AssignedID ""}}selected{{end}}>(unassigned)</option>
+              {{range .ActorOptions}}
+                <option value="{{.ID}}" {{if eq $.AssignedID .ID}}selected{{end}}>@{{.Label}}</option>
               {{end}}
             </select>
           </div>
@@ -120,6 +126,7 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
+  {{template "web_header" .}}
   {{template "item_main" .}}
   {{template "web_scripts" .}}
 </body>

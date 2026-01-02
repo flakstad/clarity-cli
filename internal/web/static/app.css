@@ -25,6 +25,43 @@ body {
   background: var(--bg);
 }
 
+.topbar {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+  padding: 10px 12px;
+  margin: 0 0 16px;
+}
+
+.topbar-left,
+.topbar-right,
+.topbar-nav {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.topbar-brand {
+  text-decoration: none;
+  font-weight: 650;
+}
+
+.topbar-nav a {
+  text-decoration: none;
+  opacity: 0.9;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.topbar-nav a:hover {
+  background: color-mix(in oklab, var(--bg), var(--fg) 8%);
+}
+
 h1, h2, h3 {
   margin: 0 0 8px;
 }
@@ -174,4 +211,10 @@ ul {
 
 .outline-title input {
   width: 100%;
+}
+
+.outline-assignee {
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: nowrap;
 }

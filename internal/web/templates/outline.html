@@ -1,11 +1,6 @@
 {{define "outline_main"}}
 <main id="clarity-main">
   <h1>{{.Outline.Name}}</h1>
-  <p class="meta">
-    <a href="/">Home</a> · <a href="/projects">Projects</a>
-    · now={{.Now}}
-    {{if .Workspace}} · workspace={{.Workspace}}{{end}}
-  </p>
 
   <div class="card">
     <div><strong>Outline</strong>: <code>{{.Outline.ID}}</code></div>
@@ -67,6 +62,7 @@
       {{if .StatusLabel}}{{.StatusLabel}}{{else}}{{if .StatusID}}{{.StatusID}}{{else}}(none){{end}}{{end}}
     </span>
     <span class="outline-title">{{.Title}}</span>
+    {{if .AssignedLabel}}<span class="outline-assignee dim">@{{.AssignedLabel}}</span>{{end}}
   </div>
   {{if .Children}}
     <ul class="outline-children">
@@ -87,9 +83,10 @@
   data-toggle-open-label="{{.ToggleOpenLbl}}"
   data-toggle-end-label="{{.ToggleEndLbl}}"
   data-status-options='{{.StatusOptionsJSON}}'
+  data-actor-options='{{.ActorOptionsJSON}}'
 >
   <div class="dim" style="margin: 8px 0;">
-    Native outline: <code>j/k</code> move · <code>e</code> edit · <code>Space</code> status · <code>Alt+j/k</code> reorder · <code>Ctrl+h/l</code> indent/outdent
+    Native outline: <code>j/k</code> move · <code>e</code> edit · <code>Space</code> status · <code>a</code> assign · <code>Alt+j/k</code> reorder · <code>Ctrl+h/l</code> indent/outdent
   </div>
   {{if .NativeNodes}}
     <ul class="outline-tree">
@@ -114,6 +111,7 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
+  {{template "web_header" .}}
   {{template "outline_main" .}}
   {{template "web_scripts" .}}
 </body>

@@ -220,6 +220,155 @@
     }
   };
 
+  const parseActorOptions = (root) => {
+    const raw = (root && root.dataset ? root.dataset.actorOptions : '') || '';
+    if (!raw.trim()) return [];
+    try {
+      const xs = JSON.parse(raw);
+      return Array.isArray(xs) ? xs : [];
+    } catch (_) {
+      return [];
+    }
+  };
+
+  const assigneePicker = {
+    open: false,
+    rowId: '',
+    options: [],
+    idx: 0,
+  };
+
+  const ensureAssigneeModal = () => {
+    let el = document.getElementById('native-assignee-modal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'native-assignee-modal';
+    el.style.position = 'fixed';
+    el.style.left = '0';
+    el.style.top = '0';
+    el.style.right = '0';
+    el.style.bottom = '0';
+    el.style.background = 'rgba(0,0,0,.25)';
+    el.style.display = 'none';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+    el.style.zIndex = '9998';
+    el.innerHTML = `
+      <div style="max-width:520px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+          <strong>Assign</strong>
+          <span class="dim" style="font-size:12px;">Esc to close</span>
+        </div>
+        <div id="native-assignee-list" style="margin-top:10px;max-height:46vh;overflow:auto;"></div>
+        <div class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Enter to pick</div>
+      </div>
+    `;
+    document.body.appendChild(el);
+    el.addEventListener('click', (ev) => {
+      if (ev.target === el) closeAssigneePicker();
+    });
+    return el;
+  };
+
+  const renderAssigneePicker = () => {
+    const modal = ensureAssigneeModal();
+    const list = modal.querySelector('#native-assignee-list');
+    if (!list) return;
+
+    const opts = assigneePicker.options || [];
+    list.innerHTML = '';
+    const ul = document.createElement('ul');
+    ul.style.listStyle = 'none';
+    ul.style.padding = '0';
+    ul.style.margin = '0';
+    opts.forEach((o, i) => {
+      const li = document.createElement('li');
+      li.style.padding = '6px 8px';
+      li.style.borderRadius = '8px';
+      li.style.cursor = 'pointer';
+      if (i === assigneePicker.idx) {
+        li.style.background = 'color-mix(in oklab, Canvas, CanvasText 10%)';
+      }
+      li.textContent = (o.label || o.id || '').trim() || '(none)';
+      li.addEventListener('click', () => {
+        assigneePicker.idx = i;
+        renderAssigneePicker();
+        pickSelectedAssignee();
+      });
+      ul.appendChild(li);
+    });
+    list.appendChild(ul);
+  };
+
+  const openAssigneePicker = (row) => {
+    const root = nativeOutlineRootOrFromRow(row);
+    if (!root || !row) return;
+    const id = (row.dataset.id || '').trim();
+    if (!id) return;
+    if ((row.dataset.canEdit || '') !== 'true') {
+      setOutlineStatus('Error: owner-only');
+      setTimeout(() => setOutlineStatus(''), 1200);
+      return;
+    }
+
+    const opts = [{ id: '', label: '(unassigned)' }, ...parseActorOptions(root)];
+    if (!opts.length) return;
+    assigneePicker.open = true;
+    assigneePicker.rowId = id;
+    assigneePicker.options = opts;
+    assigneePicker.idx = 0;
+
+    const modal = ensureAssigneeModal();
+    modal.style.display = 'flex';
+    renderAssigneePicker();
+  };
+
+  const closeAssigneePicker = () => {
+    assigneePicker.open = false;
+    assigneePicker.rowId = '';
+    assigneePicker.options = [];
+    assigneePicker.idx = 0;
+    const modal = document.getElementById('native-assignee-modal');
+    if (modal) modal.style.display = 'none';
+  };
+
+  const nativeRowUpdateAssignee = (row, opt) => {
+    if (!row) return;
+    const lbl = (opt && typeof opt.label === 'string') ? opt.label.trim() : '';
+    const wrap = row.querySelector('.outline-assignee');
+    if (lbl && lbl !== '(unassigned)') {
+      if (wrap) {
+        wrap.textContent = '@' + lbl;
+      } else {
+        const s = document.createElement('span');
+        s.className = 'outline-assignee dim';
+        s.textContent = '@' + lbl;
+        row.appendChild(s);
+      }
+    } else {
+      wrap && wrap.remove();
+    }
+  };
+
+  const pickSelectedAssignee = () => {
+    if (!assigneePicker.open) return;
+    const sel = assigneePicker.options[assigneePicker.idx];
+    if (!sel) return;
+    const id = assigneePicker.rowId;
+    const root = nativeOutlineRoot();
+    if (!root || !id) return;
+
+    const row = root.querySelector('[data-outline-row][data-id="' + CSS.escape(id) + '"]');
+    if (row) nativeRowUpdateAssignee(row, sel);
+    closeAssigneePicker();
+    focusNativeRowById(id);
+
+    const assignedActorId = (sel.id || '').trim();
+    outlineApply(root, 'outline:set_assign', { id, assignedActorId }).catch((err) => {
+      setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+    });
+  };
+
   const statusPicker = {
     open: false,
     rowId: '',
@@ -809,172 +958,195 @@
   document.addEventListener('outline:indent', handleOutlineReorderLike, { capture: true });
   document.addEventListener('outline:outdent', handleOutlineReorderLike, { capture: true });
 
-  document.addEventListener('keydown', (ev) => {
+  const handleStatusPickerKeydown = (ev) => {
+    if (!statusPicker.open) return false;
+    const k = (ev.key || '').toLowerCase();
+    if (k === 'escape') {
+      ev.preventDefault();
+      if (statusPicker.mode === 'note') {
+        statusPicker.mode = 'list';
+        statusPicker.note = '';
+        renderStatusPicker();
+        return true;
+      }
+      closeStatusPicker();
+      return true;
+    }
+    if (k === 'enter') {
+      ev.preventDefault();
+      pickSelectedStatus();
+      return true;
+    }
+    if (statusPicker.mode === 'list') {
+      if (k === 'arrowdown' || k === 'down' || k === 'j' || (ev.ctrlKey && k === 'n')) {
+        ev.preventDefault();
+        statusPicker.idx = Math.min((statusPicker.options.length || 1) - 1, statusPicker.idx + 1);
+        renderStatusPicker();
+        return true;
+      }
+      if (k === 'arrowup' || k === 'up' || k === 'k' || (ev.ctrlKey && k === 'p')) {
+        ev.preventDefault();
+        statusPicker.idx = Math.max(0, statusPicker.idx - 1);
+        renderStatusPicker();
+        return true;
+      }
+      // When modal is open, swallow other keys to avoid triggering app navigation.
+      return true;
+    }
+    // Note mode: let typing happen in the input, but keep Enter/Esc handled above.
+    return true;
+  };
+
+  const handleAssigneePickerKeydown = (ev) => {
+    if (!assigneePicker.open) return false;
+    const k = (ev.key || '').toLowerCase();
+    if (k === 'escape') {
+      ev.preventDefault();
+      closeAssigneePicker();
+      return true;
+    }
+    if (k === 'enter') {
+      ev.preventDefault();
+      pickSelectedAssignee();
+      return true;
+    }
+    if (k === 'arrowdown' || k === 'down' || k === 'j' || (ev.ctrlKey && k === 'n')) {
+      ev.preventDefault();
+      assigneePicker.idx = Math.min((assigneePicker.options.length || 1) - 1, assigneePicker.idx + 1);
+      renderAssigneePicker();
+      return true;
+    }
+    if (k === 'arrowup' || k === 'up' || k === 'k' || (ev.ctrlKey && k === 'p')) {
+      ev.preventDefault();
+      assigneePicker.idx = Math.max(0, assigneePicker.idx - 1);
+      renderAssigneePicker();
+      return true;
+    }
+    return true;
+  };
+
+  const handleNativeOutlineKeydown = (ev, key, nativeRow) => {
+    if (!nativeRow) return false;
+    // Native outline-specific shortcuts.
+    // Prefer `code` for Alt+J/K on macOS (Option modifies `key` into a symbol).
+    if (ev.altKey && ev.code === 'KeyJ') {
+      ev.preventDefault();
+      nativeReorder(nativeRow, 'next');
+      return true;
+    }
+    if (ev.altKey && ev.code === 'KeyK') {
+      ev.preventDefault();
+      nativeReorder(nativeRow, 'prev');
+      return true;
+    }
+    if (ev.altKey && (key === 'arrowdown' || key === 'down')) {
+      ev.preventDefault();
+      nativeReorder(nativeRow, 'next');
+      return true;
+    }
+    if (ev.altKey && (key === 'arrowup' || key === 'up')) {
+      ev.preventDefault();
+      nativeReorder(nativeRow, 'prev');
+      return true;
+    }
+    if (key === 'j') {
+      ev.preventDefault();
+      nativeRowSibling(nativeRow, +1)?.focus?.();
+      return true;
+    }
+    if (key === 'k') {
+      ev.preventDefault();
+      nativeRowSibling(nativeRow, -1)?.focus?.();
+      return true;
+    }
+    if (key === 'arrowdown' || key === 'down' || (ev.ctrlKey && key === 'n')) {
+      ev.preventDefault();
+      nativeRowSibling(nativeRow, +1)?.focus?.();
+      return true;
+    }
+    if (key === 'arrowup' || key === 'up' || (ev.ctrlKey && key === 'p')) {
+      ev.preventDefault();
+      nativeRowSibling(nativeRow, -1)?.focus?.();
+      return true;
+    }
+    if (key === 'enter') {
+      ev.preventDefault();
+      const href = (nativeRow.dataset.openHref || '').trim();
+      if (href) window.location.href = href;
+      return true;
+    }
+    if (key === 'e') {
+      ev.preventDefault();
+      startInlineEdit(nativeRow);
+      return true;
+    }
+    if (key === ' ') {
+      ev.preventDefault();
+      openStatusPicker(nativeRow);
+      return true;
+    }
+    if (key === 'a') {
+      ev.preventDefault();
+      openAssigneePicker(nativeRow);
+      return true;
+    }
+    // Indent/outdent (match TUI: ctrl+h/l and arrow variants; do not bind Tab/Shift+Tab).
+    if (ev.ctrlKey && (key === 'l' || key === 'arrowright')) {
+      ev.preventDefault();
+      nativeIndent(nativeRow);
+      return true;
+    }
+    if (ev.ctrlKey && (key === 'h' || key === 'arrowleft')) {
+      ev.preventDefault();
+      nativeOutdent(nativeRow);
+      return true;
+    }
+    if (ev.altKey && (key === 'arrowright' || key === 'right')) {
+      ev.preventDefault();
+      nativeIndent(nativeRow);
+      return true;
+    }
+    if (ev.altKey && (key === 'arrowleft' || key === 'left')) {
+      ev.preventDefault();
+      nativeOutdent(nativeRow);
+      return true;
+    }
+    return false;
+  };
+
+  const handleGlobalListKeydown = (ev, key) => {
+    if (key === 'j') {
+      ev.preventDefault();
+      moveFocus(+1);
+      return true;
+    }
+    if (key === 'k') {
+      ev.preventDefault();
+      moveFocus(-1);
+      return true;
+    }
+    if (key === 'enter') {
+      ev.preventDefault();
+      openFocused();
+      return true;
+    }
+    return false;
+  };
+
+  const handleKeydown = (ev) => {
     if (ev.defaultPrevented) return;
     if (ev.metaKey) return;
-
-    if (statusPicker.open) {
-      const k = (ev.key || '').toLowerCase();
-      if (k === 'escape') {
-        ev.preventDefault();
-        if (statusPicker.mode === 'note') {
-          statusPicker.mode = 'list';
-          statusPicker.note = '';
-          renderStatusPicker();
-          return;
-        }
-        closeStatusPicker();
-        return;
-      }
-      if (k === 'enter') {
-        ev.preventDefault();
-        pickSelectedStatus();
-        return;
-      }
-      if (statusPicker.mode === 'list') {
-        if (k === 'arrowdown' || k === 'down' || k === 'j' || (ev.ctrlKey && k === 'n')) {
-          ev.preventDefault();
-          statusPicker.idx = Math.min((statusPicker.options.length || 1) - 1, statusPicker.idx + 1);
-          renderStatusPicker();
-          return;
-        }
-        if (k === 'arrowup' || k === 'up' || k === 'k' || (ev.ctrlKey && k === 'p')) {
-          ev.preventDefault();
-          statusPicker.idx = Math.max(0, statusPicker.idx - 1);
-          renderStatusPicker();
-          return;
-        }
-        // When modal is open, swallow other keys to avoid triggering app navigation.
-        return;
-      }
-      // Note mode: let typing happen in the input, but keep Enter/Esc handled above.
-      return;
-    }
-
+    if (handleAssigneePickerKeydown(ev)) return;
+    if (handleStatusPickerKeydown(ev)) return;
     if (isTypingTarget(ev.target)) return;
 
     const key = (ev.key || '').toLowerCase();
-    const inOutline = eventTouchesOutlineComponent(ev);
-    const nativeRow = nativeRowFromEvent(ev);
+    const now = Date.now();
+    if (state.awaiting && now-state.awaitingAt > 1000) clearAwaiting();
 
     if (key === '?') {
       ev.preventDefault();
       toggleHelp();
-      return;
-    }
-
-    const now = Date.now();
-    if (state.awaiting && now - state.awaitingAt > 1000) {
-      clearAwaiting();
-    }
-
-    if (!state.awaiting) {
-      if (key === 'g') {
-        ev.preventDefault();
-        state.awaiting = 'g';
-        state.awaitingAt = now;
-        return;
-      }
-      if (inOutline) {
-        return;
-      }
-      if (nativeRow) {
-        // Native outline-specific shortcuts.
-        // Prefer `code` for Alt+J/K on macOS (Option modifies `key` into a symbol).
-        if (ev.altKey && ev.code === 'KeyJ') {
-          ev.preventDefault();
-          nativeReorder(nativeRow, 'next');
-          return;
-        }
-        if (ev.altKey && ev.code === 'KeyK') {
-          ev.preventDefault();
-          nativeReorder(nativeRow, 'prev');
-          return;
-        }
-        if (ev.altKey && (key === 'arrowdown' || key === 'down')) {
-          ev.preventDefault();
-          nativeReorder(nativeRow, 'next');
-          return;
-        }
-        if (ev.altKey && (key === 'arrowup' || key === 'up')) {
-          ev.preventDefault();
-          nativeReorder(nativeRow, 'prev');
-          return;
-        }
-        if (key === 'j') {
-          ev.preventDefault();
-          nativeRowSibling(nativeRow, +1)?.focus?.();
-          return;
-        }
-        if (key === 'k') {
-          ev.preventDefault();
-          nativeRowSibling(nativeRow, -1)?.focus?.();
-          return;
-        }
-        if (key === 'arrowdown' || key === 'down' || (ev.ctrlKey && key === 'n')) {
-          ev.preventDefault();
-          nativeRowSibling(nativeRow, +1)?.focus?.();
-          return;
-        }
-        if (key === 'arrowup' || key === 'up' || (ev.ctrlKey && key === 'p')) {
-          ev.preventDefault();
-          nativeRowSibling(nativeRow, -1)?.focus?.();
-          return;
-        }
-        if (key === 'enter') {
-          ev.preventDefault();
-          const href = (nativeRow.dataset.openHref || '').trim();
-          if (href) window.location.href = href;
-          return;
-        }
-        if (key === 'e') {
-          ev.preventDefault();
-          startInlineEdit(nativeRow);
-          return;
-        }
-        if (key === ' ') {
-          ev.preventDefault();
-          openStatusPicker(nativeRow);
-          return;
-        }
-        // Indent/outdent (match TUI: ctrl+h/l and arrow variants; do not bind Tab/Shift+Tab).
-        if (ev.ctrlKey && (key === 'l' || key === 'arrowright')) {
-          ev.preventDefault();
-          nativeIndent(nativeRow);
-          return;
-        }
-        if (ev.ctrlKey && (key === 'h' || key === 'arrowleft')) {
-          ev.preventDefault();
-          nativeOutdent(nativeRow);
-          return;
-        }
-        if (ev.altKey && (key === 'arrowright' || key === 'right')) {
-          ev.preventDefault();
-          nativeIndent(nativeRow);
-          return;
-        }
-        if (ev.altKey && (key === 'arrowleft' || key === 'left')) {
-          ev.preventDefault();
-          nativeOutdent(nativeRow);
-          return;
-        }
-        // Unhandled key in native outline: fall through.
-      }
-      if (key === 'j') {
-        ev.preventDefault();
-        moveFocus(+1);
-        return;
-      }
-      if (key === 'k') {
-        ev.preventDefault();
-        moveFocus(-1);
-        return;
-      }
-      if (key === 'enter') {
-        ev.preventDefault();
-        openFocused();
-        return;
-      }
       return;
     }
 
@@ -989,5 +1161,22 @@
         default: return;
       }
     }
-  }, { capture: true });
+
+    if (key === 'g') {
+      ev.preventDefault();
+      state.awaiting = 'g';
+      state.awaitingAt = now;
+      return;
+    }
+
+    const inOutline = eventTouchesOutlineComponent(ev);
+    if (inOutline) return;
+
+    const nativeRow = nativeRowFromEvent(ev);
+    if (handleNativeOutlineKeydown(ev, key, nativeRow)) return;
+
+    handleGlobalListKeydown(ev, key);
+  };
+
+  document.addEventListener('keydown', handleKeydown, { capture: true });
 })();

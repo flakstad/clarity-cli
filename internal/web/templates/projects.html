@@ -1,11 +1,6 @@
 {{define "projects_main"}}
 <main id="clarity-main">
   <h1>Projects</h1>
-  <p class="meta">
-    <a href="/">Home</a>
-    · now={{.Now}}
-    {{if .Workspace}} · workspace={{.Workspace}}{{end}}
-  </p>
 
   <div class="card">
     <div><strong>Dir</strong>: <code>{{.Dir}}</code></div>
@@ -36,6 +31,7 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
+  {{template "web_header" .}}
   {{template "projects_main" .}}
   {{template "web_scripts" .}}
 </body>
