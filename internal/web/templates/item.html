@@ -103,6 +103,29 @@
       <div>(none)</div>
     {{end}}
   </div>
+
+  <div class="card">
+    <div><strong>Worklog</strong> (private)</div>
+    {{if and (not .ReadOnly) .ActorID}}
+      <form id="worklog-form" method="post" action="/items/{{.Item.ID}}/worklog" style="margin-top: 12px;">
+        <div><label for="worklog"><span class="dim">Add worklog entry (only visible to you)</span></label></div>
+        <div><textarea id="worklog" name="body" rows="4" style="width: 100%; max-width: 100%;"></textarea></div>
+        <div style="margin-top: 8px;"><button type="submit">Add</button></div>
+      </form>
+    {{end}}
+    {{if .Worklog}}
+      <ul>
+        {{range .Worklog}}
+          <li>
+            <span class="dim">{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</span>
+            <pre>{{.Body}}</pre>
+          </li>
+        {{end}}
+      </ul>
+    {{else}}
+      <div class="dim">(none)</div>
+    {{end}}
+  </div>
 </body>
 </html>
 {{end}}

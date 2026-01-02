@@ -98,6 +98,9 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("POST /logout", s.handleLogoutPost)
         mux.HandleFunc("GET /agenda", s.handleAgenda)
         mux.HandleFunc("GET /sync", s.handleSync)
+        mux.HandleFunc("POST /sync/init", s.handleSyncInit)
+        mux.HandleFunc("POST /sync/remote", s.handleSyncRemote)
+        mux.HandleFunc("POST /sync/push-upstream", s.handleSyncPushUpstream)
         mux.HandleFunc("POST /sync/pull", s.handleSyncPull)
         mux.HandleFunc("POST /sync/push", s.handleSyncPush)
         mux.HandleFunc("GET /projects", s.handleProjects)
@@ -108,6 +111,7 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("GET /items/{itemId}", s.handleItem)
         mux.HandleFunc("POST /items/{itemId}/edit", s.handleItemEdit)
         mux.HandleFunc("POST /items/{itemId}/comments", s.handleItemCommentAdd)
+        mux.HandleFunc("POST /items/{itemId}/worklog", s.handleItemWorklogAdd)
         return mux
 }
 
@@ -479,6 +483,107 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
         }
 }
 
+func (s *Server) handleSyncInit(w http.ResponseWriter, r *http.Request) {
+        if s.cfg.ReadOnly {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+
+        ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+        defer cancel()
+
+        st, err := gitrepo.GetStatus(ctx, s.cfg.Dir)
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if st.IsRepo {
+                http.Redirect(w, r, "/sync?msg=already%20a%20git%20repo", http.StatusSeeOther)
+                return
+        }
+
+        if err := gitrepo.Init(ctx, s.cfg.Dir); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        http.Redirect(w, r, "/sync?msg=git%20init%20ok", http.StatusSeeOther)
+}
+
+func (s *Server) handleSyncRemote(w http.ResponseWriter, r *http.Request) {
+        if s.cfg.ReadOnly {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+        if err := r.ParseForm(); err != nil {
+                http.Error(w, err.Error(), http.StatusBadRequest)
+                return
+        }
+        remoteURL := strings.TrimSpace(r.Form.Get("remoteUrl"))
+        remoteName := strings.TrimSpace(r.Form.Get("remoteName"))
+        if remoteURL == "" {
+                http.Redirect(w, r, "/sync?msg=missing%20remote%20url", http.StatusSeeOther)
+                return
+        }
+
+        ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+        defer cancel()
+
+        st, err := gitrepo.GetStatus(ctx, s.cfg.Dir)
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if !st.IsRepo {
+                http.Error(w, "not a git repository (init first)", http.StatusBadRequest)
+                return
+        }
+        if st.Unmerged || st.InProgress {
+                http.Error(w, "repo has an in-progress merge/rebase; resolve first", http.StatusConflict)
+                return
+        }
+
+        if err := gitrepo.SetRemoteURL(ctx, s.cfg.Dir, remoteName, remoteURL); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        http.Redirect(w, r, "/sync?msg=remote%20set%20ok", http.StatusSeeOther)
+}
+
+func (s *Server) handleSyncPushUpstream(w http.ResponseWriter, r *http.Request) {
+        if s.cfg.ReadOnly {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+        if err := r.ParseForm(); err != nil {
+                http.Error(w, err.Error(), http.StatusBadRequest)
+                return
+        }
+        remoteName := strings.TrimSpace(r.Form.Get("remoteName"))
+
+        ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+        defer cancel()
+
+        before, err := gitrepo.GetStatus(ctx, s.cfg.Dir)
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if !before.IsRepo {
+                http.Error(w, "not a git repository", http.StatusBadRequest)
+                return
+        }
+        if before.Unmerged || before.InProgress {
+                http.Error(w, "repo has an in-progress merge/rebase; resolve first", http.StatusConflict)
+                return
+        }
+
+        if err := gitrepo.PushSetUpstream(ctx, s.cfg.Dir, remoteName, "HEAD"); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        http.Redirect(w, r, "/sync?msg=push%20--set-upstream%20ok", http.StatusSeeOther)
+}
+
 func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
         if s.cfg.ReadOnly {
                 http.Error(w, "read-only", http.StatusForbidden)
@@ -541,16 +646,22 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
                 return
         }
         msg := strings.TrimSpace(r.Form.Get("message"))
+        committed := false
+        var commitErr error
         if msg == "" {
-                actor := strings.TrimSpace(s.actorForRequest(r))
-                if actor != "" {
-                        msg = "clarity: update (" + actor + ")"
+                db, loadErr := (store.Store{Dir: s.cfg.Dir}).Load()
+                actorLabel := strings.TrimSpace(s.actorForRequest(r))
+                if loadErr == nil && db != nil && actorLabel != "" {
+                        if a, ok := db.FindActor(actorLabel); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                                actorLabel = strings.TrimSpace(a.Name)
+                        }
                 }
+                committed, commitErr = gitrepo.CommitWorkspaceCanonicalAuto(ctx, s.cfg.Dir, actorLabel)
+        } else {
+                committed, commitErr = gitrepo.CommitWorkspaceCanonical(ctx, s.cfg.Dir, msg)
         }
-
-        committed, err := gitrepo.CommitWorkspaceCanonical(ctx, s.cfg.Dir, msg)
-        if err != nil {
-                http.Error(w, err.Error(), http.StatusConflict)
+        if commitErr != nil {
+                http.Error(w, commitErr.Error(), http.StatusConflict)
                 return
         }
 
@@ -1460,6 +1571,7 @@ type itemVM struct {
         Item      model.Item
         Comments  []model.Comment
         ReplyTo   string
+        Worklog   []model.WorklogEntry
 
         CanEdit        bool
         StatusDefs     []model.OutlineStatusDef
@@ -1512,6 +1624,15 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
         errMsg := strings.TrimSpace(r.URL.Query().Get("err"))
         okMsg := strings.TrimSpace(r.URL.Query().Get("ok"))
 
+        var worklog []model.WorklogEntry
+        if actorID != "" {
+                for _, w := range db.WorklogForItem(itemID) {
+                        if strings.TrimSpace(w.AuthorID) == actorID {
+                                worklog = append(worklog, w)
+                        }
+                }
+        }
+
         w.Header().Set("Content-Type", "text/html; charset=utf-8")
         if err := s.tmpl.ExecuteTemplate(w, "item.html", itemVM{
                 Now:            time.Now().Format(time.RFC3339),
@@ -1522,6 +1643,7 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 Item:           *it,
                 Comments:       comments,
                 ReplyTo:        replyTo,
+                Worklog:        worklog,
                 CanEdit:        canEdit,
                 StatusDefs:     statusDefs,
                 ErrorMessage:   errMsg,
@@ -1714,6 +1836,76 @@ func (s *Server) handleItemCommentAdd(w http.ResponseWriter, r *http.Request) {
         }
         db.Comments = append(db.Comments, c)
         if err := st.AppendEvent(actorID, "comment.add", c.ID, c); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if err := st.Save(db); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if s.autoCommit != nil {
+                actorLabel := strings.TrimSpace(actorID)
+                if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                        actorLabel = strings.TrimSpace(a.Name)
+                }
+                s.autoCommit.Notify(actorLabel)
+        }
+
+        http.Redirect(w, r, "/items/"+itemID, http.StatusSeeOther)
+}
+
+func (s *Server) handleItemWorklogAdd(w http.ResponseWriter, r *http.Request) {
+        if s.cfg.ReadOnly {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+
+        itemID := strings.TrimSpace(r.PathValue("itemId"))
+        if itemID == "" {
+                http.Error(w, "missing item id", http.StatusBadRequest)
+                return
+        }
+
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        if actorID == "" {
+                http.Error(w, "missing actor (start server with --actor, set currentActorId, or /login in dev auth mode)", http.StatusUnauthorized)
+                return
+        }
+
+        if err := r.ParseForm(); err != nil {
+                http.Error(w, err.Error(), http.StatusBadRequest)
+                return
+        }
+        body := strings.TrimSpace(r.Form.Get("body"))
+        if body == "" {
+                http.Redirect(w, r, "/items/"+itemID, http.StatusSeeOther)
+                return
+        }
+
+        st := store.Store{Dir: s.cfg.Dir}
+        db, err := st.Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if _, ok := db.FindActor(actorID); !ok {
+                http.Error(w, "unknown actor", http.StatusForbidden)
+                return
+        }
+        if _, ok := db.FindItem(itemID); !ok {
+                http.NotFound(w, r)
+                return
+        }
+
+        wle := model.WorklogEntry{
+                ID:        st.NextID(db, "wlg"),
+                ItemID:    itemID,
+                AuthorID:  actorID,
+                Body:      body,
+                CreatedAt: time.Now().UTC(),
+        }
+        db.Worklog = append(db.Worklog, wle)
+        if err := st.AppendEvent(actorID, "worklog.add", wle.ID, wle); err != nil {
                 http.Error(w, err.Error(), http.StatusConflict)
                 return
         }

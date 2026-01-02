@@ -50,12 +50,44 @@
     {{if .ReadOnly}}
       <div class="dim">Start server with `--read-only=false` to enable sync operations.</div>
     {{else}}
+      {{if not .Git.IsRepo}}
+        <form method="post" action="/sync/init">
+          <button type="submit">Git init</button>
+        </form>
+      {{end}}
+
+      {{if .Git.IsRepo}}
+        <form method="post" action="/sync/remote" style="margin-top: 12px;">
+          <div><span class="dim">Remote (e.g. GitHub)</span></div>
+          <div style="display: flex; gap: 8px; align-items: baseline;">
+            <div style="flex: 0 0 140px;">
+              <label for="remoteName"><span class="dim">name</span></label>
+              <div><input id="remoteName" name="remoteName" placeholder="origin" /></div>
+            </div>
+            <div style="flex: 1;">
+              <label for="remoteUrl"><span class="dim">url</span></label>
+              <div><input id="remoteUrl" name="remoteUrl" placeholder="git@github.com:org/repo.git" /></div>
+            </div>
+          </div>
+          <button type="submit">Set remote</button>
+        </form>
+
+        {{if eq (trim .Git.Upstream) ""}}
+          <form method="post" action="/sync/push-upstream" style="margin-top: 12px;">
+            <input type="hidden" name="remoteName" value="origin" />
+            <button type="submit">Push (set upstream)</button>
+          </form>
+        {{end}}
+      {{end}}
+
       <form method="post" action="/sync/pull">
         <button type="submit">Pull --rebase</button>
       </form>
       <form method="post" action="/sync/push" style="margin-top: 12px;">
-        <div><label for="message"><span class="dim">Commit message (optional)</span></label></div>
-        <div><input id="message" name="message" placeholder="clarity: update ..." /></div>
+        <details>
+          <summary class="dim">Optional commit message override</summary>
+          <div style="margin-top: 8px;"><input id="message" name="message" placeholder="clarity: ..." /></div>
+        </details>
         <button type="submit">Commit + pull + push</button>
       </form>
     {{end}}
