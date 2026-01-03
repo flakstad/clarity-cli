@@ -12,12 +12,21 @@ import (
 )
 
 func newCaptureCmd(app *App) *cobra.Command {
+        var noOutput bool
+        var exit0OnCancel bool
+        var hotkey bool
+
         cmd := &cobra.Command{
                 Use:           "capture",
                 Short:         "Org-capture style quick capture (TUI)",
                 SilenceUsage:  true,
                 SilenceErrors: true, // cancel should be quiet (non-zero exit)
                 RunE: func(cmd *cobra.Command, args []string) error {
+                        if hotkey {
+                                noOutput = true
+                                exit0OnCancel = true
+                        }
+
                         cfg, err := store.LoadConfig()
                         if err != nil {
                                 return writeErr(cmd, err)
@@ -32,9 +41,15 @@ func newCaptureCmd(app *App) *cobra.Command {
                         res, err := tui.RunCapture(cfg, app.ActorID)
                         if err != nil {
                                 if errors.Is(err, tui.ErrCaptureCanceled) {
+                                        if exit0OnCancel {
+                                                return nil
+                                        }
                                         return err
                                 }
                                 return writeErr(cmd, err)
+                        }
+                        if noOutput {
+                                return nil
                         }
 
                         // Load the created item so we can return a stable JSON envelope.
@@ -70,5 +85,9 @@ func newCaptureCmd(app *App) *cobra.Command {
                         return writeOut(cmd, app, map[string]any{"data": it, "_hints": hints})
                 },
         }
+
+        cmd.Flags().BoolVar(&hotkey, "hotkey", false, "Hotkey mode (implies --no-output and --exit-0-on-cancel)")
+        cmd.Flags().BoolVar(&noOutput, "no-output", false, "Do not print JSON output (useful for hotkey capture windows)")
+        cmd.Flags().BoolVar(&exit0OnCancel, "exit-0-on-cancel", false, "Exit 0 when capture is canceled (useful for hotkey capture windows)")
         return cmd
 }

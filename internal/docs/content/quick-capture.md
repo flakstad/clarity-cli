@@ -30,6 +30,11 @@ If cold-start performance still matters, consider a future `clarity daemon` so `
 - Create the item on submit and print a stable JSON envelope to stdout (for scripting).
 - Exit `0` on success, non-zero on cancel/error.
 
+Hotkey-friendly flags:
+- `--no-output` suppresses JSON output.
+- `--exit-0-on-cancel` makes cancel exit `0` (useful if your hotkey launcher treats non-zero as a failure).
+- `--hotkey` implies both of the above.
+
 ## Capture templates (v1)
 
 Capture templates are configured globally in `~/.clarity/config.json` so you can capture into other workspaces (e.g. personal workspace while working in a day job workspace).

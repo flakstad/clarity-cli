@@ -16,6 +16,7 @@ import (
         "github.com/charmbracelet/bubbles/textarea"
         "github.com/charmbracelet/bubbles/textinput"
         tea "github.com/charmbracelet/bubbletea"
+        "github.com/charmbracelet/lipgloss"
 )
 
 var ErrCaptureCanceled = errors.New("capture canceled")
@@ -62,6 +63,10 @@ const (
         captureModalEditDescription
         captureModalPickOutline
         captureModalPickStatus
+        captureModalPickAssignee
+        captureModalEditTags
+        captureModalSetDue
+        captureModalSetSchedule
 )
 
 type captureTemplateNode struct {
@@ -89,19 +94,40 @@ type captureModel struct {
         st        store.Store
         db        *store.DB
 
+        // draftOutlineID is the target outline for all draft items in this capture session.
         draftOutlineID string
-        draftStatusID  string
-        draftTitle     string
-        draftDesc      string
+        // draftItems are temporary (not persisted) items to be created on save.
+        draftItems []model.Item
+        // draftCollapsed controls rendering of draftItems via the same outline flattener.
+        draftCollapsed map[string]bool
+        // draftList renders draftItems using the same outline row renderer as the main outline view.
+        draftList list.Model
+        // draftSeq is used to generate stable temporary ids (draft-1, draft-2, ...).
+        draftSeq int
 
         modal                captureModalKind
+        modalForDraftID      string
         pendingOutlineChange string
 
         outlinePickList list.Model
         statusPickList  list.Model
+        assigneeList    list.Model
+        tagsList        list.Model
+        tagsListActive  *bool
+        tagsFocus       tagsModalFocus
 
-        input    textinput.Model
-        textarea textarea.Model
+        // Date modal inputs (due/schedule).
+        yearInput   textinput.Model
+        monthInput  textinput.Model
+        dayInput    textinput.Model
+        hourInput   textinput.Model
+        minuteInput textinput.Model
+        dateFocus   dateModalFocus
+        timeEnabled bool
+
+        titleInput textinput.Model
+        input      textinput.Model
+        textarea   textarea.Model
 
         minibuffer string
 
@@ -187,10 +213,66 @@ func newCaptureModel(cfg *store.GlobalConfig, actorOverride string) (captureMode
         m.statusPickList.SetShowStatusBar(false)
         m.statusPickList.SetShowPagination(false)
 
+        m.draftList = newList("Draft", "", []list.Item{})
+        m.draftList.SetDelegate(newOutlineItemDelegate())
+        m.draftList.SetFilteringEnabled(false)
+        m.draftList.SetShowFilter(false)
+        m.draftList.SetShowHelp(false)
+        m.draftList.SetShowStatusBar(false)
+        m.draftList.SetShowPagination(false)
+        m.draftCollapsed = map[string]bool{}
+
+        m.assigneeList = newList("Assignee", "Select an assignee", []list.Item{})
+        m.assigneeList.SetDelegate(newCompactItemDelegate())
+        m.assigneeList.SetFilteringEnabled(false)
+        m.assigneeList.SetShowFilter(false)
+        m.assigneeList.SetShowHelp(false)
+        m.assigneeList.SetShowStatusBar(false)
+        m.assigneeList.SetShowPagination(false)
+
+        m.tagsListActive = new(bool)
+        m.tagsList = newList("Tags", "Edit tags", []list.Item{})
+        m.tagsList.SetDelegate(newFocusAwareCompactItemDelegate(m.tagsListActive))
+        m.tagsList.SetFilteringEnabled(false)
+        m.tagsList.SetShowFilter(false)
+        m.tagsList.SetShowHelp(false)
+        m.tagsList.SetShowStatusBar(false)
+        m.tagsList.SetShowPagination(false)
+        m.tagsFocus = tagsFocusInput
+
+        m.titleInput = textinput.New()
+        m.titleInput.Prompt = ""
+        m.titleInput.CharLimit = 256
+        m.titleInput.Width = 48
+        m.titleInput.Placeholder = "Title"
+
+        // Shared modal input (tags editor, etc).
         m.input = textinput.New()
         m.input.Prompt = ""
         m.input.CharLimit = 256
         m.input.Width = 48
+
+        // Date/time inputs for due/schedule (outline.js-style: date required, time optional).
+        m.yearInput = textinput.New()
+        m.yearInput.Placeholder = "YYYY"
+        m.yearInput.CharLimit = 4
+        m.yearInput.Width = 6
+        m.monthInput = textinput.New()
+        m.monthInput.Placeholder = "MM"
+        m.monthInput.CharLimit = 2
+        m.monthInput.Width = 4
+        m.dayInput = textinput.New()
+        m.dayInput.Placeholder = "DD"
+        m.dayInput.CharLimit = 2
+        m.dayInput.Width = 4
+        m.hourInput = textinput.New()
+        m.hourInput.Placeholder = "HH"
+        m.hourInput.CharLimit = 2
+        m.hourInput.Width = 4
+        m.minuteInput = textinput.New()
+        m.minuteInput.Placeholder = "MM"
+        m.minuteInput.CharLimit = 2
+        m.minuteInput.Width = 4
 
         m.textarea = textarea.New()
         m.textarea.ShowLineNumbers = false
@@ -326,9 +408,7 @@ func (m captureModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case "ctrl+g", "esc":
                         if m.modal != captureModalNone {
                                 // Cancel modal only.
-                                m.modal = captureModalNone
-                                m.pendingOutlineChange = ""
-                                m.minibuffer = ""
+                                (&m).closeModal()
                                 return m, nil
                         }
                         m.canceled = true
@@ -349,6 +429,37 @@ func (m captureModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
         return m, nil
 }
 
+func (m *captureModel) closeModal() {
+        if m == nil {
+                return
+        }
+        switch m.modal {
+        case captureModalEditTitle:
+                m.titleInput.Blur()
+        case captureModalEditDescription:
+                m.textarea.Blur()
+        case captureModalEditTags:
+                m.tagsFocus = tagsFocusInput
+                if m.tagsListActive != nil {
+                        *m.tagsListActive = false
+                }
+                m.input.Placeholder = "Title"
+                m.input.SetValue("")
+                m.input.Blur()
+        case captureModalSetDue, captureModalSetSchedule:
+                m.yearInput.Blur()
+                m.monthInput.Blur()
+                m.dayInput.Blur()
+                m.hourInput.Blur()
+                m.minuteInput.Blur()
+                m.dateFocus = dateFocusDay
+        }
+        m.modal = captureModalNone
+        m.modalForDraftID = ""
+        m.pendingOutlineChange = ""
+        m.minibuffer = ""
+}
+
 func (m captureModel) updateTemplateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
         switch msg.String() {
         case "backspace":
@@ -358,13 +469,42 @@ func (m captureModel) updateTemplateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
                 }
                 return m, nil
         case "enter":
-                cur := m.currentTemplateNode()
-                if cur != nil && cur.template != nil {
-                        if err := m.startDraftFromTemplate(*cur.template); err != nil {
-                                m.minibuffer = err.Error()
+                // Support list-driven selection (arrow keys + enter).
+                // - If the selected row is "Use template…" -> start draft.
+                // - If the selected row is a prefix key -> treat enter like pressing that key.
+                if sel, ok := m.templateList.SelectedItem().(captureOptionItem); ok {
+                        if strings.TrimSpace(sel.kind) == "select" {
+                                cur := m.currentTemplateNode()
+                                if cur != nil && cur.template != nil {
+                                        if err := m.startDraftFromTemplate(*cur.template); err != nil {
+                                                m.minibuffer = err.Error()
+                                                return m, nil
+                                        }
+                                        return m, nil
+                                }
+                        }
+                        k := strings.TrimSpace(sel.key)
+                        if k != "" && k != "ENTER" {
+                                cur := m.currentTemplateNode()
+                                if cur == nil || cur.children == nil || cur.children[k] == nil {
+                                        m.minibuffer = "No template for key: " + k
+                                        return m, nil
+                                }
+                                m.templatePrefix = append(m.templatePrefix, k)
+                                m.minibuffer = ""
+                                m.refreshTemplateList()
+
+                                // Auto-advance: if the prefix resolves directly to a template and there are no further
+                                // prefixes, start the draft immediately.
+                                next := m.currentTemplateNode()
+                                if next != nil && next.template != nil && len(next.children) == 0 {
+                                        if err := m.startDraftFromTemplate(*next.template); err != nil {
+                                                m.minibuffer = err.Error()
+                                                return m, nil
+                                        }
+                                }
                                 return m, nil
                         }
-                        return m, nil
                 }
         }
 
@@ -442,13 +582,16 @@ func (m *captureModel) startDraftFromTemplate(t store.CaptureTemplate) error {
                 })
         }
         m.draftOutlineID = o.ID
-        m.draftStatusID = store.FirstStatusID(o.StatusDefs)
-        m.draftTitle = ""
-        m.draftDesc = ""
+        m.draftItems = nil
+        m.draftCollapsed = map[string]bool{}
+        m.draftSeq = 0
+        // Seed with a single root draft item.
+        rootID := m.addDraftItem(nil, "")
         m.phase = capturePhaseEditDraft
         m.modal = captureModalEditTitle
         m.minibuffer = warn
-        m.openTitleModal("")
+        m.openTitleModal(rootID, "")
+        m.refreshDraftList()
         return nil
 }
 
@@ -469,29 +612,102 @@ func (m captureModel) appendEvent(actorID string, eventType string, entityID str
 }
 
 func (m captureModel) updateDraft(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+        activeID := m.activeDraftID()
+        active := m.findDraftItem(activeID)
+
         switch msg.String() {
         case "e":
-                m.modal = captureModalEditTitle
-                m.openTitleModal(m.draftTitle)
+                if active != nil {
+                        m.modal = captureModalEditTitle
+                        m.openTitleModal(active.ID, active.Title)
+                }
                 return m, nil
         case "D":
-                m.modal = captureModalEditDescription
-                m.openDescriptionModal(m.draftDesc)
+                if active != nil {
+                        m.modal = captureModalEditDescription
+                        m.modalForDraftID = strings.TrimSpace(active.ID)
+                        m.openDescriptionModal(active.Description)
+                }
+                return m, nil
+        case "a":
+                m.modal = captureModalPickAssignee
+                m.modalForDraftID = strings.TrimSpace(activeID)
+                m.openAssigneePicker(active)
+                return m, nil
+        case "t":
+                m.modal = captureModalEditTags
+                m.modalForDraftID = strings.TrimSpace(activeID)
+                m.openTagsEditor(active, "")
                 return m, nil
         case " ":
                 m.modal = captureModalPickStatus
-                m.openStatusPicker(m.draftStatusID)
+                m.modalForDraftID = strings.TrimSpace(activeID)
+                if active != nil {
+                        m.openStatusPicker(active.StatusID)
+                } else {
+                        m.openStatusPicker("")
+                }
+                return m, nil
+        case "d":
+                m.modal = captureModalSetDue
+                m.modalForDraftID = strings.TrimSpace(activeID)
+                if active != nil {
+                        m.openDateModal(active.Due)
+                } else {
+                        m.openDateModal(nil)
+                }
+                return m, nil
+        case "s":
+                m.modal = captureModalSetSchedule
+                m.modalForDraftID = strings.TrimSpace(activeID)
+                if active != nil {
+                        m.openDateModal(active.Schedule)
+                } else {
+                        m.openDateModal(nil)
+                }
+                return m, nil
+        case "p":
+                if active != nil {
+                        active.Priority = !active.Priority
+                        m.setDraftItem(*active)
+                        m.refreshDraftList()
+                }
+                return m, nil
+        case "o":
+                if active != nil {
+                        active.OnHold = !active.OnHold
+                        m.setDraftItem(*active)
+                        m.refreshDraftList()
+                }
+                return m, nil
+        case "n":
+                if active != nil {
+                        (&m).insertDraftSiblingAfter(active.ID)
+                }
+                return m, nil
+        case "N":
+                if active != nil {
+                        (&m).insertDraftChild(active.ID)
+                }
                 return m, nil
         case "m":
                 m.modal = captureModalPickOutline
                 m.openOutlinePicker(m.draftOutlineID)
                 return m, nil
         case "enter":
-                if strings.TrimSpace(m.draftTitle) == "" {
-                        m.minibuffer = "Title is empty (press e to edit)"
-                        return m, nil
+                // Require a title for every draft item (prevents accidentally creating blank items).
+                for _, d := range m.draftItems {
+                        if strings.TrimSpace(d.Title) == "" {
+                                m.minibuffer = "Title is empty"
+                                m.refreshDraftList()
+                                m.selectDraftItem(d.ID)
+                                m.modal = captureModalEditTitle
+                                m.openTitleModal(d.ID, d.Title)
+                                return m, nil
+                        }
                 }
-                id, err := m.createDraftItem()
+
+                id, err := m.createDraftItems()
                 if err != nil {
                         m.minibuffer = err.Error()
                         return m, nil
@@ -500,16 +716,306 @@ func (m captureModel) updateDraft(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
                 return m, tea.Quit
         }
 
-        return m, nil
+        // Allow navigating the draft outline.
+        var cmd tea.Cmd
+        m.draftList, cmd = m.draftList.Update(msg)
+        return m, cmd
 }
 
-func (m *captureModel) createDraftItem() (string, error) {
-        if m.db == nil {
+func (m captureModel) activeDraftID() string {
+        if it, ok := m.draftList.SelectedItem().(outlineRowItem); ok {
+                return strings.TrimSpace(it.row.item.ID)
+        }
+        // Fallback: first draft item.
+        if len(m.draftItems) > 0 {
+                return strings.TrimSpace(m.draftItems[0].ID)
+        }
+        return ""
+}
+
+func (m *captureModel) findDraftItem(id string) *model.Item {
+        if m == nil {
+                return nil
+        }
+        id = strings.TrimSpace(id)
+        if id == "" {
+                return nil
+        }
+        for i := range m.draftItems {
+                if strings.TrimSpace(m.draftItems[i].ID) == id {
+                        return &m.draftItems[i]
+                }
+        }
+        return nil
+}
+
+func (m *captureModel) setDraftItem(it model.Item) {
+        if m == nil {
+                return
+        }
+        id := strings.TrimSpace(it.ID)
+        if id == "" {
+                return
+        }
+        for i := range m.draftItems {
+                if strings.TrimSpace(m.draftItems[i].ID) == id {
+                        m.draftItems[i] = it
+                        return
+                }
+        }
+}
+
+func (m *captureModel) addDraftItem(parentID *string, title string) string {
+        if m == nil || m.db == nil {
+                return ""
+        }
+        outID := strings.TrimSpace(m.draftOutlineID)
+        o, ok := m.db.FindOutline(outID)
+        if !ok || o == nil {
+                return ""
+        }
+        actorID := resolveWriteActorID(m.db, m.actorOverride)
+        if actorID == "" {
+                actorID = strings.TrimSpace(m.db.CurrentActorID)
+        }
+
+        m.draftSeq++
+        id := fmt.Sprintf("draft-%d", m.draftSeq)
+
+        pid := (*string)(nil)
+        if parentID != nil {
+                if v := strings.TrimSpace(*parentID); v != "" {
+                        tmp := v
+                        pid = &tmp
+                }
+        }
+
+        // Append at end of sibling list within the draft.
+        maxRank := ""
+        for i := range m.draftItems {
+                if !sameParent(m.draftItems[i].ParentID, pid) {
+                        continue
+                }
+                if r := strings.TrimSpace(m.draftItems[i].Rank); r != "" && r > maxRank {
+                        maxRank = r
+                }
+        }
+        rank := ""
+        if maxRank == "" {
+                if r, err := store.RankInitial(); err == nil {
+                        rank = r
+                } else {
+                        rank = "h"
+                }
+        } else {
+                if r, err := store.RankAfter(maxRank); err == nil {
+                        rank = r
+                } else {
+                        rank = maxRank + "0"
+                }
+        }
+
+        now := time.Now().UTC()
+        it := model.Item{
+                ID:              id,
+                ProjectID:       o.ProjectID,
+                OutlineID:       o.ID,
+                ParentID:        pid,
+                Rank:            rank,
+                Title:           strings.TrimSpace(title),
+                Description:     "",
+                StatusID:        store.FirstStatusID(o.StatusDefs),
+                Priority:        false,
+                OnHold:          false,
+                Due:             nil,
+                Schedule:        nil,
+                Tags:            nil,
+                Archived:        false,
+                OwnerActorID:    actorID,
+                AssignedActorID: defaultAssignedActorID(m.db, actorID),
+                CreatedBy:       actorID,
+                CreatedAt:       now,
+                UpdatedAt:       now,
+        }
+        m.draftItems = append(m.draftItems, it)
+        m.selectDraftItem(id)
+        return id
+}
+
+func (m *captureModel) selectDraftItem(id string) {
+        if m == nil {
+                return
+        }
+        id = strings.TrimSpace(id)
+        if id == "" {
+                return
+        }
+        for i := 0; i < len(m.draftList.Items()); i++ {
+                if it, ok := m.draftList.Items()[i].(outlineRowItem); ok && strings.TrimSpace(it.row.item.ID) == id {
+                        m.draftList.Select(i)
+                        return
+                }
+        }
+}
+
+func (m *captureModel) insertDraftSiblingAfter(afterID string) {
+        if m == nil || m.db == nil {
+                return
+        }
+        after := m.findDraftItem(afterID)
+        if after == nil {
+                return
+        }
+        parentID := after.ParentID
+
+        // Collect siblings sorted by rank.
+        var sibs []*model.Item
+        for i := range m.draftItems {
+                if sameParent(m.draftItems[i].ParentID, parentID) {
+                        sibs = append(sibs, &m.draftItems[i])
+                }
+        }
+        sort.Slice(sibs, func(i, j int) bool { return compareOutlineItems(*sibs[i], *sibs[j]) < 0 })
+
+        idx := -1
+        for i := range sibs {
+                if strings.TrimSpace(sibs[i].ID) == strings.TrimSpace(afterID) {
+                        idx = i
+                        break
+                }
+        }
+        if idx < 0 {
+                return
+        }
+        lower := strings.TrimSpace(sibs[idx].Rank)
+        upper := ""
+        if idx+1 < len(sibs) {
+                upper = strings.TrimSpace(sibs[idx+1].Rank)
+        }
+
+        // Generate a rank between lower/upper (or after lower if at end).
+        rank := ""
+        if lower != "" && upper != "" && lower < upper {
+                existing := map[string]bool{}
+                for i := range sibs {
+                        rn := strings.ToLower(strings.TrimSpace(sibs[i].Rank))
+                        if rn != "" {
+                                existing[rn] = true
+                        }
+                }
+                if r, err := store.RankBetweenUnique(existing, lower, upper); err == nil {
+                        rank = r
+                }
+        }
+        if rank == "" {
+                if r, err := store.RankAfter(lower); err == nil {
+                        rank = r
+                } else {
+                        rank = lower + "0"
+                }
+        }
+
+        m.draftSeq++
+        id := fmt.Sprintf("draft-%d", m.draftSeq)
+        outID := strings.TrimSpace(m.draftOutlineID)
+        o, _ := m.db.FindOutline(outID)
+        if o == nil {
+                return
+        }
+        actorID := resolveWriteActorID(m.db, m.actorOverride)
+        if actorID == "" {
+                actorID = strings.TrimSpace(m.db.CurrentActorID)
+        }
+        now := time.Now().UTC()
+        it := model.Item{
+                ID:              id,
+                ProjectID:       o.ProjectID,
+                OutlineID:       o.ID,
+                ParentID:        parentID,
+                Rank:            rank,
+                Title:           "",
+                Description:     "",
+                StatusID:        store.FirstStatusID(o.StatusDefs),
+                Priority:        false,
+                OnHold:          false,
+                Due:             nil,
+                Schedule:        nil,
+                Tags:            nil,
+                Archived:        false,
+                OwnerActorID:    actorID,
+                AssignedActorID: defaultAssignedActorID(m.db, actorID),
+                CreatedBy:       actorID,
+                CreatedAt:       now,
+                UpdatedAt:       now,
+        }
+        m.draftItems = append(m.draftItems, it)
+        m.refreshDraftList()
+        m.selectDraftItem(id)
+        m.modal = captureModalEditTitle
+        m.openTitleModal(id, "")
+}
+
+func (m *captureModel) insertDraftChild(parentID string) {
+        if m == nil || m.db == nil {
+                return
+        }
+        parentID = strings.TrimSpace(parentID)
+        if parentID == "" {
+                return
+        }
+        tmp := parentID
+        m.insertDraftSiblingAfterWithParent(&tmp, "")
+}
+
+func (m *captureModel) insertDraftSiblingAfterWithParent(parentID *string, _ string) {
+        // Append a new child at the end of the parent's children.
+        id := m.addDraftItem(parentID, "")
+        if id == "" {
+                return
+        }
+        m.refreshDraftList()
+        m.selectDraftItem(id)
+        m.modal = captureModalEditTitle
+        m.openTitleModal(id, "")
+}
+
+func (m *captureModel) refreshDraftList() {
+        if m == nil || m.db == nil {
+                return
+        }
+        o, ok := m.db.FindOutline(strings.TrimSpace(m.draftOutlineID))
+        if !ok || o == nil {
+                m.draftList.SetItems([]list.Item{})
+                return
+        }
+        activeID := m.activeDraftID()
+
+        flat := flattenOutline(*o, m.draftItems, m.draftCollapsed)
+        items := make([]list.Item, 0, len(flat))
+        for _, row := range flat {
+                if row.item.AssignedActorID != nil && strings.TrimSpace(*row.item.AssignedActorID) != "" {
+                        row.assignedLabel = actorDisplayLabel(m.db, strings.TrimSpace(*row.item.AssignedActorID))
+                }
+                items = append(items, outlineRowItem{row: row, outline: *o})
+        }
+        m.draftList.SetItems(items)
+        if activeID != "" {
+                m.selectDraftItem(activeID)
+        } else if len(items) > 0 {
+                m.draftList.Select(0)
+        }
+}
+
+func (m *captureModel) createDraftItems() (string, error) {
+        if m == nil || m.db == nil {
                 return "", errors.New("no workspace loaded")
         }
         outID := strings.TrimSpace(m.draftOutlineID)
         if outID == "" {
                 return "", errors.New("no outline selected")
+        }
+        if len(m.draftItems) == 0 {
+                return "", errors.New("no draft items")
         }
 
         db, err := m.st.Load()
@@ -528,42 +1034,74 @@ func (m *captureModel) createDraftItem() (string, error) {
                 return "", errors.New("no current actor; run `clarity identity use <actor-id>` (or pass --actor)")
         }
 
-        statusID := strings.TrimSpace(m.draftStatusID)
-        if !statusIDInDefs(statusID, out.StatusDefs) {
-                statusID = store.FirstStatusID(out.StatusDefs)
-        }
-
+        // Create items in a stable parent-before-child order (pre-order traversal by rank).
+        flat := flattenOutline(*out, m.draftItems, map[string]bool{})
+        idMap := map[string]string{} // draft-id -> real-id
+        var firstRealID string
         now := time.Now().UTC()
-        newItem := model.Item{
-                ID:              m.st.NextID(db, "item"),
-                ProjectID:       out.ProjectID,
-                OutlineID:       out.ID,
-                ParentID:        nil,
-                Rank:            nextSiblingRank(db, out.ID, nil),
-                Title:           m.draftTitle,
-                Description:     m.draftDesc,
-                StatusID:        statusID,
-                Priority:        false,
-                OnHold:          false,
-                Due:             nil,
-                Schedule:        nil,
-                Tags:            nil,
-                Archived:        false,
-                OwnerActorID:    actorID,
-                AssignedActorID: defaultAssignedActorID(db, actorID),
-                CreatedBy:       actorID,
-                CreatedAt:       now,
-                UpdatedAt:       now,
+
+        for _, row := range flat {
+                d := row.item
+                if strings.TrimSpace(d.ID) == "" {
+                        continue
+                }
+
+                var parentReal *string
+                if d.ParentID != nil && strings.TrimSpace(*d.ParentID) != "" {
+                        if rid, ok := idMap[strings.TrimSpace(*d.ParentID)]; ok && strings.TrimSpace(rid) != "" {
+                                tmp := strings.TrimSpace(rid)
+                                parentReal = &tmp
+                        }
+                }
+
+                statusID := strings.TrimSpace(d.StatusID)
+                if !statusIDInDefs(statusID, out.StatusDefs) {
+                        statusID = store.FirstStatusID(out.StatusDefs)
+                }
+
+                newID := m.st.NextID(db, "item")
+                newItem := model.Item{
+                        ID:              newID,
+                        ProjectID:       out.ProjectID,
+                        OutlineID:       out.ID,
+                        ParentID:        parentReal,
+                        Rank:            nextSiblingRank(db, out.ID, parentReal),
+                        Title:           strings.TrimSpace(d.Title),
+                        Description:     d.Description,
+                        StatusID:        statusID,
+                        Priority:        d.Priority,
+                        OnHold:          d.OnHold,
+                        Due:             d.Due,
+                        Schedule:        d.Schedule,
+                        Tags:            uniqueSortedStrings(d.Tags),
+                        Archived:        false,
+                        OwnerActorID:    actorID,
+                        AssignedActorID: d.AssignedActorID,
+                        CreatedBy:       actorID,
+                        CreatedAt:       now,
+                        UpdatedAt:       now,
+                }
+                if newItem.AssignedActorID == nil {
+                        newItem.AssignedActorID = defaultAssignedActorID(db, actorID)
+                }
+
+                db.Items = append(db.Items, newItem)
+                if err := m.appendEvent(actorID, "item.create", newItem.ID, newItem); err != nil {
+                        return "", err
+                }
+                idMap[strings.TrimSpace(d.ID)] = newID
+                if firstRealID == "" {
+                        firstRealID = newID
+                }
         }
 
-        db.Items = append(db.Items, newItem)
-        if err := m.appendEvent(actorID, "item.create", newItem.ID, newItem); err != nil {
-                return "", err
+        if firstRealID == "" {
+                return "", errors.New("no items created")
         }
         if err := m.st.Save(db); err != nil {
                 return "", err
         }
-        return newItem.ID, nil
+        return firstRealID, nil
 }
 
 func resolveWriteActorID(db *store.DB, override string) string {
@@ -615,27 +1153,45 @@ func (m *captureModel) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
                 return m.updateOutlinePicker(msg)
         case captureModalPickStatus:
                 return m.updateStatusPicker(msg)
+        case captureModalPickAssignee:
+                return m.updateAssigneePicker(msg)
+        case captureModalEditTags:
+                return m.updateTagsModal(msg)
+        case captureModalSetDue, captureModalSetSchedule:
+                return m.updateDateModal(msg)
         default:
                 return *m, nil
         }
 }
 
-func (m *captureModel) openTitleModal(initial string) {
-        m.input.SetValue(strings.TrimSpace(initial))
-        m.input.Placeholder = "Title"
-        m.input.Focus()
+func (m *captureModel) openTitleModal(forDraftID string, initial string) {
+        m.modalForDraftID = strings.TrimSpace(forDraftID)
+        m.titleInput.SetValue(strings.TrimSpace(initial))
+        m.titleInput.Placeholder = "Title"
+        m.titleInput.Focus()
 }
 
 func (m captureModel) updateTitleModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
         switch msg.String() {
-        case "enter":
-                m.draftTitle = strings.TrimSpace(m.input.Value())
-                m.modal = captureModalNone
-                m.minibuffer = ""
+        case "enter", "ctrl+s":
+                id := strings.TrimSpace(m.modalForDraftID)
+                if id == "" {
+                        (&m).closeModal()
+                        return m, nil
+                }
+                it := m.findDraftItem(id)
+                if it == nil {
+                        (&m).closeModal()
+                        return m, nil
+                }
+                it.Title = strings.TrimSpace(m.titleInput.Value())
+                (&m).setDraftItem(*it)
+                (&m).refreshDraftList()
+                (&m).closeModal()
                 return m, nil
         }
         var cmd tea.Cmd
-        m.input, cmd = m.input.Update(msg)
+        m.titleInput, cmd = m.titleInput.Update(msg)
         return m, cmd
 }
 
@@ -648,9 +1204,15 @@ func (m *captureModel) openDescriptionModal(initial string) {
 func (m captureModel) updateDescriptionModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
         switch msg.String() {
         case "ctrl+s":
-                m.draftDesc = m.textarea.Value()
-                m.modal = captureModalNone
-                m.minibuffer = ""
+                id := strings.TrimSpace(m.modalForDraftID)
+                if id != "" {
+                        if it := m.findDraftItem(id); it != nil {
+                                it.Description = m.textarea.Value()
+                                (&m).setDraftItem(*it)
+                                (&m).refreshDraftList()
+                        }
+                }
+                (&m).closeModal()
                 return m, nil
         }
         var cmd tea.Cmd
@@ -715,25 +1277,38 @@ func (m captureModel) updateOutlinePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
         case "enter":
                 it, ok := m.outlinePickList.SelectedItem().(captureOutlineItem)
                 if !ok {
-                        m.modal = captureModalNone
+                        (&m).closeModal()
                         return m, nil
                 }
                 to := strings.TrimSpace(it.outline.ID)
                 if to == "" || to == strings.TrimSpace(m.draftOutlineID) {
-                        m.modal = captureModalNone
+                        (&m).closeModal()
                         return m, nil
                 }
 
-                // If the current status is valid in the target outline, switch immediately.
-                if statusIDInDefs(m.draftStatusID, it.outline.StatusDefs) {
+                // If all draft statuses are valid in the target outline, switch immediately.
+                allOK := true
+                for i := range m.draftItems {
+                        if !statusIDInDefs(m.draftItems[i].StatusID, it.outline.StatusDefs) {
+                                allOK = false
+                                break
+                        }
+                }
+                if allOK {
                         m.draftOutlineID = to
-                        m.modal = captureModalNone
+                        for i := range m.draftItems {
+                                m.draftItems[i].OutlineID = to
+                                m.draftItems[i].ProjectID = it.outline.ProjectID
+                        }
+                        (&m).closeModal()
+                        m.refreshDraftList()
                         return m, nil
                 }
 
                 // Otherwise: require picking a compatible status (mirrors move-outline flow).
                 m.pendingOutlineChange = to
                 m.modal = captureModalPickStatus
+                m.modalForDraftID = ""
                 m.openStatusPicker(store.FirstStatusID(it.outline.StatusDefs))
                 return m, nil
         }
@@ -776,17 +1351,24 @@ func (m captureModel) updateStatusPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
         case "enter":
                 it, ok := m.statusPickList.SelectedItem().(captureStatusItem)
                 if !ok {
-                        m.modal = captureModalNone
-                        m.pendingOutlineChange = ""
+                        (&m).closeModal()
                         return m, nil
                 }
                 chosen := strings.TrimSpace(it.def.ID)
                 if strings.TrimSpace(m.pendingOutlineChange) != "" {
-                        m.draftOutlineID = strings.TrimSpace(m.pendingOutlineChange)
-                        m.pendingOutlineChange = ""
+                        (&m).applyPendingOutlineChange(chosen)
+                        (&m).closeModal()
+                        return m, nil
                 }
-                m.draftStatusID = chosen
-                m.modal = captureModalNone
+                id := strings.TrimSpace(m.modalForDraftID)
+                if id != "" {
+                        if d := m.findDraftItem(id); d != nil {
+                                d.StatusID = chosen
+                                (&m).setDraftItem(*d)
+                                (&m).refreshDraftList()
+                        }
+                }
+                (&m).closeModal()
                 return m, nil
         }
         var cmd tea.Cmd
@@ -794,9 +1376,37 @@ func (m captureModel) updateStatusPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
         return m, cmd
 }
 
+func (m *captureModel) applyPendingOutlineChange(chosenStatusID string) {
+        if m == nil || m.db == nil {
+                return
+        }
+        to := strings.TrimSpace(m.pendingOutlineChange)
+        if to == "" {
+                return
+        }
+        o, ok := m.db.FindOutline(to)
+        if !ok || o == nil {
+                m.pendingOutlineChange = ""
+                return
+        }
+        for i := range m.draftItems {
+                m.draftItems[i].OutlineID = to
+                m.draftItems[i].ProjectID = o.ProjectID
+                m.draftItems[i].StatusID = strings.TrimSpace(chosenStatusID)
+        }
+        m.draftOutlineID = to
+        m.pendingOutlineChange = ""
+        m.refreshDraftList()
+}
+
 func (m *captureModel) resizeLists() {
-        w := m.width - 6
-        h := m.height - 8
+        // Render capture like a centered modal rather than full-screen UI.
+        // Keep a consistent (bounded) size so hotkey capture feels focused.
+        w := modalBodyWidth(m.width)
+        h := m.height - 10
+        if h > 20 {
+                h = 20
+        }
         if w < 20 {
                 w = 20
         }
@@ -806,8 +1416,11 @@ func (m *captureModel) resizeLists() {
         m.templateList.SetSize(w, h)
         m.outlinePickList.SetSize(w, h)
         m.statusPickList.SetSize(w, h)
+        m.assigneeList.SetSize(w, h)
+        m.draftList.SetSize(w, h)
 
         // Text editor modals use a smaller area.
+        m.titleInput.Width = w - 4
         m.input.Width = w - 4
         m.textarea.SetWidth(w - 4)
         m.textarea.SetHeight(h - 4)
@@ -837,20 +1450,23 @@ func (m captureModel) View() string {
         }
 
         if m.modal != captureModalNone {
-                return m.renderModal()
+                return m.placeCentered(m.renderModal())
         }
 
         if strings.TrimSpace(m.minibuffer) != "" {
                 body += "\n\n" + metaOnHoldStyle.Render(m.minibuffer)
         }
 
-        return renderModalBox(m.width, title, body)
+        return m.placeCentered(renderModalBox(m.width, title, body))
+}
+
+func (m captureModel) placeCentered(s string) string {
+        // If the modal fills the screen, Place will naturally have no padding; otherwise it centers.
+        return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, s)
 }
 
 func (m captureModel) renderDraftSummary() string {
-        outLabel := m.draftOutlineID
-        statusLabel := m.draftStatusID
-
+        outLabel := strings.TrimSpace(m.workspace) + " / " + strings.TrimSpace(m.draftOutlineID)
         if m.db != nil {
                 if o, ok := m.db.FindOutline(m.draftOutlineID); ok && o != nil {
                         pn := ""
@@ -859,54 +1475,862 @@ func (m captureModel) renderDraftSummary() string {
                         }
                         on := outlineDisplayName(*o)
                         outLabel = strings.TrimSpace(m.workspace) + " / " + pn + " / " + on
-
-                        for _, sd := range o.StatusDefs {
-                                if sd.ID == m.draftStatusID {
-                                        if strings.TrimSpace(sd.Label) != "" {
-                                                statusLabel = strings.TrimSpace(sd.Label)
-                                        }
-                                        break
-                                }
-                        }
                 }
         }
 
-        descPreview := strings.TrimSpace(m.draftDesc)
-        if descPreview == "" {
-                descPreview = "(empty)"
-        }
-        lines := strings.Split(descPreview, "\n")
-        if len(lines) > 4 {
-                lines = lines[:4]
-                lines = append(lines, "…")
-        }
-        descPreview = strings.Join(lines, "\n")
-
-        title := strings.TrimSpace(m.draftTitle)
-        if title == "" {
-                title = "(empty)"
-        }
-
-        return strings.TrimSpace(fmt.Sprintf(
-                "Target: %s\nStatus: %s\n\nTitle:\n%s\n\nDescription:\n%s\n\nKeys: e edit title  D edit description  SPACE status  m move outline  ENTER save  esc cancel",
-                outLabel,
-                statusLabel,
-                title,
-                descPreview,
-        ))
+        bodyW := modalBodyWidth(m.width)
+        header := styleMuted().Width(bodyW).Render("Target: " + outLabel)
+        help := styleMuted().Width(bodyW).Render("Keys: e title  D desc  a assign  t tags  s schedule  d due  p priority  o hold  SPACE status  m move  n sibling  N subitem  ENTER save  esc cancel")
+        return strings.Join([]string{
+                header,
+                "",
+                m.draftList.View(),
+                "",
+                help,
+        }, "\n")
 }
 
 func (m captureModel) renderModal() string {
         switch m.modal {
         case captureModalEditTitle:
-                return renderModalBox(m.width, "Capture: title", m.input.View()+"\n\nenter: save   esc/ctrl+g: cancel")
+                return renderModalBox(m.width, "Capture: title", m.titleInput.View()+"\n\nenter/ctrl+s: save   esc/ctrl+g: cancel")
         case captureModalEditDescription:
                 return renderModalBox(m.width, "Capture: description", m.textarea.View()+"\n\nctrl+s: save   esc/ctrl+g: cancel")
         case captureModalPickOutline:
                 return renderModalBox(m.width, "Capture: move to outline", m.outlinePickList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
         case captureModalPickStatus:
                 return renderModalBox(m.width, "Capture: set status", m.statusPickList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
+        case captureModalPickAssignee:
+                return renderModalBox(m.width, "Capture: assign", m.assigneeList.View()+"\n\nenter: set   esc/ctrl+g: cancel")
+        case captureModalEditTags:
+                return m.renderTagsModal()
+        case captureModalSetDue:
+                return m.renderDateTimeModal("Capture: due date")
+        case captureModalSetSchedule:
+                return m.renderDateTimeModal("Capture: schedule")
         default:
                 return renderModalBox(m.width, "Capture", "")
         }
+}
+
+func (m *captureModel) openAssigneePicker(active *model.Item) {
+        if m == nil || m.db == nil {
+                m.assigneeList.SetItems([]list.Item{})
+                return
+        }
+
+        cur := ""
+        if active != nil && active.AssignedActorID != nil {
+                cur = strings.TrimSpace(*active.AssignedActorID)
+        }
+
+        opts := []list.Item{assigneeOptionItem{id: "", label: ""}}
+        actors := append([]model.Actor(nil), m.db.Actors...)
+        sort.Slice(actors, func(i, j int) bool {
+                ai := strings.ToLower(strings.TrimSpace(actors[i].Name))
+                aj := strings.ToLower(strings.TrimSpace(actors[j].Name))
+                if ai == aj {
+                        return actors[i].ID < actors[j].ID
+                }
+                if ai == "" {
+                        return false
+                }
+                if aj == "" {
+                        return true
+                }
+                return ai < aj
+        })
+        for _, a := range actors {
+                lbl := actorDisplayLabel(m.db, a.ID)
+                opts = append(opts, assigneeOptionItem{id: a.ID, label: lbl})
+        }
+
+        m.assigneeList.Title = ""
+        m.assigneeList.SetItems(opts)
+        bodyW := modalBodyWidth(m.width)
+        h := len(opts) + 2
+        if h > 14 {
+                h = 14
+        }
+        if h < 6 {
+                h = 6
+        }
+        m.assigneeList.SetSize(bodyW, h)
+
+        selected := 0
+        for i := 0; i < len(opts); i++ {
+                if o, ok := opts[i].(assigneeOptionItem); ok && strings.TrimSpace(o.id) == cur {
+                        selected = i
+                        break
+                }
+        }
+        m.assigneeList.Select(selected)
+}
+
+func (m captureModel) updateAssigneePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+        switch msg.String() {
+        case "enter":
+                id := strings.TrimSpace(m.modalForDraftID)
+                if id == "" {
+                        (&m).closeModal()
+                        return m, nil
+                }
+                d := m.findDraftItem(id)
+                if d == nil {
+                        (&m).closeModal()
+                        return m, nil
+                }
+                pick, _ := m.assigneeList.SelectedItem().(assigneeOptionItem)
+                if strings.TrimSpace(pick.id) == "" {
+                        d.AssignedActorID = nil
+                } else {
+                        tmp := strings.TrimSpace(pick.id)
+                        d.AssignedActorID = &tmp
+                }
+                (&m).setDraftItem(*d)
+                (&m).refreshDraftList()
+                (&m).closeModal()
+                return m, nil
+        }
+        var cmd tea.Cmd
+        m.assigneeList, cmd = m.assigneeList.Update(msg)
+        return m, cmd
+}
+
+func (m *captureModel) openTagsEditor(active *model.Item, preferredTag string) {
+        m.refreshTagsEditor(active, preferredTag)
+        m.tagsFocus = tagsFocusInput
+        if m.tagsListActive != nil {
+                *m.tagsListActive = false
+        }
+        m.input.Placeholder = "Add tag"
+        m.input.SetValue("")
+        m.input.Focus()
+}
+
+func (m *captureModel) refreshTagsEditor(active *model.Item, preferredTag string) {
+        if m == nil || m.db == nil {
+                m.tagsList.SetItems([]list.Item{})
+                return
+        }
+
+        outID := strings.TrimSpace(m.draftOutlineID)
+        if outID == "" {
+                m.tagsList.SetItems([]list.Item{})
+                return
+        }
+
+        // Collect available tags from the outline (plus current draft tags).
+        all := make([]string, 0, 32)
+        for _, x := range m.db.Items {
+                if x.Archived {
+                        continue
+                }
+                if strings.TrimSpace(x.OutlineID) != outID {
+                        continue
+                }
+                for _, t := range x.Tags {
+                        t = normalizeTag(t)
+                        if t == "" {
+                                continue
+                        }
+                        all = append(all, t)
+                }
+        }
+        for i := range m.draftItems {
+                for _, t := range m.draftItems[i].Tags {
+                        t = normalizeTag(t)
+                        if t == "" {
+                                continue
+                        }
+                        all = append(all, t)
+                }
+        }
+        all = uniqueSortedStrings(all)
+
+        checked := map[string]bool{}
+        if active != nil {
+                for _, t := range active.Tags {
+                        t = normalizeTag(t)
+                        if t == "" {
+                                continue
+                        }
+                        checked[t] = true
+                }
+        }
+
+        opts := make([]list.Item, 0, len(all))
+        for _, tag := range all {
+                opts = append(opts, tagOptionItem{tag: tag, checked: checked[tag]})
+        }
+
+        // Preserve selection when possible.
+        selectedTag := strings.TrimSpace(preferredTag)
+        if selectedTag == "" {
+                if cur, ok := m.tagsList.SelectedItem().(tagOptionItem); ok {
+                        selectedTag = strings.TrimSpace(cur.tag)
+                }
+        }
+
+        m.tagsList.Title = ""
+        m.tagsList.SetItems(opts)
+        bodyW := modalBodyWidth(m.width)
+        h := len(opts) + 2
+        if h > 12 {
+                h = 12
+        }
+        if h < 4 {
+                h = 4
+        }
+        m.tagsList.SetSize(bodyW, h)
+
+        selectedIdx := 0
+        for i := 0; i < len(opts); i++ {
+                if o, ok := opts[i].(tagOptionItem); ok && strings.TrimSpace(o.tag) == selectedTag {
+                        selectedIdx = i
+                        break
+                }
+        }
+        m.tagsList.Select(selectedIdx)
+}
+
+func (m *captureModel) setTagCheckedForDraft(itemID string, tag string, checked bool) {
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" {
+                return
+        }
+        it := m.findDraftItem(itemID)
+        if it == nil {
+                return
+        }
+        tag = normalizeTag(tag)
+        if tag == "" {
+                return
+        }
+        cur := make([]string, 0, len(it.Tags)+1)
+        has := false
+        for _, t := range it.Tags {
+                nt := normalizeTag(t)
+                if nt == "" {
+                        continue
+                }
+                if nt == tag {
+                        has = true
+                        continue
+                }
+                cur = append(cur, nt)
+        }
+        if checked && !has {
+                cur = append(cur, tag)
+        }
+        it.Tags = uniqueSortedStrings(cur)
+        m.setDraftItem(*it)
+}
+
+func (m captureModel) updateTagsModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+        itemID := strings.TrimSpace(m.modalForDraftID)
+        active := m.findDraftItem(itemID)
+        switch msg.String() {
+        case "esc":
+                (&m).closeModal()
+                return m, nil
+        case "tab":
+                if m.tagsFocus == tagsFocusInput {
+                        m.tagsFocus = tagsFocusList
+                        m.input.Blur()
+                        if m.tagsListActive != nil {
+                                *m.tagsListActive = true
+                        }
+                } else {
+                        m.tagsFocus = tagsFocusInput
+                        m.input.Focus()
+                        if m.tagsListActive != nil {
+                                *m.tagsListActive = false
+                        }
+                }
+                return m, nil
+        case "shift+tab", "backtab":
+                if m.tagsFocus == tagsFocusList {
+                        m.tagsFocus = tagsFocusInput
+                        m.input.Focus()
+                        if m.tagsListActive != nil {
+                                *m.tagsListActive = false
+                        }
+                } else {
+                        m.tagsFocus = tagsFocusList
+                        m.input.Blur()
+                        if m.tagsListActive != nil {
+                                *m.tagsListActive = true
+                        }
+                }
+                return m, nil
+        }
+
+        if m.tagsFocus == tagsFocusInput {
+                switch msg.String() {
+                case "enter":
+                        tag := normalizeTag(m.input.Value())
+                        if tag == "" {
+                                return m, nil
+                        }
+                        m.setTagCheckedForDraft(itemID, tag, true)
+                        active = m.findDraftItem(itemID)
+                        m.input.SetValue("")
+                        m.refreshTagsEditor(active, tag)
+                        m.refreshDraftList()
+                        return m, nil
+                case "down", "j", "ctrl+n":
+                        if len(m.tagsList.Items()) > 0 {
+                                m.tagsFocus = tagsFocusList
+                                m.input.Blur()
+                                if m.tagsListActive != nil {
+                                        *m.tagsListActive = true
+                                }
+                                return m, nil
+                        }
+                }
+        } else {
+                switch msg.String() {
+                case "up", "k", "ctrl+p":
+                        if m.tagsList.Index() <= 0 {
+                                m.tagsFocus = tagsFocusInput
+                                m.input.Focus()
+                                if m.tagsListActive != nil {
+                                        *m.tagsListActive = false
+                                }
+                                return m, nil
+                        }
+                case "enter", " ":
+                        pick, ok := m.tagsList.SelectedItem().(tagOptionItem)
+                        if !ok {
+                                return m, nil
+                        }
+                        tag := strings.TrimSpace(pick.tag)
+                        if tag == "" {
+                                return m, nil
+                        }
+                        m.setTagCheckedForDraft(itemID, tag, !pick.checked)
+                        active = m.findDraftItem(itemID)
+                        m.refreshTagsEditor(active, tag)
+                        m.refreshDraftList()
+                        return m, nil
+                }
+        }
+
+        if m.tagsFocus == tagsFocusInput {
+                var cmd tea.Cmd
+                m.input, cmd = m.input.Update(msg)
+                return m, cmd
+        }
+        var cmd tea.Cmd
+        m.tagsList, cmd = m.tagsList.Update(msg)
+        return m, cmd
+}
+
+func (m *captureModel) renderTagsModal() string {
+        bodyW := modalBodyWidth(m.width)
+        inputW := bodyW - 2 // one space padding on each side
+        if inputW < 10 {
+                inputW = 10
+        }
+        m.input.Width = inputW
+
+        inputLine := lipgloss.PlaceHorizontal(
+                bodyW,
+                lipgloss.Left,
+                " "+m.input.View()+" ",
+                lipgloss.WithWhitespaceChars(" "),
+                lipgloss.WithWhitespaceBackground(colorInputBg),
+        )
+        help := styleMuted().Width(bodyW).Render("tab: focus  enter (input): add  enter/space (list): toggle  esc/ctrl+g: close")
+        body := strings.Join([]string{
+                inputLine,
+                "",
+                m.tagsList.View(),
+                "",
+                help,
+        }, "\n")
+        return renderModalBox(m.width, "Capture: tags", body)
+}
+
+func (m *captureModel) openDateModal(initial *model.DateTime) {
+        m.dateFocus = dateFocusYear
+        m.timeEnabled = initial != nil && initial.Time != nil && strings.TrimSpace(*initial.Time) != ""
+
+        // Seed values from existing field (if any); default to today.
+        y, mo, d, h, mi := parseDateTimeFieldsOrNow(initial)
+        m.yearInput.SetValue(fmt.Sprintf("%04d", y))
+        m.monthInput.SetValue(fmt.Sprintf("%02d", mo))
+        m.dayInput.SetValue(fmt.Sprintf("%02d", d))
+        if m.timeEnabled {
+                m.hourInput.SetValue(fmt.Sprintf("%02d", h))
+                m.minuteInput.SetValue(fmt.Sprintf("%02d", mi))
+        } else {
+                m.hourInput.SetValue("")
+                m.minuteInput.SetValue("")
+        }
+
+        // Style inputs similarly to other modals.
+        st := lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorInputBg)
+        for _, in := range []*textinput.Model{&m.yearInput, &m.monthInput, &m.dayInput, &m.hourInput, &m.minuteInput} {
+                in.Prompt = ""
+                in.TextStyle = st
+                in.PromptStyle = st
+                in.PlaceholderStyle = styleMuted().Background(colorInputBg)
+                in.CursorStyle = lipgloss.NewStyle().Foreground(colorSelectedFg).Background(colorAccent)
+        }
+
+        // Focus day by default (clear cursor elsewhere).
+        m.yearInput.Blur()
+        m.monthInput.Blur()
+        m.dayInput.Focus()
+        m.hourInput.Blur()
+        m.minuteInput.Blur()
+        m.dateFocus = dateFocusDay
+}
+
+func (m *captureModel) applyDateFieldFocus() {
+        m.yearInput.Blur()
+        m.monthInput.Blur()
+        m.dayInput.Blur()
+        m.hourInput.Blur()
+        m.minuteInput.Blur()
+        switch m.dateFocus {
+        case dateFocusYear:
+                m.yearInput.Focus()
+        case dateFocusMonth:
+                m.monthInput.Focus()
+        case dateFocusDay:
+                m.dayInput.Focus()
+        case dateFocusTimeToggle:
+                // no input focus
+        case dateFocusHour:
+                if m.timeEnabled {
+                        m.hourInput.Focus()
+                }
+        case dateFocusMinute:
+                if m.timeEnabled {
+                        m.minuteInput.Focus()
+                }
+        }
+}
+
+func (m *captureModel) currentDatePartsOrToday() (y int, mo int, d int) {
+        now := time.Now().UTC()
+        y = parseIntDefault(m.yearInput.Value(), now.Year())
+        mo = parseIntDefault(m.monthInput.Value(), int(now.Month()))
+        d = parseIntDefault(m.dayInput.Value(), now.Day())
+        if mo < 1 {
+                mo = 1
+        }
+        if mo > 12 {
+                mo = 12
+        }
+        d = clampDay(y, time.Month(mo), d)
+        return
+}
+
+func (m *captureModel) currentTimePartsOrZero() (h int, mi int) {
+        h = parseIntDefault(m.hourInput.Value(), 0)
+        mi = parseIntDefault(m.minuteInput.Value(), 0)
+        if h < 0 {
+                h = 0
+        }
+        if h > 23 {
+                h = 23
+        }
+        if mi < 0 {
+                mi = 0
+        }
+        if mi > 59 {
+                mi = 59
+        }
+        return
+}
+
+func (m *captureModel) bumpDateTimeField(delta int) bool {
+        switch m.dateFocus {
+        case dateFocusYear:
+                y, mo, d := m.currentDatePartsOrToday()
+                y += delta
+                d = clampDay(y, time.Month(mo), d)
+                m.yearInput.SetValue(fmtYear(y))
+                m.monthInput.SetValue(fmt2(mo))
+                m.dayInput.SetValue(fmt2(d))
+                return true
+        case dateFocusMonth:
+                y, mo, d := m.currentDatePartsOrToday()
+                mo += delta
+                for mo < 1 {
+                        mo += 12
+                        y--
+                }
+                for mo > 12 {
+                        mo -= 12
+                        y++
+                }
+                d = clampDay(y, time.Month(mo), d)
+                m.yearInput.SetValue(fmtYear(y))
+                m.monthInput.SetValue(fmt2(mo))
+                m.dayInput.SetValue(fmt2(d))
+                return true
+        case dateFocusDay:
+                y, mo, d := m.currentDatePartsOrToday()
+                cur := time.Date(y, time.Month(mo), d, 0, 0, 0, 0, time.UTC)
+                next := cur.AddDate(0, 0, delta)
+                m.yearInput.SetValue(fmtYear(next.Year()))
+                m.monthInput.SetValue(fmt2(int(next.Month())))
+                m.dayInput.SetValue(fmt2(next.Day()))
+                return true
+        case dateFocusHour:
+                h, mi := m.currentTimePartsOrZero()
+                h += delta
+                for h < 0 {
+                        h += 24
+                }
+                for h >= 24 {
+                        h -= 24
+                }
+                m.hourInput.SetValue(fmt2(h))
+                m.minuteInput.SetValue(fmt2(mi))
+                return true
+        case dateFocusMinute:
+                h, mi := m.currentTimePartsOrZero()
+                mi += delta
+                for mi < 0 {
+                        mi += 60
+                        h--
+                }
+                for mi >= 60 {
+                        mi -= 60
+                        h++
+                }
+                for h < 0 {
+                        h += 24
+                }
+                for h >= 24 {
+                        h -= 24
+                }
+                m.hourInput.SetValue(fmt2(h))
+                m.minuteInput.SetValue(fmt2(mi))
+                return true
+        case dateFocusTimeToggle:
+                return false
+        default:
+                return false
+        }
+}
+
+func (m captureModel) updateDateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+        itemID := strings.TrimSpace(m.modalForDraftID)
+        active := m.findDraftItem(itemID)
+        switch msg.String() {
+        case "tab":
+                switch m.dateFocus {
+                case dateFocusYear:
+                        m.dateFocus = dateFocusMonth
+                case dateFocusMonth:
+                        m.dateFocus = dateFocusDay
+                case dateFocusDay:
+                        m.dateFocus = dateFocusTimeToggle
+                case dateFocusTimeToggle:
+                        if m.timeEnabled {
+                                m.dateFocus = dateFocusHour
+                        } else {
+                                m.dateFocus = dateFocusSave
+                        }
+                case dateFocusHour:
+                        m.dateFocus = dateFocusMinute
+                case dateFocusMinute:
+                        m.dateFocus = dateFocusSave
+                case dateFocusSave:
+                        m.dateFocus = dateFocusClear
+                case dateFocusClear:
+                        m.dateFocus = dateFocusCancel
+                default:
+                        m.dateFocus = dateFocusYear
+                }
+        case "shift+tab", "backtab":
+                switch m.dateFocus {
+                case dateFocusYear:
+                        m.dateFocus = dateFocusCancel
+                case dateFocusCancel:
+                        m.dateFocus = dateFocusClear
+                case dateFocusClear:
+                        m.dateFocus = dateFocusSave
+                case dateFocusSave:
+                        if m.timeEnabled {
+                                m.dateFocus = dateFocusMinute
+                        } else {
+                                m.dateFocus = dateFocusTimeToggle
+                        }
+                case dateFocusMinute:
+                        m.dateFocus = dateFocusHour
+                case dateFocusHour:
+                        m.dateFocus = dateFocusTimeToggle
+                case dateFocusTimeToggle:
+                        m.dateFocus = dateFocusDay
+                case dateFocusDay:
+                        m.dateFocus = dateFocusMonth
+                case dateFocusMonth:
+                        m.dateFocus = dateFocusYear
+                default:
+                        m.dateFocus = dateFocusYear
+                }
+        case "ctrl+c":
+                if active != nil {
+                        if m.modal == captureModalSetDue {
+                                active.Due = nil
+                        } else {
+                                active.Schedule = nil
+                        }
+                        (&m).setDraftItem(*active)
+                        (&m).refreshDraftList()
+                }
+                (&m).closeModal()
+                return m, nil
+        case "left", "h":
+                switch m.dateFocus {
+                case dateFocusYear:
+                        if m.timeEnabled {
+                                m.dateFocus = dateFocusMinute
+                        } else {
+                                m.dateFocus = dateFocusTimeToggle
+                        }
+                        return m, nil
+                case dateFocusMonth:
+                        m.dateFocus = dateFocusYear
+                        return m, nil
+                case dateFocusDay:
+                        m.dateFocus = dateFocusMonth
+                        return m, nil
+                case dateFocusTimeToggle:
+                        m.dateFocus = dateFocusDay
+                        return m, nil
+                case dateFocusHour:
+                        m.dateFocus = dateFocusDay
+                        return m, nil
+                case dateFocusMinute:
+                        m.dateFocus = dateFocusHour
+                        return m, nil
+                }
+        case "right", "l":
+                switch m.dateFocus {
+                case dateFocusYear:
+                        m.dateFocus = dateFocusMonth
+                        return m, nil
+                case dateFocusMonth:
+                        m.dateFocus = dateFocusDay
+                        return m, nil
+                case dateFocusDay:
+                        m.dateFocus = dateFocusTimeToggle
+                        return m, nil
+                case dateFocusTimeToggle:
+                        if m.timeEnabled {
+                                m.dateFocus = dateFocusHour
+                        } else {
+                                m.dateFocus = dateFocusSave
+                        }
+                        return m, nil
+                case dateFocusHour:
+                        m.dateFocus = dateFocusMinute
+                        return m, nil
+                case dateFocusMinute:
+                        m.dateFocus = dateFocusYear
+                        return m, nil
+                }
+        case "up", "k", "ctrl+p":
+                if m.dateFocus == dateFocusTimeToggle {
+                        m.timeEnabled = !m.timeEnabled
+                        if !m.timeEnabled {
+                                m.hourInput.SetValue("")
+                                m.minuteInput.SetValue("")
+                        } else {
+                                if strings.TrimSpace(m.hourInput.Value()) == "" {
+                                        m.hourInput.SetValue("09")
+                                }
+                                if strings.TrimSpace(m.minuteInput.Value()) == "" {
+                                        m.minuteInput.SetValue("00")
+                                }
+                        }
+                        return m, nil
+                }
+                if m.bumpDateTimeField(+1) {
+                        return m, nil
+                }
+        case "down", "j", "ctrl+n":
+                if m.dateFocus == dateFocusTimeToggle {
+                        m.timeEnabled = !m.timeEnabled
+                        if !m.timeEnabled {
+                                m.hourInput.SetValue("")
+                                m.minuteInput.SetValue("")
+                        } else {
+                                if strings.TrimSpace(m.hourInput.Value()) == "" {
+                                        m.hourInput.SetValue("09")
+                                }
+                                if strings.TrimSpace(m.minuteInput.Value()) == "" {
+                                        m.minuteInput.SetValue("00")
+                                }
+                        }
+                        return m, nil
+                }
+                if m.bumpDateTimeField(-1) {
+                        return m, nil
+                }
+        case " ", "t":
+                if m.dateFocus == dateFocusTimeToggle {
+                        m.timeEnabled = !m.timeEnabled
+                        if !m.timeEnabled {
+                                m.hourInput.SetValue("")
+                                m.minuteInput.SetValue("")
+                        } else {
+                                if strings.TrimSpace(m.hourInput.Value()) == "" {
+                                        m.hourInput.SetValue("09")
+                                }
+                                if strings.TrimSpace(m.minuteInput.Value()) == "" {
+                                        m.minuteInput.SetValue("00")
+                                }
+                        }
+                        return m, nil
+                }
+        case "enter":
+                if m.dateFocus == dateFocusTimeToggle {
+                        m.timeEnabled = !m.timeEnabled
+                        if !m.timeEnabled {
+                                m.hourInput.SetValue("")
+                                m.minuteInput.SetValue("")
+                        } else {
+                                if strings.TrimSpace(m.hourInput.Value()) == "" {
+                                        m.hourInput.SetValue("09")
+                                }
+                                if strings.TrimSpace(m.minuteInput.Value()) == "" {
+                                        m.minuteInput.SetValue("00")
+                                }
+                        }
+                        return m, nil
+                }
+                fallthrough
+        case "ctrl+s":
+                // If focused on cancel, treat save as cancel.
+                if m.dateFocus == dateFocusCancel {
+                        (&m).closeModal()
+                        return m, nil
+                }
+                // If focused on clear, clear.
+                if m.dateFocus == dateFocusClear {
+                        if active != nil {
+                                if m.modal == captureModalSetDue {
+                                        active.Due = nil
+                                } else {
+                                        active.Schedule = nil
+                                }
+                                (&m).setDraftItem(*active)
+                                (&m).refreshDraftList()
+                        }
+                        (&m).closeModal()
+                        return m, nil
+                }
+
+                hv := m.hourInput.Value()
+                mv := m.minuteInput.Value()
+                if !m.timeEnabled {
+                        hv = ""
+                        mv = ""
+                }
+                dt, err := parseDateTimeInputsFields(m.yearInput.Value(), m.monthInput.Value(), m.dayInput.Value(), hv, mv)
+                if err != nil {
+                        m.minibuffer = err.Error()
+                        return m, nil
+                }
+                if active != nil {
+                        if m.modal == captureModalSetDue {
+                                active.Due = dt
+                        } else {
+                                active.Schedule = dt
+                        }
+                        (&m).setDraftItem(*active)
+                        (&m).refreshDraftList()
+                }
+                m.minibuffer = ""
+                (&m).closeModal()
+                return m, nil
+        }
+
+        m.applyDateFieldFocus()
+        var cmd tea.Cmd
+        switch m.dateFocus {
+        case dateFocusYear:
+                m.yearInput, cmd = m.yearInput.Update(msg)
+                return m, cmd
+        case dateFocusMonth:
+                m.monthInput, cmd = m.monthInput.Update(msg)
+                return m, cmd
+        case dateFocusDay:
+                m.dayInput, cmd = m.dayInput.Update(msg)
+                return m, cmd
+        case dateFocusHour:
+                m.hourInput, cmd = m.hourInput.Update(msg)
+                return m, cmd
+        case dateFocusMinute:
+                m.minuteInput, cmd = m.minuteInput.Update(msg)
+                return m, cmd
+        }
+        return m, nil
+}
+
+func (m *captureModel) renderDateTimeModal(title string) string {
+        bodyW := modalBodyWidth(m.width)
+
+        focusBtn := func(active bool) lipgloss.Style {
+                if active {
+                        return lipgloss.NewStyle().Padding(0, 1).Foreground(colorSelectedFg).Background(colorSelectedBg).Bold(true)
+                }
+                return lipgloss.NewStyle().Padding(0, 1).Foreground(colorSurfaceFg).Background(colorControlBg)
+        }
+
+        renderPill := func(active bool, content string) string {
+                st := lipgloss.NewStyle().Background(colorInputBg).Foreground(colorSurfaceFg)
+                if active {
+                        st = lipgloss.NewStyle().Foreground(colorSelectedFg).Background(colorSelectedBg).Bold(true)
+                }
+                return st.Render(" " + content + " ")
+        }
+
+        y := renderPill(m.dateFocus == dateFocusYear, padLeft(strings.TrimSpace(m.yearInput.Value()), 4))
+        mo := renderPill(m.dateFocus == dateFocusMonth, padLeft(strings.TrimSpace(m.monthInput.Value()), 2))
+        da := renderPill(m.dateFocus == dateFocusDay, padLeft(strings.TrimSpace(m.dayInput.Value()), 2))
+
+        timeToggle := "[ ] time"
+        if m.timeEnabled {
+                timeToggle = "[x] time"
+        }
+        toggleLine := renderPill(m.dateFocus == dateFocusTimeToggle, timeToggle)
+
+        hh := renderPill(m.dateFocus == dateFocusHour, padLeft(strings.TrimSpace(m.hourInput.Value()), 2))
+        min := renderPill(m.dateFocus == dateFocusMinute, padLeft(strings.TrimSpace(m.minuteInput.Value()), 2))
+
+        save := focusBtn(m.dateFocus == dateFocusSave).Render("Save")
+        clear := focusBtn(m.dateFocus == dateFocusClear).Render("Clear")
+        cancel := focusBtn(m.dateFocus == dateFocusCancel).Render("Cancel")
+
+        help := styleMuted().Width(bodyW).Render("tab: focus  h/l: prev/next  j/k or ↓/↑: -/+  enter/ctrl+s: save  ctrl+c: clear  esc/ctrl+g: cancel")
+
+        timeLine := toggleLine
+        if m.timeEnabled {
+                timeLine = toggleLine + "  " + lipgloss.JoinHorizontal(lipgloss.Left, hh, ":", min)
+        }
+
+        body := strings.Join([]string{
+                styleMuted().Width(bodyW).Render("Date"),
+                lipgloss.JoinHorizontal(lipgloss.Left, y, "-", mo, "-", da),
+                "",
+                styleMuted().Width(bodyW).Render("Time (optional)"),
+                timeLine,
+                "",
+                lipgloss.JoinHorizontal(lipgloss.Left, save, clear, cancel),
+                "",
+                help,
+        }, "\n")
+
+        return renderModalBox(m.width, title, body)
 }
