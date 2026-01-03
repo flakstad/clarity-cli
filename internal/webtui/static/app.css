@@ -1,0 +1,41 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: #0b0e14;
+  color: #e6e1cf;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.terminal-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.terminal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.terminal-title {
+  font-weight: 600;
+}
+
+.terminal-meta {
+  display: flex;
+  gap: 12px;
+  opacity: 0.8;
+  font-size: 12px;
+}
+
+.terminal {
+  flex: 1;
+  padding: 8px;
+}

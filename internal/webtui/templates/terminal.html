@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Clarity TUI</title>
+    <link rel="stylesheet" href="/static/xterm/xterm.css" />
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <div class="terminal-root">
+      <div class="terminal-header">
+        <div class="terminal-title">Clarity TUI</div>
+        <div class="terminal-meta">
+          {{if .Workspace}}<span>workspace={{.Workspace}}</span>{{end}}
+          {{if .ActorID}}<span>actor={{.ActorID}}</span>{{end}}
+        </div>
+      </div>
+      <div id="terminal" class="terminal"></div>
+    </div>
+
+    <script src="/static/xterm/xterm.js"></script>
+    <script src="/static/xterm/xterm-addon-fit.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

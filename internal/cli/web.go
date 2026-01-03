@@ -51,19 +51,19 @@ clarity --workspace "Flakstad Software" web --addr :3333
                                         actorID = strings.TrimSpace(db.CurrentActorID)
                                 }
                         }
-                                        srv, err := web.NewServer(web.ServerConfig{
-                                                Addr:          strings.TrimSpace(addr),
-                                                Dir:           dir,
-                                                Workspace:     strings.TrimSpace(app.Workspace),
-                                                ActorID:       actorID,
-                                                ReadOnly:      readOnly,
-                                                AuthMode:      strings.TrimSpace(authMode),
-                                                ComponentsDir: strings.TrimSpace(componentsDir),
-                                                OutlineMode:   strings.TrimSpace(outlineMode),
-                                        })
-                                        if err != nil {
-                                                return writeErr(cmd, err)
-                                        }
+                        srv, err := web.NewServer(web.ServerConfig{
+                                Addr:          strings.TrimSpace(addr),
+                                Dir:           dir,
+                                Workspace:     strings.TrimSpace(app.Workspace),
+                                ActorID:       actorID,
+                                ReadOnly:      readOnly,
+                                AuthMode:      strings.TrimSpace(authMode),
+                                ComponentsDir: strings.TrimSpace(componentsDir),
+                                OutlineMode:   strings.TrimSpace(outlineMode),
+                        })
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
 
                         listenAddr := srv.Addr()
                         if listenAddr == "" {

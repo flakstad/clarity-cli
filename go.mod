@@ -26,11 +26,13 @@ require (
         github.com/charmbracelet/x/cellbuf v0.0.13 // indirect
         github.com/charmbracelet/x/exp/slice v0.0.0-20250327172914-2fdc97757edf // indirect
         github.com/charmbracelet/x/term v0.2.1 // indirect
+        github.com/creack/pty v1.1.21 // indirect
         github.com/dlclark/regexp2 v1.11.0 // indirect
         github.com/dustin/go-humanize v1.0.1 // indirect
         github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
         github.com/google/uuid v1.6.0 // indirect
         github.com/gorilla/css v1.0.1 // indirect
+        github.com/gorilla/websocket v1.5.1 // indirect
         github.com/inconshreveable/mousetrap v1.1.0 // indirect
         github.com/klauspost/compress v1.18.0 // indirect
         github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
