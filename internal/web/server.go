@@ -939,7 +939,7 @@ func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
                         }
                 }
                 openTo, endTo, openLbl, endLbl := outlineToggleTargets(*o)
-                nodes := buildOutlineNativeNodes(db, *o, actorID)
+                nodes := buildOutlineNativeNodes(db, *o, actorID, parseOutlineCollapsedCookie(r, o.ID))
                 statusOptions := outlineStatusOptionsJSON(*o)
                 actorOptions := actorOptionsJSON(db)
                 outlineOptions := outlineOptionsJSON(db)
@@ -1016,6 +1016,29 @@ func (s *Server) handleItemEvents(w http.ResponseWriter, r *http.Request) {
                                 }
                         }
                 }
+
+                commentVMs := make([]itemCommentVM, 0, len(comments))
+                for _, c := range comments {
+                        authorID := strings.TrimSpace(c.AuthorID)
+                        authorLabel := actorDisplayLabel(db, authorID)
+                        commentVMs = append(commentVMs, itemCommentVM{
+                                ID:               c.ID,
+                                AuthorID:         authorID,
+                                AuthorLabel:      authorLabel,
+                                ReplyToCommentID: c.ReplyToCommentID,
+                                CreatedAt:        c.CreatedAt,
+                                BodyHTML:         renderMarkdownHTML(c.Body),
+                        })
+                }
+
+                worklogVMs := make([]itemWorklogVM, 0, len(worklog))
+                for _, wle := range worklog {
+                        worklogVMs = append(worklogVMs, itemWorklogVM{
+                                ID:        wle.ID,
+                                CreatedAt: wle.CreatedAt,
+                                BodyHTML:  renderMarkdownHTML(wle.Body),
+                        })
+                }
                 commentsCount := len(comments)
                 lastComment := ""
                 for _, c := range comments {
@@ -1083,9 +1106,10 @@ func (s *Server) handleItemEvents(w http.ResponseWriter, r *http.Request) {
                         AssignedLabel:      assignedLabel,
                         StatusLabel:        statusLabel,
                         ActorOptions:       []actorOption(nil),
-                        Comments:           comments,
+                        Comments:           commentVMs,
                         ReplyTo:            "",
-                        Worklog:            worklog,
+                        Worklog:            worklogVMs,
+                        DescriptionHTML:    renderMarkdownHTML(it.Description),
                         TagsInput:          tagsInput,
                         DueDate:            dueDate,
                         DueTime:            dueTime,
@@ -1506,6 +1530,9 @@ type captureOutlineOption struct {
 }
 
 func (s *Server) handleCaptureOptions(w http.ResponseWriter, r *http.Request) {
+        cfg, _ := store.LoadConfig()
+        wsName := strings.TrimSpace(s.workspaceName())
+
         db, err := (store.Store{Dir: s.dir()}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1523,6 +1550,7 @@ func (s *Server) handleCaptureOptions(w http.ResponseWriter, r *http.Request) {
                 projects[id] = strings.TrimSpace(p.Name)
         }
         opts := make([]captureOutlineOption, 0, len(db.Outlines))
+        statusByOutline := map[string]any{}
         for _, o := range db.Outlines {
                 if o.Archived {
                         continue
@@ -1543,6 +1571,33 @@ func (s *Server) handleCaptureOptions(w http.ResponseWriter, r *http.Request) {
                         label = id
                 }
                 opts = append(opts, captureOutlineOption{ID: id, Label: label})
+
+                // Status options per outline (for capture draft status picker).
+                type statusOpt struct {
+                        ID           string `json:"id"`
+                        Label        string `json:"label"`
+                        IsEndState   bool   `json:"isEndState"`
+                        RequiresNote bool   `json:"requiresNote,omitempty"`
+                }
+                st := make([]statusOpt, 0, len(o.StatusDefs)+1)
+                if len(o.StatusDefs) > 0 {
+                        for _, sd := range o.StatusDefs {
+                                sid := strings.TrimSpace(sd.ID)
+                                if sid == "" {
+                                        continue
+                                }
+                                lbl := strings.TrimSpace(sd.Label)
+                                if lbl == "" {
+                                        lbl = sid
+                                }
+                                st = append(st, statusOpt{ID: sid, Label: lbl, IsEndState: sd.IsEndState, RequiresNote: sd.RequiresNote})
+                        }
+                } else {
+                        st = append(st, statusOpt{ID: "todo", Label: "TODO", IsEndState: false})
+                        st = append(st, statusOpt{ID: "doing", Label: "DOING", IsEndState: false})
+                        st = append(st, statusOpt{ID: "done", Label: "DONE", IsEndState: true})
+                }
+                statusByOutline[id] = st
         }
         sort.Slice(opts, func(i, j int) bool {
                 if opts[i].Label != opts[j].Label {
@@ -1550,16 +1605,69 @@ func (s *Server) handleCaptureOptions(w http.ResponseWriter, r *http.Request) {
                 }
                 return opts[i].ID < opts[j].ID
         })
+
+        // Capture templates (org-capture style) filtered to the active workspace.
+        type captureTemplateOpt struct {
+                Name      string   `json:"name"`
+                Keys      []string `json:"keys"`
+                KeyPath   string   `json:"keyPath"`
+                OutlineID string   `json:"outlineId"`
+        }
+        templates := make([]captureTemplateOpt, 0)
+        if cfg != nil && wsName != "" {
+                for _, t := range cfg.CaptureTemplates {
+                        if strings.TrimSpace(t.Target.Workspace) != wsName {
+                                continue
+                        }
+                        keys, err := store.NormalizeCaptureTemplateKeys(t.Keys)
+                        if err != nil {
+                                continue
+                        }
+                        outID := strings.TrimSpace(t.Target.OutlineID)
+                        if outID == "" {
+                                continue
+                        }
+                        templates = append(templates, captureTemplateOpt{
+                                Name:      strings.TrimSpace(t.Name),
+                                Keys:      keys,
+                                KeyPath:   strings.Join(keys, ""),
+                                OutlineID: outID,
+                        })
+                }
+                sort.Slice(templates, func(i, j int) bool {
+                        if templates[i].KeyPath != templates[j].KeyPath {
+                                return templates[i].KeyPath < templates[j].KeyPath
+                        }
+                        return templates[i].Name < templates[j].Name
+                })
+        }
+
         w.Header().Set("Content-Type", "application/json; charset=utf-8")
         _ = json.NewEncoder(w).Encode(map[string]any{
-                "outlines": opts,
+                "outlines":               opts,
+                "statusOptionsByOutline": statusByOutline,
+                "templates":              templates,
         })
 }
 
 type captureCreateReq struct {
         OutlineID   string `json:"outlineId"`
+        StatusID    string `json:"statusId,omitempty"`
         Title       string `json:"title"`
         Description string `json:"description,omitempty"`
+}
+
+func statusIDInDefsWeb(id string, defs []model.OutlineStatusDef) bool {
+        id = strings.TrimSpace(id)
+        if id == "" {
+                return false
+        }
+        for _, d := range defs {
+                if strings.TrimSpace(d.ID) == id {
+                        return true
+                }
+        }
+        return false
 }
 
 func (s *Server) handleCaptureCreate(w http.ResponseWriter, r *http.Request) {
@@ -1606,9 +1714,15 @@ func (s *Server) handleCaptureCreate(w http.ResponseWriter, r *http.Request) {
         now := time.Now().UTC()
         itemID := st.NextID(db, "item")
 
-        statusID := "todo"
-        if len(o.StatusDefs) > 0 && strings.TrimSpace(o.StatusDefs[0].ID) != "" {
-                statusID = strings.TrimSpace(o.StatusDefs[0].ID)
+        statusID := strings.TrimSpace(req.StatusID)
+        if statusID != "" && !statusIDInDefsWeb(statusID, o.StatusDefs) {
+                statusID = ""
+        }
+        if statusID == "" {
+                statusID = "todo"
+                if len(o.StatusDefs) > 0 && strings.TrimSpace(o.StatusDefs[0].ID) != "" {
+                        statusID = strings.TrimSpace(o.StatusDefs[0].ID)
+                }
         }
 
         rank := nextAppendRank(db, outlineID, nil)
@@ -2643,6 +2757,8 @@ type outlineNativeNode struct {
         SchTime  string
         Tags     []string
 
+        Collapsed bool
+
         DoneChildren  int
         TotalChildren int
 
@@ -2816,7 +2932,32 @@ func outlineStatusOptionsJSON(o model.Outline) template.HTMLAttr {
         return template.HTMLAttr(b)
 }
 
-func buildOutlineNativeNodes(db *store.DB, o model.Outline, actorID string) []outlineNativeNode {
+func parseOutlineCollapsedCookie(r *http.Request, outlineID string) map[string]bool {
+        outlineID = strings.TrimSpace(outlineID)
+        if r == nil || outlineID == "" {
+                return map[string]bool{}
+        }
+        name := "clarity_outline_collapsed_" + outlineID
+        c, err := r.Cookie(name)
+        if err != nil || c == nil {
+                return map[string]bool{}
+        }
+        raw := strings.TrimSpace(c.Value)
+        if raw == "" {
+                return map[string]bool{}
+        }
+        out := map[string]bool{}
+        for _, part := range strings.Split(raw, ",") {
+                id := strings.TrimSpace(part)
+                if id == "" {
+                        continue
+                }
+                out[id] = true
+        }
+        return out
+}
+
+func buildOutlineNativeNodes(db *store.DB, o model.Outline, actorID string, collapsed map[string]bool) []outlineNativeNode {
         actorID = strings.TrimSpace(actorID)
 
         statusLabelByID := map[string]string{}
@@ -2921,6 +3062,7 @@ func buildOutlineNativeNodes(db *store.DB, o model.Outline, actorID string) []ou
                                 SchDate:       schDate,
                                 SchTime:       schTime,
                                 Tags:          it.Tags,
+                                Collapsed:     collapsed != nil && collapsed[it.ID],
                                 DoneChildren:  doneChildren,
                                 TotalChildren: totalChildren,
                                 Children:      build(it.ID),
@@ -2964,7 +3106,7 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
         useComponent := s.outlineMode() == "component" && strings.TrimSpace(s.componentsDir()) != ""
         itemsJSON, statusJSON, assigneesJSON, tagsJSON := outlineComponentPayload(db, *o, actorID)
         openTo, endTo, openLbl, endLbl := outlineToggleTargets(*o)
-        nodes := buildOutlineNativeNodes(db, *o, actorID)
+        nodes := buildOutlineNativeNodes(db, *o, actorID, parseOutlineCollapsedCookie(r, o.ID))
         statusOptions := outlineStatusOptionsJSON(*o)
         actorOptions := actorOptionsJSON(db)
         outlineOptions := outlineOptionsJSON(db)
@@ -4977,9 +5119,11 @@ type itemVM struct {
         AssignedLabel string
         StatusLabel   string
         ActorOptions  []actorOption
-        Comments      []model.Comment
+        Comments      []itemCommentVM
         ReplyTo       string
-        Worklog       []model.WorklogEntry
+        Worklog       []itemWorklogVM
+
+        DescriptionHTML template.HTML
 
         TagsInput          string
         DueDate            string
@@ -5008,6 +5152,21 @@ type itemVM struct {
         StatusDefs     []model.OutlineStatusDef
         ErrorMessage   string
         SuccessMessage string
+}
+
+type itemCommentVM struct {
+        ID               string
+        AuthorID         string
+        AuthorLabel      string
+        ReplyToCommentID *string
+        CreatedAt        time.Time
+        BodyHTML         template.HTML
+}
+
+type itemWorklogVM struct {
+        ID        string
+        CreatedAt time.Time
+        BodyHTML  template.HTML
 }
 
 type itemOutlineRowVM struct {
@@ -5212,6 +5371,29 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                         }
                 }
         }
+
+        commentVMs := make([]itemCommentVM, 0, len(comments))
+        for _, c := range comments {
+                authorID := strings.TrimSpace(c.AuthorID)
+                authorLabel := actorDisplayLabel(db, authorID)
+                commentVMs = append(commentVMs, itemCommentVM{
+                        ID:               c.ID,
+                        AuthorID:         authorID,
+                        AuthorLabel:      authorLabel,
+                        ReplyToCommentID: c.ReplyToCommentID,
+                        CreatedAt:        c.CreatedAt,
+                        BodyHTML:         renderMarkdownHTML(c.Body),
+                })
+        }
+
+        worklogVMs := make([]itemWorklogVM, 0, len(worklog))
+        for _, wle := range worklog {
+                worklogVMs = append(worklogVMs, itemWorklogVM{
+                        ID:        wle.ID,
+                        CreatedAt: wle.CreatedAt,
+                        BodyHTML:  renderMarkdownHTML(wle.Body),
+                })
+        }
         commentsCount := len(comments)
         lastComment := ""
         for _, c := range comments {
@@ -5277,9 +5459,10 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 AssignedID:         assignedID,
                 AssignedLabel:      assignedLabel,
                 StatusLabel:        statusLabel,
-                Comments:           comments,
+                Comments:           commentVMs,
                 ReplyTo:            replyTo,
-                Worklog:            worklog,
+                Worklog:            worklogVMs,
+                DescriptionHTML:    renderMarkdownHTML(it.Description),
                 TagsInput:          tagsInput,
                 DueDate:            dueDate,
                 DueTime:            dueTime,
@@ -5409,14 +5592,37 @@ func (s *Server) handleItemPreview(w http.ResponseWriter, r *http.Request) {
         canEdit := actorID != "" && perm.CanEditItem(db, actorID, it)
         statusDefs := []model.OutlineStatusDef{}
         statusOptionsJSON := template.HTMLAttr("[]")
+        statusLabelByID := map[string]string{}
         if o, ok := db.FindOutline(it.OutlineID); ok && o != nil {
                 statusDefs = o.StatusDefs
                 statusOptionsJSON = outlineStatusOptionsJSON(*o)
+                for _, sd := range o.StatusDefs {
+                        sid := strings.TrimSpace(sd.ID)
+                        if sid == "" {
+                                continue
+                        }
+                        lbl := strings.TrimSpace(sd.Label)
+                        if lbl == "" {
+                                lbl = sid
+                        }
+                        statusLabelByID[sid] = lbl
+                }
         }
 
         assignedID := ""
         if it.AssignedActorID != nil {
                 assignedID = strings.TrimSpace(*it.AssignedActorID)
+        }
+        assignedLabel := ""
+        if assignedID != "" {
+                assignedLabel = actorDisplayLabel(db, assignedID)
+        }
+        statusLabel := strings.TrimSpace(it.StatusID)
+        if mapped, ok := statusLabelByID[statusLabel]; ok && strings.TrimSpace(mapped) != "" {
+                statusLabel = strings.TrimSpace(mapped)
+        }
+        if statusLabel == "" {
+                statusLabel = "(none)"
         }
         tagsInput := ""
         if len(it.Tags) > 0 {
@@ -5451,10 +5657,13 @@ func (s *Server) handleItemPreview(w http.ResponseWriter, r *http.Request) {
                 baseVM:            s.baseVMForRequest(r, ""),
                 Item:              *it,
                 AssignedID:        assignedID,
+                AssignedLabel:     assignedLabel,
+                StatusLabel:       statusLabel,
                 ActorOptions:      nil,
                 Comments:          nil,
                 ReplyTo:           "",
                 Worklog:           nil,
+                DescriptionHTML:   renderMarkdownHTML(it.Description),
                 TagsInput:         tagsInput,
                 DueDate:           dueDate,
                 DueTime:           dueTime,

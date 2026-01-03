@@ -142,4 +142,4 @@ The web currently exposes only a minimal subset of the TUI’s “Agenda Command
 |---|---|---|---|
 | Consistent buttons/labels | same across dialogs | varies | ⚠️ |
 | Consistent keys | Esc/ctrl+g cancel; ctrl+enter save | varies | ⚠️ |
-| Restore focus after close | always restore selection | some dialogs still lose focus | ⚠️ |
+| Restore focus after close | always restore selection | restores to `data-focus-id` when available | ✅ |

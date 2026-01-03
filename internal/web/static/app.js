@@ -346,7 +346,7 @@
     row.dataset.schDate = '';
     row.dataset.schTime = '';
     row.dataset.openHref = '';
-    row.title = tempId;
+    // Keep IDs out of the visible UI; they remain available via copy actions.
 
     const caret = document.createElement('span');
     caret.className = 'outline-caret outline-chevron outline-caret--none';
@@ -387,6 +387,15 @@
 
       ul.style.display = '';
       ul.appendChild(li);
+
+      // Ensure the parent shows children affordances immediately.
+      updateOutlineProgressForLi(refLi);
+      const parentRow = refLi.querySelector(':scope > [data-outline-row]');
+      const caret2 = parentRow ? parentRow.querySelector('.outline-caret') : null;
+      if (caret2) {
+        caret2.classList.remove('outline-caret--none');
+        caret2.textContent = '▾';
+      }
     } else {
       const refLi = refRow ? nativeLiFromRow(refRow) : null;
       if (!refLi || !refLi.parentElement) return null;
@@ -618,6 +627,12 @@
     const focusId = (id || '').trim();
     if (!focusId) return;
     setTimeout(() => {
+      const root = document.getElementById('clarity-main') || document;
+      const direct = root.querySelector?.('[data-focus-id="' + CSS.escape(focusId) + '"]');
+      if (direct && typeof direct.focus === 'function') {
+        direct.focus();
+        return;
+      }
       const native = nativeOutlineRoot();
       if (native) {
         focusNativeRowById(focusId);
@@ -1804,7 +1819,20 @@
   const captureState = {
     open: false,
     restoreEl: null,
+    phase: 'select', // select|draft
     outlines: [],
+    templates: [],
+    statusByOutline: {},
+    tree: null,
+    prefix: [],
+    list: [],
+    idx: 0,
+    selectedTemplate: null,
+    draftOutlineId: '',
+    draftStatusId: '',
+    draftTitle: '',
+    draftDesc: '',
+    err: '',
   };
 
   const ensureCaptureModal = () => {
@@ -1823,23 +1851,17 @@
     el.style.justifyContent = 'center';
     el.style.zIndex = '9998';
     el.innerHTML = `
-      <div style="max-width:720px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
+      <div style="max-width:820px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
           <strong>Capture</strong>
           <span class="dim" style="font-size:12px;">Esc to cancel</span>
         </div>
-        <div style="margin-top:10px;">
-          <label class="dim" for="native-capture-title">Title</label>
-          <input id="native-capture-title" type="text" placeholder="What do you want to capture?" />
-        </div>
-        <div style="margin-top:10px;">
-          <label class="dim" for="native-capture-outline">Destination</label>
-          <select id="native-capture-outline"></select>
-        </div>
+        <div id="native-capture-hint" class="dim" style="margin-top:8px;font-size:12px;"></div>
+        <div id="native-capture-body" style="margin-top:10px;"></div>
         <div id="native-capture-err" class="dim" style="margin-top:10px;display:none;"></div>
         <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;align-items:center;">
           <button type="button" id="native-capture-cancel">Cancel</button>
-          <button type="button" id="native-capture-ok">Capture</button>
+          <button type="button" id="native-capture-ok">OK</button>
         </div>
       </div>
     `;
@@ -1867,6 +1889,7 @@
     const el = document.getElementById('native-capture-err');
     if (!el) return;
     const m = String(msg || '').trim();
+    captureState.err = m;
     if (!m) {
       el.style.display = 'none';
       el.textContent = '';
@@ -1882,37 +1905,231 @@
     return await res.json();
   };
 
+  const captureOutlineLabelByID = () => {
+    const m = new Map();
+    for (const o of (captureState.outlines || [])) {
+      const id = String(o?.id || '').trim();
+      const label = String(o?.label || '').trim();
+      if (id) m.set(id, label || id);
+    }
+    return m;
+  };
+
+  const buildCaptureTree = (templates) => {
+    const root = { children: {}, template: null };
+    for (const t0 of (Array.isArray(templates) ? templates : [])) {
+      const keys = Array.isArray(t0?.keys) ? t0.keys.map((k) => String(k || '').trim()).filter(Boolean) : [];
+      if (!keys.length) continue;
+      const name = String(t0?.name || '').trim();
+      const outlineId = String(t0?.outlineId || '').trim();
+      if (!name || !outlineId) continue;
+      let cur = root;
+      for (const k of keys) {
+        if (!cur.children) cur.children = {};
+        if (!cur.children[k]) cur.children[k] = { children: {}, template: null };
+        cur = cur.children[k];
+      }
+      cur.template = { name, keys, keyPath: String(t0?.keyPath || keys.join('')), outlineId };
+    }
+    return root;
+  };
+
+  const captureNodeAtPrefix = () => {
+    let cur = captureState.tree;
+    for (const k of (captureState.prefix || [])) {
+      if (!cur || !cur.children || !cur.children[k]) return null;
+      cur = cur.children[k];
+    }
+    return cur;
+  };
+
+  const captureRefreshList = () => {
+    const node = captureNodeAtPrefix();
+    const opts = [];
+    if (node && node.template) {
+      opts.push({ kind: 'select', key: 'Enter', label: 'Use template: ' + node.template.name, template: node.template });
+    }
+    const children = node && node.children ? node.children : {};
+    const keys = Object.keys(children || {}).sort((a, b) => a.localeCompare(b));
+    for (const k of keys) {
+      const child = children[k];
+      const leafName = child && child.template && (!child.children || Object.keys(child.children).length === 0) ? child.template.name : '';
+      const label = leafName ? (k + '  ' + leafName) : (k + '  …');
+      opts.push({ kind: 'prefix', key: k, label, nextKey: k });
+    }
+    captureState.list = opts;
+    captureState.idx = Math.max(0, Math.min((captureState.idx || 0), Math.max(0, opts.length - 1)));
+  };
+
+  const captureStartDraft = (tmpl) => {
+    captureState.selectedTemplate = tmpl;
+    captureState.phase = 'draft';
+    captureState.draftOutlineId = String(tmpl?.outlineId || '').trim();
+    const sts = captureState.statusByOutline && captureState.draftOutlineId ? (captureState.statusByOutline[captureState.draftOutlineId] || []) : [];
+    captureState.draftStatusId = String(sts[0]?.id || '').trim();
+    captureState.draftTitle = '';
+    captureState.draftDesc = '';
+    renderCapture();
+  };
+
+  const captureSelectCurrent = () => {
+    const cur = (captureState.list || [])[captureState.idx] || null;
+    if (!cur) return;
+    if (cur.kind === 'select') {
+      captureStartDraft(cur.template);
+      return;
+    }
+    if (cur.kind === 'prefix' && cur.nextKey) {
+      captureState.prefix = [...(captureState.prefix || []), String(cur.nextKey)];
+      captureState.idx = 0;
+      renderCapture();
+      const node = captureNodeAtPrefix();
+      if (node && node.template && (!node.children || Object.keys(node.children).length === 0)) {
+        captureStartDraft(node.template);
+      }
+    }
+  };
+
+  const renderCapture = () => {
+    const modal = ensureCaptureModal();
+    const hint = modal.querySelector('#native-capture-hint');
+    const body = modal.querySelector('#native-capture-body');
+    const okBtn = modal.querySelector('#native-capture-ok');
+    if (!hint || !body || !okBtn) return;
+
+    const prefix = (captureState.prefix || []).join('');
+    if (captureState.phase === 'select') {
+      hint.textContent = prefix ? ('Keys: ' + prefix + ' · type next key · Backspace up · Enter select') : 'Type a key to start a capture template sequence.';
+      okBtn.textContent = 'Select';
+      captureRefreshList();
+      const rows = captureState.list || [];
+      body.innerHTML = `
+        <div class="dim" style="margin-bottom:8px;">Templates (current workspace)</div>
+        <ul class="kb-list" id="native-capture-list" style="list-style:none;padding:0;margin:0;"></ul>
+      `;
+      const ul = body.querySelector('#native-capture-list');
+      if (ul) {
+        rows.forEach((o, i) => {
+          const li = document.createElement('li');
+          li.className = 'list-row';
+          li.tabIndex = -1;
+          li.style.cursor = 'pointer';
+          if (i === captureState.idx) li.style.background = 'color-mix(in oklab, Canvas, CanvasText 10%)';
+          li.innerHTML = `<span style="min-width:64px;display:inline-block;"><code>${escapeHTML(o.key)}</code></span><span>${escapeHTML(o.label)}</span>`;
+          li.addEventListener('click', () => {
+            captureState.idx = i;
+            renderCapture();
+            captureSelectCurrent();
+          });
+          ul.appendChild(li);
+        });
+      }
+      return;
+    }
+
+    hint.textContent = 'e title · D description · m outline · Space status · Enter capture · Ctrl+Enter capture (textarea)';
+    okBtn.textContent = 'Capture';
+    const outlineLabels = captureOutlineLabelByID();
+    const outlineLabel = outlineLabels.get(String(captureState.draftOutlineId || '')) || captureState.draftOutlineId || '-';
+    const statusOpts = captureState.statusByOutline && captureState.draftOutlineId ? (captureState.statusByOutline[captureState.draftOutlineId] || []) : [];
+    const statusLabel = (statusOpts.find((o) => String(o?.id || '') === String(captureState.draftStatusId || ''))?.label) || captureState.draftStatusId || '-';
+    body.innerHTML = `
+      <div class="dim">Template: <strong>${escapeHTML(String(captureState.selectedTemplate?.name || ''))}</strong></div>
+      <div class="dim" style="margin-top:6px;">Destination: <strong>${escapeHTML(outlineLabel)}</strong></div>
+      <div class="dim" style="margin-top:6px;">Status: <strong>${escapeHTML(statusLabel)}</strong></div>
+      <div style="margin-top:12px;">
+        <label class="dim" for="native-capture-draft-title">Title</label>
+        <input id="native-capture-draft-title" type="text" />
+      </div>
+      <div style="margin-top:10px;">
+        <label class="dim" for="native-capture-draft-desc">Description (markdown)</label>
+        <textarea id="native-capture-draft-desc" rows="6" style="font-family:var(--mono);"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;">
+        <label class="dim">Outline
+          <select id="native-capture-draft-outline"></select>
+        </label>
+        <label class="dim">Status
+          <select id="native-capture-draft-status"></select>
+        </label>
+      </div>
+    `;
+    const titleEl = body.querySelector('#native-capture-draft-title');
+    const descEl = body.querySelector('#native-capture-draft-desc');
+    const outlineEl = body.querySelector('#native-capture-draft-outline');
+    const statusEl = body.querySelector('#native-capture-draft-status');
+    if (titleEl) titleEl.value = captureState.draftTitle || '';
+    if (descEl) descEl.value = captureState.draftDesc || '';
+    if (outlineEl) {
+      outlineEl.innerHTML = '';
+      for (const o of (captureState.outlines || [])) {
+        const id = String(o?.id || '').trim();
+        const label = String(o?.label || '').trim() || id;
+        if (!id) continue;
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = label;
+        if (id === captureState.draftOutlineId) opt.selected = true;
+        outlineEl.appendChild(opt);
+      }
+      outlineEl.addEventListener('change', () => {
+        captureState.draftOutlineId = String(outlineEl.value || '').trim();
+        const sts = captureState.statusByOutline[captureState.draftOutlineId] || [];
+        captureState.draftStatusId = String(sts[0]?.id || '').trim();
+        renderCapture();
+      }, { once: true });
+    }
+    if (statusEl) {
+      statusEl.innerHTML = '';
+      for (const s of (statusOpts || [])) {
+        const id = String(s?.id || '').trim();
+        const label = String(s?.label || '').trim() || id;
+        if (!id) continue;
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = label;
+        if (id === captureState.draftStatusId) opt.selected = true;
+        statusEl.appendChild(opt);
+      }
+      statusEl.addEventListener('change', () => {
+        captureState.draftStatusId = String(statusEl.value || '').trim();
+      }, { once: true });
+    }
+    titleEl && titleEl.addEventListener('input', () => { captureState.draftTitle = String(titleEl.value || ''); });
+    descEl && descEl.addEventListener('input', () => { captureState.draftDesc = String(descEl.value || ''); });
+    setTimeout(() => titleEl && titleEl.focus(), 0);
+  };
+
   const openCaptureModal = () => {
     if (captureState.open) return;
     captureState.open = true;
     captureState.restoreEl = document.activeElement;
     const modal = ensureCaptureModal();
-    const title = modal.querySelector('#native-capture-title');
-    const sel = modal.querySelector('#native-capture-outline');
-    title.value = '';
-    sel.innerHTML = '<option value="" disabled selected>Loading…</option>';
+    captureState.phase = 'select';
+    captureState.prefix = [];
+    captureState.idx = 0;
+    captureState.selectedTemplate = null;
+    captureState.draftOutlineId = '';
+    captureState.draftStatusId = '';
+    captureState.draftTitle = '';
+    captureState.draftDesc = '';
+    captureState.outlines = [];
+    captureState.templates = [];
+    captureState.statusByOutline = {};
+    captureState.tree = null;
+    captureState.list = [];
     setCaptureError('');
     modal.style.display = 'flex';
-    setTimeout(() => title.focus(), 0);
+    renderCapture();
 
     loadCaptureOptions().then((data) => {
-      const outlines = Array.isArray(data?.outlines) ? data.outlines : [];
-      captureState.outlines = outlines;
-      sel.innerHTML = '';
-      outlines.forEach((o) => {
-        const id = String(o?.id || '').trim();
-        if (!id) return;
-        const opt = document.createElement('option');
-        opt.value = id;
-        opt.textContent = String(o?.label || id);
-        sel.appendChild(opt);
-      });
-      const curOutline = (nativeOutlineRoot()?.dataset?.outlineId || '').trim();
-      if (curOutline) sel.value = curOutline;
-      if (!sel.value && outlines.length) sel.value = String(outlines[0]?.id || '');
+      captureState.outlines = Array.isArray(data?.outlines) ? data.outlines : [];
+      captureState.templates = Array.isArray(data?.templates) ? data.templates : [];
+      captureState.statusByOutline = (data && typeof data.statusOptionsByOutline === 'object' && data.statusOptionsByOutline) ? data.statusOptionsByOutline : {};
+      captureState.tree = buildCaptureTree(captureState.templates);
+      renderCapture();
     }).catch((err) => {
-      setCaptureError('Error: ' + (err && err.message ? err.message : 'failed to load options'));
-      sel.innerHTML = '<option value="" disabled selected>(failed to load)</option>';
+      setCaptureError('Error: ' + (err && err.message ? err.message : 'failed to load capture data'));
     });
   };
 
@@ -1948,7 +2165,7 @@
     row.dataset.schDate = '';
     row.dataset.schTime = '';
     row.dataset.openHref = '/items/' + itemId;
-    row.title = itemId;
+    // Keep IDs out of the visible UI; they remain available via copy actions.
 
     row.innerHTML = `
       <span class="outline-caret outline-chevron" aria-hidden="true"></span>
@@ -1969,12 +2186,18 @@
 
   const submitCapture = async () => {
     const modal = ensureCaptureModal();
-    const titleEl = modal.querySelector('#native-capture-title');
-    const selEl = modal.querySelector('#native-capture-outline');
-    const title = String(titleEl?.value || '').trim();
-    const outlineId = String(selEl?.value || '').trim();
+    if (!captureState.open) return;
+    if (captureState.phase === 'select') {
+      captureSelectCurrent();
+      return;
+    }
+    const body = modal.querySelector('#native-capture-body');
+    const title = String(body?.querySelector('#native-capture-draft-title')?.value || '').trim();
+    const outlineId = String(body?.querySelector('#native-capture-draft-outline')?.value || captureState.draftOutlineId || '').trim();
+    const statusId = String(body?.querySelector('#native-capture-draft-status')?.value || captureState.draftStatusId || '').trim();
+    const description = String(body?.querySelector('#native-capture-draft-desc')?.value || captureState.draftDesc || '');
     if (!title || !outlineId) {
-      setCaptureError('Title and destination are required');
+      setCaptureError('Title and destination are required (press e/m)');
       return;
     }
     setCaptureError('');
@@ -1982,7 +2205,7 @@
       const res = await fetch('/capture', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ outlineId, title }),
+        body: JSON.stringify({ outlineId, statusId, title, description }),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
@@ -2338,6 +2561,7 @@
     rootEl: null,
     options: [],
     idx: 0,
+    restoreFocusId: '',
   };
 
   const ensureAssigneeModal = () => {
@@ -2435,12 +2659,13 @@
   };
 
   const closeAssigneePicker = () => {
-    const restoreId = assigneePicker.rowId;
+    const restoreId = (assigneePicker.restoreFocusId || assigneePicker.rowId || '').trim();
     assigneePicker.open = false;
     assigneePicker.rowId = '';
     assigneePicker.rootEl = null;
     assigneePicker.options = [];
     assigneePicker.idx = 0;
+    assigneePicker.restoreFocusId = '';
     const modal = document.getElementById('native-assignee-modal');
     if (modal) modal.style.display = 'none';
     restoreNativeFocusAfterModal(restoreId);
@@ -2503,6 +2728,7 @@
     mode: 'list', // 'list' | 'note'
     title: 'Status',
     submit: null, // optional override: ({statusID, option, note}) => Promise
+    restoreFocusId: '',
   };
 
   const ensureStatusModal = () => {
@@ -2649,7 +2875,7 @@
   };
 
   const closeStatusPicker = () => {
-    const restoreId = statusPicker.rowId;
+    const restoreId = (statusPicker.restoreFocusId || statusPicker.rowId || '').trim();
     statusPicker.open = false;
     statusPicker.rowId = '';
     statusPicker.rootEl = null;
@@ -2659,6 +2885,7 @@
     statusPicker.mode = 'list';
     statusPicker.title = 'Status';
     statusPicker.submit = null;
+    statusPicker.restoreFocusId = '';
     const modal = document.getElementById('native-status-modal');
     if (modal) modal.style.display = 'none';
     restoreNativeFocusAfterModal(restoreId);
@@ -2679,6 +2906,46 @@
     badge.classList.toggle('outline-status--open', !isEnd);
     const nextText = (label || statusID || '').trim() || '(none)';
     badge.textContent = nextText;
+
+    // Parent progress cookies depend on direct children end-state.
+    const li = nativeLiFromRow(row);
+    const parentLi = li ? li.parentElement?.closest('li[data-node-id]') : null;
+    if (parentLi) updateOutlineProgressForLi(parentLi);
+  };
+
+  const updateOutlineProgressForLi = (li) => {
+    if (!li || !li.querySelector) return;
+    const row = li.querySelector(':scope > [data-outline-row]');
+    if (!row) return;
+    const ul = li.querySelector(':scope > ul.outline-children');
+    const existing = row.querySelector('.outline-progress');
+    if (!ul) {
+      existing && existing.remove();
+      return;
+    }
+    const kids = Array.from(ul.querySelectorAll(':scope > li[data-node-id] > [data-outline-row]'));
+    const total = kids.length;
+    if (total <= 0) {
+      existing && existing.remove();
+      return;
+    }
+    let done = 0;
+    for (const k of kids) {
+      if ((k.dataset && String(k.dataset.end || '') === 'true')) done++;
+    }
+    let el = existing;
+    if (!el) {
+      el = document.createElement('span');
+      el.className = 'outline-progress dim';
+      el.setAttribute('data-ignore-morph', '');
+      const caret = row.querySelector('.outline-caret');
+      if (caret && caret.nextSibling) {
+        caret.parentNode.insertBefore(el, caret.nextSibling);
+      } else {
+        row.insertBefore(el, row.firstChild);
+      }
+    }
+    el.textContent = `[${done}/${total}]`;
   };
 
   const pickSelectedStatus = () => {
@@ -2832,6 +3099,8 @@
       if (explicit) return explicit;
       const a = document.activeElement;
       if (a && typeof a.closest === 'function') {
+        const fid = a.getAttribute ? String(a.getAttribute('data-focus-id') || '').trim() : '';
+        if (fid) return fid;
         const row = a.closest('[data-outline-row]');
         if (row && row.dataset) {
           const id = String(row.dataset.id || '').trim();
@@ -2997,6 +3266,7 @@
     statusPicker.title = 'Status';
     statusPicker.submit = null;
     statusPicker.idx = idx;
+    statusPicker.restoreFocusId = String(document.activeElement?.getAttribute?.('data-focus-id') || '').trim();
     const modal = ensureStatusModal();
     modal.style.display = 'flex';
     renderStatusPicker();
@@ -3019,6 +3289,7 @@
     assigneePicker.rootEl = root;
     assigneePicker.options = opts;
     assigneePicker.idx = idx;
+    assigneePicker.restoreFocusId = String(document.activeElement?.getAttribute?.('data-focus-id') || '').trim();
     const modal = ensureAssigneeModal();
     modal.style.display = 'flex';
     renderAssigneePicker();
@@ -3250,7 +3521,7 @@
             row2.dataset.focusId = realId;
             row2.dataset.openHref = '/items/' + realId;
             row2.id = 'outline-row-' + realId;
-            row2.title = realId;
+            // Keep IDs out of the visible UI; they remain available via copy actions.
             try { sessionStorage.setItem('clarity:lastFocus', realId); } catch (_) {}
             row2.focus();
           } else if (optimisticRow) {
@@ -3456,6 +3727,31 @@
   };
 
   const outlineCollapseKey = (outlineId) => 'clarity:outline:' + outlineId + ':collapsed';
+  const outlineCollapseCookieName = (outlineId) => 'clarity_outline_collapsed_' + outlineId;
+
+  const setCookie = (name, value) => {
+    name = String(name || '').trim();
+    if (!name) return;
+    value = String(value ?? '');
+    const maxAge = 60 * 60 * 24 * 365; // 1 year
+    document.cookie = `${name}=${value}; path=/; max-age=${maxAge}; samesite=lax`;
+  };
+
+  const syncCollapsedCookie = (root, set) => {
+    const outlineId = (root && root.dataset ? root.dataset.outlineId : '') || '';
+    if (!outlineId) return;
+    const ids = Array.from(set || []).map((x) => String(x || '').trim()).filter(Boolean);
+    // Best-effort bound to keep cookie size reasonable.
+    const out = [];
+    let bytes = 0;
+    for (const id of ids) {
+      const next = out.length ? (',' + id) : id;
+      bytes += next.length;
+      if (bytes > 3500) break;
+      out.push(id);
+    }
+    setCookie(outlineCollapseCookieName(outlineId), out.join(','));
+  };
 
   const loadCollapsedSet = (root) => {
     const outlineId = (root && root.dataset ? root.dataset.outlineId : '') || '';
@@ -3475,6 +3771,7 @@
     try {
       localStorage.setItem(outlineCollapseKey(outlineId), JSON.stringify(Array.from(set)));
     } catch (_) {}
+    syncCollapsedCookie(root, set);
   };
 
   const applyCollapsed = (root, set) => {
@@ -3646,6 +3943,8 @@
     const parentId = (prev.dataset.nodeId || '').trim();
     if (!id || !parentId) return;
 
+    const oldParentLi = li.parentElement ? li.parentElement.closest('li[data-node-id]') : null;
+
     const ul = ensureChildList(prev);
     // Determine afterId (append at end).
     const lastChild = ul.lastElementChild && ul.lastElementChild.dataset ? (ul.lastElementChild.dataset.nodeId || '').trim() : '';
@@ -3655,6 +3954,9 @@
     if (lastChild) detail.afterId = lastChild;
     queueOutlineMove(root, detail);
     focusNativeRowById(id);
+
+    if (oldParentLi) updateOutlineProgressForLi(oldParentLi);
+    updateOutlineProgressForLi(prev);
   };
 
   const nativeOutdent = (row) => {
@@ -3678,6 +3980,10 @@
     if (parentId) detail.parentId = parentId;
     queueOutlineMove(root, detail);
     focusNativeRowById(id);
+
+    updateOutlineProgressForLi(parentLi);
+    const gpLi = grandParentUl.closest ? grandParentUl.closest('li[data-node-id]') : null;
+    if (gpLi) updateOutlineProgressForLi(gpLi);
   };
 
   const setOutlineStatus = (msg) => {
@@ -3931,7 +4237,9 @@
       restoreFocus();
       const native = nativeOutlineRoot();
       if (native) {
-        applyCollapsed(native, loadCollapsedSet(native));
+        const set = loadCollapsedSet(native);
+        applyCollapsed(native, set);
+        syncCollapsedCookie(native, set);
       }
       const ar = agendaRoot();
       if (ar) {
@@ -3986,6 +4294,36 @@
     if (!kind) return;
     ev.preventDefault();
     itemSideOpen(kind, String(el.dataset.focusId || '').trim());
+  }, { capture: true });
+
+  // Item side panel forms: submit via fetch so the side panel stays open (SSE will refresh the view).
+  document.addEventListener('submit', (ev) => {
+    const root = itemPageRoot();
+    if (!root) return;
+    const form = ev && ev.target;
+    if (!form || !(form instanceof HTMLFormElement)) return;
+    const action = String(form.getAttribute('action') || '').trim();
+    if (!action) return;
+    if (!action.startsWith('/items/')) return;
+    const inSide = !!form.closest('#item-side-pane');
+    if (!inSide) return;
+    // Only intercept comment/worklog posts.
+    if (!action.endsWith('/comments') && !action.endsWith('/worklog')) return;
+    ev.preventDefault();
+    const fd = new FormData(form);
+    fetch(action, {
+      method: String(form.getAttribute('method') || 'POST').toUpperCase(),
+      body: new URLSearchParams(fd).toString(),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    }).then(async (res) => {
+      if (!res.ok) throw new Error(await res.text());
+      // Clear textarea on success (SSE will bring the new entry).
+      const ta = form.querySelector('textarea[name="body"]');
+      if (ta) ta.value = '';
+    }).catch((err) => {
+      setOutlineStatus('Error: ' + (err && err.message ? err.message : 'post failed'));
+      setTimeout(() => setOutlineStatus(''), 1800);
+    });
   }, { capture: true });
 
   // Outline component events (delegated so it survives Datastar morphs).
@@ -4411,8 +4749,18 @@
       nativeRowSibling(nativeRow, -1)?.focus?.();
       return true;
     }
+    if (ev.shiftKey && (key === 'arrowright' || key === 'right')) {
+      ev.preventDefault();
+      cycleStatus(nativeRow, +1);
+      return true;
+    }
+    if (ev.shiftKey && (key === 'arrowleft' || key === 'left')) {
+      ev.preventDefault();
+      cycleStatus(nativeRow, -1);
+      return true;
+    }
     // Hierarchy navigation (match TUI): Right/L/Ctrl+F => into first child; Left/H/Ctrl+B => parent.
-    if (!ev.altKey && (key === 'arrowright' || key === 'right' || key === 'l' || (ev.ctrlKey && key === 'f'))) {
+    if (!ev.shiftKey && !ev.altKey && (key === 'arrowright' || key === 'right' || key === 'l' || (ev.ctrlKey && key === 'f'))) {
       ev.preventDefault();
       const li = nativeLiFromRow(nativeRow);
       if (!li) return true;
@@ -4436,7 +4784,7 @@
       first?.focus?.();
       return true;
     }
-    if (!ev.altKey && (key === 'arrowleft' || key === 'left' || key === 'h' || (ev.ctrlKey && key === 'b'))) {
+    if (!ev.shiftKey && !ev.altKey && (key === 'arrowleft' || key === 'left' || key === 'h' || (ev.ctrlKey && key === 'b'))) {
       ev.preventDefault();
       const li = nativeLiFromRow(nativeRow);
       const parentLi = li ? li.parentElement?.closest('li[data-node-id]') : null;
@@ -4458,16 +4806,6 @@
     if (key === ' ') {
       ev.preventDefault();
       openStatusPicker(nativeRow);
-      return true;
-    }
-    if (ev.shiftKey && (key === 'arrowright' || key === 'right')) {
-      ev.preventDefault();
-      cycleStatus(nativeRow, +1);
-      return true;
-    }
-    if (ev.shiftKey && (key === 'arrowleft' || key === 'left')) {
-      ev.preventDefault();
-      cycleStatus(nativeRow, -1);
       return true;
     }
     if (key === 'n' && !ev.shiftKey) {
@@ -5114,12 +5452,10 @@
     const commentId = String(row?.dataset?.commentId || '').trim();
     if (!commentId) return;
     const li = row.closest('li');
-    const bodyEl = li ? li.querySelector('pre') : null;
-    const body = bodyEl ? String(bodyEl.textContent || '') : '';
-    const authorEl = row.querySelector('code');
-    const author = authorEl ? String(authorEl.textContent || '') : '';
-    const tsEl = row.querySelector('.dim');
-    const ts = tsEl ? String(tsEl.textContent || '') : '';
+    const bodyEl = li ? li.querySelector('.comment-body') : null;
+    const body = bodyEl ? String(bodyEl.innerText || bodyEl.textContent || '') : '';
+    const author = String(row?.dataset?.commentAuthor || '').trim();
+    const ts = String(row?.dataset?.commentTs || '').trim();
     const initial = commentQuote({ author, ts, body });
     openPrompt({
       title: 'Reply',
@@ -5164,6 +5500,22 @@
     return false;
   };
 
+  // Ctrl+Enter in the side pane textarea submits the nearest form (TUI parity).
+  document.addEventListener('keydown', (ev) => {
+    const root = itemPageRoot();
+    if (!root) return;
+    if (!itemSide.open) return;
+    if (!(ev.ctrlKey && (ev.key === 'Enter' || ev.key === 'enter'))) return;
+    const t = ev && ev.target;
+    if (!t || !isTypingTarget(t)) return;
+    const form = t.closest ? t.closest('form') : null;
+    if (!form) return;
+    if (!form.closest('#item-side-pane')) return;
+    ev.preventDefault();
+    if (typeof form.requestSubmit === 'function') form.requestSubmit();
+    else if (typeof form.submit === 'function') form.submit();
+  }, { capture: true });
+
   const handleActionPaletteKeydown = (ev) => {
     if (!actionPalette.open) return false;
     const key = (ev.key || '').toLowerCase();
@@ -5189,12 +5541,16 @@
       return true;
     }
     if (key && key.length === 1 && !ev.ctrlKey && !ev.altKey) {
-      const idx = (actionPalette.options || []).findIndex((o) => {
-        const k = String(o?.key || '');
-        if (!k) return false;
-        if (k.length === 1) return k === raw || k.toLowerCase() === key;
-        return k.toLowerCase() === key;
-      });
+      const opts = actionPalette.options || [];
+      // Prefer exact match (case-sensitive) so `C` doesn't accidentally select `c`.
+      let idx = opts.findIndex((o) => String(o?.key || '') === raw);
+      if (idx < 0) {
+        idx = opts.findIndex((o) => {
+          const k = String(o?.key || '');
+          if (!k) return false;
+          return k.toLowerCase() === key;
+        });
+      }
       if (idx >= 0) {
         ev.preventDefault();
         actionPalette.idx = idx;
@@ -5226,7 +5582,8 @@
 
   const handleCaptureKeydown = (ev) => {
     if (!captureState.open) return false;
-    const key = String(ev.key || '').toLowerCase();
+    const rawKey = String(ev.key || '');
+    const key = rawKey.toLowerCase();
     if (ev.ctrlKey && key === 'g') {
       ev.preventDefault();
       closeCaptureModal();
@@ -5237,7 +5594,88 @@
       closeCaptureModal();
       return true;
     }
+
+    if (captureState.phase === 'select') {
+      if (key === 'backspace') {
+        ev.preventDefault();
+        if (captureState.prefix.length) {
+          captureState.prefix = captureState.prefix.slice(0, captureState.prefix.length - 1);
+          captureState.idx = 0;
+          renderCapture();
+        }
+        return true;
+      }
+      if (key === 'enter') {
+        ev.preventDefault();
+        submitCapture();
+        return true;
+      }
+      if (key === 'arrowdown' || key === 'down' || key === 'j' || (ev.ctrlKey && key === 'n')) {
+        ev.preventDefault();
+        const n = (captureState.list || []).length;
+        if (n > 0) captureState.idx = (captureState.idx + 1) % n;
+        renderCapture();
+        return true;
+      }
+      if (key === 'arrowup' || key === 'up' || key === 'k' || (ev.ctrlKey && key === 'p')) {
+        ev.preventDefault();
+        const n = (captureState.list || []).length;
+        if (n > 0) captureState.idx = (captureState.idx - 1 + n) % n;
+        renderCapture();
+        return true;
+      }
+      if (!ev.ctrlKey && !ev.altKey && rawKey && rawKey.length === 1 && rawKey !== ' ') {
+        ev.preventDefault();
+        const node = captureNodeAtPrefix();
+        const child = node && node.children ? node.children[rawKey] : null;
+        if (!child) {
+          setCaptureError('No template for key: ' + rawKey);
+          return true;
+        }
+        setCaptureError('');
+        captureState.prefix = [...(captureState.prefix || []), rawKey];
+        captureState.idx = 0;
+        renderCapture();
+        const next = captureNodeAtPrefix();
+        if (next && next.template && (!next.children || Object.keys(next.children).length === 0)) {
+          captureStartDraft(next.template);
+        }
+        return true;
+      }
+      return true;
+    }
+
+    // Draft phase.
+    const body = document.getElementById('native-capture-body');
+    if (key === 'e') {
+      ev.preventDefault();
+      body?.querySelector('#native-capture-draft-title')?.focus?.();
+      return true;
+    }
+    if (rawKey === 'D') {
+      ev.preventDefault();
+      body?.querySelector('#native-capture-draft-desc')?.focus?.();
+      return true;
+    }
+    if (key === 'm') {
+      ev.preventDefault();
+      body?.querySelector('#native-capture-draft-outline')?.focus?.();
+      return true;
+    }
+    if (key === ' ') {
+      ev.preventDefault();
+      body?.querySelector('#native-capture-draft-status')?.focus?.();
+      return true;
+    }
     if (key === 'enter') {
+      const t = ev && ev.target;
+      const tag = (t && t.tagName ? String(t.tagName).toLowerCase() : '');
+      if (tag === 'textarea' && !ev.ctrlKey) return true;
+      if (tag === 'textarea' && ev.ctrlKey) {
+        ev.preventDefault();
+        submitCapture();
+        return true;
+      }
       ev.preventDefault();
       submitCapture();
       return true;

@@ -3,7 +3,6 @@
   <h1>{{.Project.Name}}</h1>
 
   <div class="card">
-    <div><strong>Project</strong>: <code>{{.Project.ID}}</code></div>
     <div><strong>Dir</strong>: <code>{{.Dir}}</code></div>
   </div>
 
@@ -14,7 +13,6 @@
         {{range .Outlines}}
           <li>
             <a class="list-row" data-kb-item data-focus-id="{{.ID}}" data-outline-id="{{.ID}}" data-outline-name="{{.Name}}" data-outline-description="{{.Description}}" href="/outlines/{{.ID}}">
-              <span class="list-id"><code>{{.ID}}</code></span>
               <span class="list-title">{{.Name}}</span>
             </a>
           </li>

@@ -5,7 +5,6 @@
   <div class="card">
     <div><strong>Workspace</strong>: {{if .Workspace}}{{.Workspace}}{{else}}(auto){{end}}</div>
     <div><strong>Dir</strong>: <code>{{.Dir}}</code></div>
-    <div><strong>Actor</strong>: {{if .ActorID}}<code>{{.ActorID}}</code>{{else}}(none){{end}}</div>
     <div><strong>Mode</strong>: {{if .ReadOnly}}read-only{{else}}read-write{{end}}</div>
   </div>
 
@@ -15,7 +14,7 @@
       {{if .Git.IsRepo}}
         <div>upstream: <code>{{.Git.Upstream}}</code></div>
         <div>ahead: {{.Git.Ahead}} behind: {{.Git.Behind}}</div>
-        <div>dirty: {{.Git.Dirty}} unmerged: {{.Git.Unmerged}} inProgress: {{.Git.InProgress}}</div>
+        <div>dirty: {{.Git.DirtyTracked}} unmerged: {{.Git.Unmerged}} inProgress: {{.Git.InProgress}}</div>
       {{else}}
         <div>(not a git repo)</div>
       {{end}}
@@ -28,7 +27,6 @@
         {{range .Projects}}
           <li>
             <a class="list-row" data-kb-item data-focus-id="{{.ID}}" data-project-id="{{.ID}}" data-project-name="{{.Name}}" href="/projects/{{.ID}}">
-              <span class="list-id"><code>{{.ID}}</code></span>
               <span class="list-title">{{.Name}}</span>
             </a>
           </li>
@@ -45,7 +43,7 @@
     {{if .Ready}}
       <ul>
         {{range .Ready}}
-          <li><a data-kb-item data-focus-id="{{.ID}}" href="/items/{{.ID}}"><code>{{.ID}}</code></a> — {{.Title}}</li>
+          <li><a data-kb-item data-focus-id="{{.ID}}" href="/items/{{.ID}}">{{.Title}}</a></li>
         {{end}}
       </ul>
     {{else}}

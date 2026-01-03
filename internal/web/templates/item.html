@@ -62,7 +62,6 @@
       data-due-time="{{.DueTime}}"
       data-sch-date="{{.SchDate}}"
       data-sch-time="{{.SchTime}}"
-      title="{{.Item.ID}}"
       style="padding: 8px 10px;"
     >
       <span class="outline-status outline-label">{{.StatusLabel}}</span>
@@ -75,9 +74,6 @@
         {{if .AssignedLabel}}<span class="outline-assignee outline-assign dim">@{{.AssignedLabel}}</span>{{end}}
         {{if .Item.Tags}}<span class="outline-tags dim">{{range $i, $t := .Item.Tags}}{{if $i}} {{end}}#{{$t}}{{end}}</span>{{end}}
       </span>
-    </div>
-    <div class="dim" style="margin-top: 10px;">
-      Item <code>{{.Item.ID}}</code> · Outline <code>{{.Item.OutlineID}}</code> · Owner <code>{{.Item.OwnerActorID}}</code>{{if .Item.ParentID}} · Parent <code>{{.Item.ParentID}}</code>{{end}}
     </div>
     <div id="outline-status" class="dim" style="margin-top: 10px;"></div>
   </div>
@@ -163,7 +159,7 @@
 
   <div class="card">
     <div><strong>Description</strong></div>
-    {{if .Item.Description}}<pre>{{.Item.Description}}</pre>{{else}}<div>(none)</div>{{end}}
+    {{if .Item.Description}}<div class="md">{{.DescriptionHTML}}</div>{{else}}<div class="dim">(none)</div>{{end}}
   </div>
 
   <div class="card">
@@ -202,13 +198,13 @@
         <ul class="kb-list">
           {{range .Comments}}
             <li>
-              <div class="list-row" tabindex="0" data-kb-item data-comment-id="{{.ID}}" data-focus-id="cmt-{{.ID}}">
+              <div class="list-row" tabindex="0" data-kb-item data-comment-id="{{.ID}}" data-focus-id="cmt-{{.ID}}" data-comment-author="{{.AuthorLabel}}" data-comment-ts="{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}">
                 <span class="dim">{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</span>
                 <span>—</span>
-                <span><code>{{.AuthorID}}</code></span>
+                <span>{{.AuthorLabel}}</span>
                 {{if .ReplyToCommentID}}<span class="dim">(reply)</span>{{end}}
               </div>
-              <pre style="margin: 6px 0 10px;">{{.Body}}</pre>
+              <div class="md comment-body" style="margin: 6px 0 10px;">{{.BodyHTML}}</div>
             </li>
           {{end}}
         </ul>
@@ -233,7 +229,7 @@
               <div class="list-row" tabindex="0" data-kb-item data-focus-id="wlg-{{.ID}}">
                 <span class="dim">{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</span>
               </div>
-              <pre style="margin: 6px 0 10px;">{{.Body}}</pre>
+              <div class="md" style="margin: 6px 0 10px;">{{.BodyHTML}}</div>
             </li>
           {{end}}
         </ul>

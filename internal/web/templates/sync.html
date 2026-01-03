@@ -14,7 +14,7 @@
     {{if .Git.IsRepo}}
       <div>upstream: <code>{{.Git.Upstream}}</code></div>
       <div>ahead: {{.Git.Ahead}} behind: {{.Git.Behind}}</div>
-      <div>dirty: {{.Git.Dirty}} unmerged: {{.Git.Unmerged}} inProgress: {{.Git.InProgress}}</div>
+      <div>dirty: {{.Git.DirtyTracked}} unmerged: {{.Git.Unmerged}} inProgress: {{.Git.InProgress}}</div>
     {{else}}
       <div>(not a git repo)</div>
     {{end}}

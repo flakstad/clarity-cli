@@ -11,16 +11,15 @@
         {{if eq .Kind "heading"}}
           <li class="dim" style="margin-top: 10px;"><strong>{{.Label}}</strong></li>
         {{else if eq .Kind "project"}}
-          <li class="dim"><code>{{.ProjectID}}</code> — {{.ProjectName}}</li>
+          <li class="dim">{{.ProjectName}}</li>
         {{else if eq .Kind "outline"}}
-          <li class="dim"><code>{{.OutlineID}}</code> — {{.ProjectName}} / {{.OutlineName}}</li>
+          <li class="dim">{{.ProjectName}} / {{.OutlineName}}</li>
         {{else if eq .Kind "item"}}
           <li>
             <a data-kb-item data-focus-id="{{.ItemID}}" href="/items/{{.ItemID}}">
-              <code>{{.ItemID}}</code>
+              {{if .Title}}{{.Title}}{{else}}(item){{end}}
             </a>
             <span class="dim">— {{.ProjectName}} / {{.OutlineName}}</span>
-            {{if .Title}} — {{.Title}}{{end}}
           </li>
         {{end}}
       {{end}}

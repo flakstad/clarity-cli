@@ -2,11 +2,7 @@
 <main id="clarity-main" data-view="outline">
   <h1>{{.Outline.Name}}</h1>
 
-  <div class="card">
-    <div><strong>Outline</strong>: <code>{{.Outline.ID}}</code></div>
-    <div><strong>Project</strong>: <code>{{.Outline.ProjectID}}</code></div>
-    {{if .Outline.Description}}<div style="margin-top:8px;" class="dim">{{.Outline.Description}}</div>{{end}}
-  </div>
+  {{if .Outline.Description}}<div class="card"><div class="dim">{{.Outline.Description}}</div></div>{{end}}
 
   <div class="card">
     <div><strong>Items</strong></div>
@@ -64,9 +60,8 @@
     data-sch-date="{{.SchDate}}"
     data-sch-time="{{.SchTime}}"
     data-open-href="/items/{{.ID}}"
-    title="{{.ID}}"
   >
-    <span class="outline-caret outline-chevron" aria-hidden="true" data-ignore-morph>{{if .Children}}▾{{end}}</span>
+    <span class="outline-caret outline-chevron" aria-hidden="true" data-ignore-morph>{{if .Children}}{{if .Collapsed}}▸{{else}}▾{{end}}{{end}}</span>
     {{if gt .TotalChildren 0}}<span class="outline-progress dim" data-ignore-morph>[{{.DoneChildren}}/{{.TotalChildren}}]</span>{{end}}
     <span class="outline-status outline-label {{if .IsEndState}}outline-status--end{{else}}outline-status--open{{end}}">
       {{if .StatusLabel}}{{.StatusLabel}}{{else}}{{if .StatusID}}{{.StatusID}}{{else}}(none){{end}}{{end}}
@@ -82,7 +77,7 @@
     </span>
   </div>
   {{if .Children}}
-    <ul id="outline-children-{{.ID}}" class="outline-children outline-list" data-preserve-attr="style">
+    <ul id="outline-children-{{.ID}}" class="outline-children outline-list" data-preserve-attr="style" {{if .Collapsed}}style="display:none"{{end}}>
       {{range .Children}}
         {{template "outline_node" .}}
       {{end}}
