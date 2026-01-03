@@ -138,6 +138,7 @@ const (
         modalCaptureTemplatePickWorkspace
         modalCaptureTemplatePickOutline
         modalConfirmDeleteCaptureTemplate
+        modalCapture
         modalGitSetupRemote
 )
 
@@ -219,6 +220,7 @@ func (m *appModel) closeAllModals() {
         m.modal = modalNone
         m.modalForID = ""
         m.modalForKey = ""
+        m.capture = nil
         m.replyQuoteMD = ""
         m.pendingMoveOutlineTo = ""
         m.captureTemplateEdit = nil

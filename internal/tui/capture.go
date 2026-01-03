@@ -27,6 +27,11 @@ type CaptureResult struct {
         ItemID    string
 }
 
+type captureFinishedMsg struct {
+        result   CaptureResult
+        canceled bool
+}
+
 func RunCapture(cfg *store.GlobalConfig, actorOverride string) (CaptureResult, error) {
         applyThemePreference()
 
@@ -135,6 +140,10 @@ type captureModel struct {
         result   CaptureResult
 
         autoCommit *gitrepo.DebouncedCommitter
+
+        // quitOnDone controls whether capture exits (standalone `clarity capture`) or returns
+        // control to a parent model (embedded capture within the main TUI).
+        quitOnDone bool
 }
 
 type captureOptionItem struct {
@@ -194,6 +203,7 @@ func newCaptureModel(cfg *store.GlobalConfig, actorOverride string) (captureMode
                 actorOverride:     actorOverride,
                 templateTree:      root,
                 outlineLabelByRef: map[string]string{},
+                quitOnDone:        true,
         }
 
         m.templateList = newList("Capture Templates", "Select a template", []list.Item{})
@@ -279,6 +289,15 @@ func newCaptureModel(cfg *store.GlobalConfig, actorOverride string) (captureMode
         m.textarea.FocusedStyle.CursorLine = m.textarea.BlurredStyle.CursorLine
 
         m.refreshTemplateList()
+        return m, nil
+}
+
+func newEmbeddedCaptureModel(cfg *store.GlobalConfig, actorOverride string) (captureModel, error) {
+        m, err := newCaptureModel(cfg, actorOverride)
+        if err != nil {
+                return captureModel{}, err
+        }
+        m.quitOnDone = false
         return m, nil
 }
 
@@ -412,7 +431,7 @@ func (m captureModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 return m, nil
                         }
                         m.canceled = true
-                        return m, tea.Quit
+                        return m, m.finishCmd(true)
                 }
 
                 if m.modal != captureModalNone {
@@ -427,6 +446,16 @@ func (m captureModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 }
         }
         return m, nil
+}
+
+func (m captureModel) finishCmd(canceled bool) tea.Cmd {
+        if m.quitOnDone {
+                return tea.Quit
+        }
+        res := m.result
+        return func() tea.Msg {
+                return captureFinishedMsg{result: res, canceled: canceled}
+        }
 }
 
 func (m *captureModel) closeModal() {
@@ -713,7 +742,7 @@ func (m captureModel) updateDraft(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
                         return m, nil
                 }
                 m.result = CaptureResult{Workspace: m.workspace, Dir: m.dir, ItemID: id}
-                return m, tea.Quit
+                return m, m.finishCmd(false)
         }
 
         // Allow navigating the draft outline.

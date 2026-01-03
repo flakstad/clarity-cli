@@ -205,6 +205,41 @@ func (m *appModel) closeActionPanel() {
         }
 }
 
+func (m *appModel) openCaptureModal() (appModel, tea.Cmd) {
+        if m == nil {
+                return appModel{}, nil
+        }
+
+        cfg, err := store.LoadConfig()
+        if err != nil {
+                m.showMinibuffer("Capture: " + err.Error())
+                return *m, nil
+        }
+        if err := store.ValidateCaptureTemplates(cfg); err != nil {
+                m.showMinibuffer("Capture: " + err.Error())
+                return *m, nil
+        }
+
+        actorOverride := strings.TrimSpace(m.currentWriteActorID())
+        cm, err := newEmbeddedCaptureModel(cfg, actorOverride)
+        if err != nil {
+                m.showMinibuffer("Capture: " + err.Error())
+                return *m, nil
+        }
+        // Ensure the embedded capture model has an initial size so it doesn't show "Loading…".
+        if m.width > 0 && m.height > 0 {
+                mmAny, _ := cm.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+                if mm, ok := mmAny.(captureModel); ok {
+                        cm = mm
+                }
+        }
+
+        m.modal = modalCapture
+        m.capture = &cm
+        m.pendingEsc = false
+        return *m, nil
+}
+
 func (m *appModel) pushActionPanel(kind actionPanelKind) {
         if m == nil {
                 return
@@ -329,7 +364,21 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
         // Only the root action panel (opened with x) shows global entrypoints.
         if cur == actionPanelContext {
                 actions["a"] = actionPanelAction{label: "Agenda Commands…", kind: actionPanelActionNav, next: actionPanelAgenda}
-                actions["c"] = actionPanelAction{label: "Capture…", kind: actionPanelActionNav, next: actionPanelCapture}
+                actions["c"] = actionPanelAction{
+                        label: "Capture…",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                return (&mm).openCaptureModal()
+                        },
+                }
+                actions["ctrl+t"] = actionPanelAction{
+                        label: "Capture templates…",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                (&mm).openCaptureTemplatesModal()
+                                return mm, nil
+                        },
+                }
                 actions["s"] = actionPanelAction{label: "Sync…", kind: actionPanelActionNav, next: actionPanelSync}
         }
 
@@ -1235,6 +1284,10 @@ func (m appModel) View() string {
                         lines[mid] = lipgloss.NewStyle().Width(w).Align(lipgloss.Center).Render("Resizing…")
                 }
                 return strings.Join(lines, "\n")
+        }
+
+        if m.modal == modalCapture && m.capture != nil {
+                return m.capture.View()
         }
 
         var body string
@@ -3819,6 +3872,18 @@ func selectListItemByID(l *list.Model, id string) {
 }
 
 func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
+        if m.modal == modalCapture {
+                if m.capture == nil {
+                        (&m).closeAllModals()
+                        return m, nil
+                }
+                mmAny, cmd := m.capture.Update(msg)
+                if mm, ok := mmAny.(captureModel); ok {
+                        *m.capture = mm
+                }
+                return m, cmd
+        }
+
         // Modal input takes over all keys.
         if m.modal != modalNone {
                 // Ctrl+G should always close any modal (Esc may mean "back" in some flows).

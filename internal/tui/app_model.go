@@ -90,10 +90,12 @@ type appModel struct {
         modal       modalKind
         modalForID  string
         modalForKey string
-        archiveFor  archiveTarget
-        input       textinput.Model
-        textarea    textarea.Model
-        textFocus   textModalFocus
+        // capture holds the embedded capture model when modal == modalCapture.
+        capture    *captureModel
+        archiveFor archiveTarget
+        input      textinput.Model
+        textarea   textarea.Model
+        textFocus  textModalFocus
         // Date modal inputs (due/schedule).
         yearInput    textinput.Model
         monthInput   textinput.Model

@@ -184,18 +184,15 @@ func TestActionPanel_GlobalKeys_OpenPanels(t *testing.T) {
                 t.Fatalf("expected agenda panel, got %v", got)
         }
 
-        // Global c opens Capture.
+        // Global c opens Capture modal.
         mAny, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
         m4 := mAny.(appModel)
-        if m4.modal != modalActionPanel {
-                t.Fatalf("expected modalActionPanel, got %v", m4.modal)
-        }
-        if got := m4.curActionPanelKind(); got != actionPanelCapture {
-                t.Fatalf("expected capture panel, got %v", got)
+        if m4.modal != modalCapture {
+                t.Fatalf("expected modalCapture, got %v", m4.modal)
         }
 }
 
-func TestActionPanel_Capture_CtrlT_OpensCaptureTemplatesModal(t *testing.T) {
+func TestActionPanel_Context_CtrlT_OpensCaptureTemplatesModal(t *testing.T) {
         t.Setenv("CLARITY_CONFIG_DIR", t.TempDir())
 
         dir := t.TempDir()
@@ -212,14 +209,11 @@ func TestActionPanel_Capture_CtrlT_OpensCaptureTemplatesModal(t *testing.T) {
 
         m := newAppModel(dir, db)
 
-        // Global c opens Capture panel.
-        mAny, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+        // Action panel ctrl+t opens capture templates manager.
+        mAny, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
         m2 := mAny.(appModel)
         if m2.modal != modalActionPanel {
                 t.Fatalf("expected modalActionPanel, got %v", m2.modal)
-        }
-        if got := m2.curActionPanelKind(); got != actionPanelCapture {
-                t.Fatalf("expected capture panel, got %v", got)
         }
 
         // ctrl+t opens capture templates manager.
