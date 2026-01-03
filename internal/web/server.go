@@ -163,6 +163,8 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("GET /verify", s.handleVerifyGet)
         mux.HandleFunc("POST /logout", s.handleLogoutPost)
         mux.HandleFunc("GET /agenda", s.handleAgenda)
+        mux.HandleFunc("GET /capture/options", s.handleCaptureOptions)
+        mux.HandleFunc("POST /capture", s.handleCaptureCreate)
         mux.HandleFunc("GET /sync", s.handleSync)
         mux.HandleFunc("POST /sync/init", s.handleSyncInit)
         mux.HandleFunc("POST /sync/remote", s.handleSyncRemote)
@@ -176,6 +178,7 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("POST /outlines/{outlineId}/items", s.handleOutlineItemCreate)
         mux.HandleFunc("POST /outlines/{outlineId}/apply", s.handleOutlineApply)
         mux.HandleFunc("GET /items/{itemId}", s.handleItem)
+        mux.HandleFunc("GET /items/{itemId}/preview", s.handleItemPreview)
         mux.HandleFunc("GET /items/{itemId}/meta", s.handleItemMeta)
         mux.HandleFunc("POST /items/{itemId}/edit", s.handleItemEdit)
         mux.HandleFunc("POST /items/{itemId}/comments", s.handleItemCommentAdd)
@@ -1145,6 +1148,160 @@ func (s *Server) handleAgenda(w http.ResponseWriter, r *http.Request) {
         // Preserve explicit actor resolution semantics used elsewhere.
         vm.ActorID = actorID
         s.writeHTMLTemplate(w, "agenda.html", vm)
+}
+
+type captureOutlineOption struct {
+        ID    string `json:"id"`
+        Label string `json:"label"`
+}
+
+func (s *Server) handleCaptureOptions(w http.ResponseWriter, r *http.Request) {
+        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        projects := map[string]string{}
+        for _, p := range db.Projects {
+                if p.Archived {
+                        continue
+                }
+                id := strings.TrimSpace(p.ID)
+                if id == "" {
+                        continue
+                }
+                projects[id] = strings.TrimSpace(p.Name)
+        }
+        opts := make([]captureOutlineOption, 0, len(db.Outlines))
+        for _, o := range db.Outlines {
+                if o.Archived {
+                        continue
+                }
+                id := strings.TrimSpace(o.ID)
+                if id == "" {
+                        continue
+                }
+                pname := projects[strings.TrimSpace(o.ProjectID)]
+                label := ""
+                if o.Name != nil {
+                        label = strings.TrimSpace(*o.Name)
+                }
+                if pname != "" {
+                        label = pname + " / " + label
+                }
+                if strings.TrimSpace(label) == "" {
+                        label = id
+                }
+                opts = append(opts, captureOutlineOption{ID: id, Label: label})
+        }
+        sort.Slice(opts, func(i, j int) bool {
+                if opts[i].Label != opts[j].Label {
+                        return opts[i].Label < opts[j].Label
+                }
+                return opts[i].ID < opts[j].ID
+        })
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        _ = json.NewEncoder(w).Encode(map[string]any{
+                "outlines": opts,
+        })
+}
+
+type captureCreateReq struct {
+        OutlineID   string `json:"outlineId"`
+        Title       string `json:"title"`
+        Description string `json:"description,omitempty"`
+}
+
+func (s *Server) handleCaptureCreate(w http.ResponseWriter, r *http.Request) {
+        if s.cfg.ReadOnly {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        if actorID == "" {
+                http.Error(w, "missing actor (start server with --actor, set currentActorId, or /login in dev auth mode)", http.StatusUnauthorized)
+                return
+        }
+
+        var req captureCreateReq
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+                http.Error(w, "invalid json", http.StatusBadRequest)
+                return
+        }
+        outlineID := strings.TrimSpace(req.OutlineID)
+        title := strings.TrimSpace(req.Title)
+        description := req.Description
+        if outlineID == "" || title == "" {
+                http.Error(w, "missing outlineId or title", http.StatusBadRequest)
+                return
+        }
+
+        st := store.Store{Dir: s.cfg.Dir}
+        db, err := st.Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if _, ok := db.FindActor(actorID); !ok {
+                http.Error(w, "unknown actor", http.StatusForbidden)
+                return
+        }
+        o, ok := db.FindOutline(outlineID)
+        if !ok || o == nil || o.Archived {
+                http.NotFound(w, r)
+                return
+        }
+
+        now := time.Now().UTC()
+        itemID := st.NextID(db, "item")
+
+        statusID := "todo"
+        if len(o.StatusDefs) > 0 && strings.TrimSpace(o.StatusDefs[0].ID) != "" {
+                statusID = strings.TrimSpace(o.StatusDefs[0].ID)
+        }
+
+        rank := nextAppendRank(db, outlineID, nil)
+        it := model.Item{
+                ID:           itemID,
+                ProjectID:    o.ProjectID,
+                OutlineID:    o.ID,
+                ParentID:     nil,
+                Rank:         rank,
+                Title:        title,
+                Description:  description,
+                StatusID:     statusID,
+                Priority:     false,
+                OnHold:       false,
+                Archived:     false,
+                OwnerActorID: actorID,
+                CreatedBy:    actorID,
+                CreatedAt:    now,
+                UpdatedAt:    now,
+        }
+        db.Items = append(db.Items, it)
+        if err := st.AppendEvent(actorID, "item.create", it.ID, it); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if err := st.Save(db); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if s.autoCommit != nil {
+                actorLabel := strings.TrimSpace(actorID)
+                if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                        actorLabel = strings.TrimSpace(a.Name)
+                }
+                s.autoCommit.Notify(actorLabel)
+        }
+
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        _ = json.NewEncoder(w).Encode(map[string]any{
+                "id":        it.ID,
+                "outlineId": it.OutlineID,
+                "href":      "/items/" + it.ID,
+        })
 }
 
 type syncVM struct {
@@ -3423,6 +3580,93 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 vm.ActorOptions = opts
         }
         s.writeHTMLTemplate(w, "item.html", vm)
+}
+
+func (s *Server) handleItemPreview(w http.ResponseWriter, r *http.Request) {
+        itemID := strings.TrimSpace(r.PathValue("itemId"))
+        if itemID == "" {
+                http.Error(w, "missing item id", http.StatusBadRequest)
+                return
+        }
+
+        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        it, ok := db.FindItem(itemID)
+        if !ok || it == nil || it.Archived {
+                http.NotFound(w, r)
+                return
+        }
+
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        canEdit := actorID != "" && perm.CanEditItem(db, actorID, it)
+        statusDefs := []model.OutlineStatusDef{}
+        statusOptionsJSON := template.HTMLAttr("[]")
+        if o, ok := db.FindOutline(it.OutlineID); ok && o != nil {
+                statusDefs = o.StatusDefs
+                statusOptionsJSON = outlineStatusOptionsJSON(*o)
+        }
+
+        assignedID := ""
+        if it.AssignedActorID != nil {
+                assignedID = strings.TrimSpace(*it.AssignedActorID)
+        }
+        tagsInput := ""
+        if len(it.Tags) > 0 {
+                parts := make([]string, 0, len(it.Tags))
+                for _, t := range it.Tags {
+                        t = strings.TrimSpace(t)
+                        if t == "" {
+                                continue
+                        }
+                        parts = append(parts, "#"+t)
+                }
+                tagsInput = strings.Join(parts, " ")
+        }
+        dueDate := ""
+        dueTime := ""
+        if it.Due != nil {
+                dueDate = strings.TrimSpace(it.Due.Date)
+                if it.Due.Time != nil {
+                        dueTime = strings.TrimSpace(*it.Due.Time)
+                }
+        }
+        schDate := ""
+        schTime := ""
+        if it.Schedule != nil {
+                schDate = strings.TrimSpace(it.Schedule.Date)
+                if it.Schedule.Time != nil {
+                        schTime = strings.TrimSpace(*it.Schedule.Time)
+                }
+        }
+
+        vm := itemVM{
+                baseVM:            s.baseVMForRequest(r, ""),
+                Item:              *it,
+                AssignedID:        assignedID,
+                ActorOptions:      nil,
+                Comments:          nil,
+                ReplyTo:           "",
+                Worklog:           nil,
+                TagsInput:         tagsInput,
+                DueDate:           dueDate,
+                DueTime:           dueTime,
+                SchDate:           schDate,
+                SchTime:           schTime,
+                StatusOptionsJSON: statusOptionsJSON,
+                ActorOptionsJSON:  actorOptionsJSON(db),
+                CanEdit:           canEdit,
+                StatusDefs:        statusDefs,
+        }
+        vm.ActorID = actorID
+
+        w.Header().Set("Content-Type", "text/html; charset=utf-8")
+        if err := s.tmpl.ExecuteTemplate(w, "item_preview.html", vm); err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
 }
 
 func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {

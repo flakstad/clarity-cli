@@ -38,9 +38,13 @@ All key handling is routed through a single `document.addEventListener('keydown'
 
 - `?` toggle help overlay
 - `x` action menu (command palette)
-- `v` view switcher (Home / Projects / Agenda / Sync)
+- `"` capture
 - `g` then:
   - `h` Home
   - `p` Projects
   - `a` Agenda
   - `s` Sync
+
+## Outline view (native)
+
+- `v` cycle view mode: `list` → `list+preview` → `columns`

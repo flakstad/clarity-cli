@@ -309,3 +309,63 @@ ul {
   margin-left: 0;
   padding-left: 0.75rem;
 }
+
+.outline-shell {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+#outline-native[data-view-mode="list+preview"] .outline-shell {
+  grid-template-columns: 1fr minmax(280px, 420px);
+  align-items: start;
+}
+
+.outline-preview {
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  padding: 12px;
+}
+
+.outline-preview-card pre {
+  font-family: var(--mono);
+  font-size: 0.95em;
+}
+
+.outline-columns {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(220px, 320px);
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.outline-column {
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  padding: 10px;
+}
+
+.outline-column-header {
+  font-weight: 650;
+  margin-bottom: 8px;
+}
+
+.outline-card {
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card-bg), var(--bg) 12%);
+  padding: 8px 10px;
+  border-radius: 8px;
+  margin: 8px 0;
+  cursor: pointer;
+  outline: none;
+}
+
+.outline-card:hover {
+  background: var(--clarity-outline-hover);
+}
+
+.outline-card:focus {
+  background: var(--clarity-outline-focus);
+}

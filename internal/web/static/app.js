@@ -63,13 +63,6 @@
   const outlinePendingByEl = new WeakMap();
   const outlineMoveBufferByEl = new WeakMap();
 
-  const viewPicker = {
-    open: false,
-    options: [],
-    idx: 0,
-    restoreEl: null,
-  };
-
   const actionPalette = {
     open: false,
     options: [],
@@ -165,6 +158,59 @@
     if (li && typeof li.focus === 'function') {
       li.focus();
     }
+  };
+
+  const initOutlineViewMode = () => {
+    const attach = (rootEl) => {
+      if (!rootEl) return;
+      const outlineId = (rootEl.dataset.outlineId || '').trim();
+      const mode = outlineViewNormalize(outlineViewGetStored(outlineId));
+      outlineViewApply(rootEl, mode);
+
+      rootEl.addEventListener(
+        'focusin',
+        (ev) => {
+          const v = outlineViewNormalize(rootEl.dataset.viewMode || 'list');
+          if (v !== 'list+preview') return;
+          const t = ev && ev.target;
+          const row = t && typeof t.closest === 'function' ? t.closest('[data-outline-row]') : null;
+          const id = row && row.dataset ? String(row.dataset.id || '').trim() : '';
+          if (!id) return;
+          refreshOutlinePreview(rootEl, id);
+        },
+        true
+      );
+
+      // Initial preview render (if needed).
+      if (outlineViewNormalize(rootEl.dataset.viewMode || '') === 'list+preview') {
+        let id = '';
+        try { id = sessionStorage.getItem(outlineFocusKey(rootEl)) || ''; } catch (_) {}
+        id = String(id || '').trim();
+        if (id) refreshOutlinePreview(rootEl, id);
+      }
+
+      // Initial columns render (if needed) — render once per outline DOM root.
+      if (outlineViewNormalize(rootEl.dataset.viewMode || '') === 'columns') {
+        const pane = document.getElementById('outline-columns-pane');
+        if (pane && pane.childElementCount === 0) renderOutlineColumns(rootEl);
+      }
+    };
+
+    let current = nativeOutlineRoot();
+    if (!current) return;
+    attach(current);
+
+    // Re-attach only when the outline root element itself is replaced (e.g. via SSE morph).
+    const mo = new MutationObserver(() => {
+      const fresh = nativeOutlineRoot();
+      if (!fresh) return;
+      if (fresh === current) return;
+      current = fresh;
+      attach(fresh);
+    });
+    try {
+      mo.observe(document.body, { childList: true, subtree: true });
+    } catch (_) {}
   };
 
   const nativeOutlineRoot = () => document.getElementById('outline-native');
@@ -707,116 +753,158 @@
     restoreFocusId: '',
   };
 
-  const ensureViewModal = () => {
-    let el = document.getElementById('native-view-modal');
-    if (el) return el;
-    el = document.createElement('div');
-    el.id = 'native-view-modal';
-    el.style.position = 'fixed';
-    el.style.left = '0';
-    el.style.top = '0';
-    el.style.right = '0';
-    el.style.bottom = '0';
-    el.style.background = 'rgba(0,0,0,.25)';
-    el.style.display = 'none';
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'center';
-    el.style.zIndex = '9998';
-    el.innerHTML = `
-      <div style="max-width:520px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
-          <strong>Views</strong>
-          <span class="dim" style="font-size:12px;">Esc to cancel</span>
-        </div>
-        <div id="native-view-list" style="margin-top:10px;max-height:46vh;overflow:auto;"></div>
-        <div class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Enter to select</div>
-      </div>
-    `;
-    document.body.appendChild(el);
-    el.addEventListener('click', (ev) => {
-      if (ev.target === el) closeViewPicker();
-    });
-    return el;
+  const outlineViewKey = (outlineId) => {
+    const id = (outlineId || '').trim();
+    if (!id) return 'clarity:outlineViewMode';
+    return 'clarity:outlineViewMode:' + id;
   };
 
-  const viewOptions = () => {
-    const opts = [
-      { id: 'home', label: 'Home', href: '/' },
-      { id: 'projects', label: 'Projects', href: '/projects' },
-      { id: 'agenda', label: 'Agenda', href: '/agenda' },
-      { id: 'sync', label: 'Sync', href: '/sync' },
-    ];
-    return opts;
+  const outlineViewNormalize = (mode) => {
+    mode = String(mode || '').trim();
+    if (mode === 'list' || mode === 'list+preview' || mode === 'columns') return mode;
+    if (mode === 'preview' || mode === 'split' || mode === 'list-preview') return 'list+preview';
+    return 'list';
   };
 
-  const renderViewPicker = () => {
-    const modal = ensureViewModal();
-    const list = modal.querySelector('#native-view-list');
-    if (!list) return;
-    const opts = viewPicker.options || [];
-    list.innerHTML = '';
-    const ul = document.createElement('ul');
-    ul.style.listStyle = 'none';
-    ul.style.padding = '0';
-    ul.style.margin = '0';
-    opts.forEach((o, i) => {
-      const li = document.createElement('li');
-      li.style.padding = '6px 8px';
-      li.style.borderRadius = '8px';
-      li.style.cursor = 'pointer';
-      if (i === viewPicker.idx) {
-        li.style.background = 'color-mix(in oklab, Canvas, CanvasText 10%)';
-      }
-      li.textContent = (o && o.label) ? String(o.label) : '';
-      li.addEventListener('click', () => {
-        viewPicker.idx = i;
-        pickSelectedView();
-      });
-      ul.appendChild(li);
-    });
-    list.appendChild(ul);
+  const outlineViewGetStored = (outlineId) => {
+    let v = '';
+    try {
+      v = sessionStorage.getItem(outlineViewKey(outlineId)) || '';
+    } catch (_) {}
+    return outlineViewNormalize(v);
   };
 
-  const closeViewPicker = () => {
-    viewPicker.open = false;
-    viewPicker.options = [];
-    viewPicker.idx = 0;
-    const restore = viewPicker.restoreEl;
-    viewPicker.restoreEl = null;
-    const modal = document.getElementById('native-view-modal');
-    if (modal) modal.style.display = 'none';
-    setTimeout(() => {
+  const outlineViewSetStored = (outlineId, mode) => {
+    const v = outlineViewNormalize(mode);
+    try {
+      sessionStorage.setItem(outlineViewKey(outlineId), v);
+    } catch (_) {}
+    return v;
+  };
+
+  const outlineViewApply = (root, mode) => {
+    if (!root) return;
+    const outlineId = (root.dataset.outlineId || '').trim();
+    const v = outlineViewNormalize(mode);
+    root.dataset.viewMode = v;
+
+    const listPane = document.getElementById('outline-list-pane');
+    const previewPane = document.getElementById('outline-preview-pane');
+    const columnsPane = document.getElementById('outline-columns-pane');
+    if (listPane) listPane.style.display = (v === 'columns') ? 'none' : 'block';
+    if (previewPane) previewPane.style.display = (v === 'list+preview') ? 'block' : 'none';
+    if (columnsPane) columnsPane.style.display = (v === 'columns') ? 'block' : 'none';
+
+    if (v === 'list+preview') {
+      const id = (() => {
+        try { return sessionStorage.getItem(outlineFocusKey(root)) || ''; } catch (_) { return ''; }
+      })();
+      const itemId = String(id || '').trim();
+      if (itemId) refreshOutlinePreview(root, itemId);
+    }
+    if (v === 'columns') {
+      renderOutlineColumns(root);
+    }
+
+    if (outlineId) outlineViewSetStored(outlineId, v);
+    setOutlineStatus('View: ' + v);
+    setTimeout(() => setOutlineStatus(''), 1200);
+  };
+
+  const cycleOutlineViewMode = (root) => {
+    if (!root) return false;
+    const outlineId = (root.dataset.outlineId || '').trim();
+    const cur = outlineViewNormalize(root.dataset.viewMode || outlineViewGetStored(outlineId));
+    let next = 'list';
+    if (cur === 'list') next = 'list+preview';
+    else if (cur === 'list+preview') next = 'columns';
+    else next = 'list';
+    outlineViewApply(root, next);
+    return true;
+  };
+
+  let previewTimer = null;
+  let previewFor = '';
+  const refreshOutlinePreview = (root, itemId) => {
+    if (!root) return;
+    const pane = document.getElementById('outline-preview-pane');
+    if (!pane) return;
+    const id = (itemId || '').trim();
+    if (!id) return;
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = setTimeout(async () => {
+      if (previewFor === id && pane.dataset.previewLoaded === 'true') return;
+      previewFor = id;
+      pane.dataset.previewLoaded = 'false';
       try {
-        if (restore && typeof restore.focus === 'function') restore.focus();
-      } catch (_) {}
-    }, 0);
+        const res = await fetch('/items/' + encodeURIComponent(id) + '/preview', {
+          method: 'GET',
+          headers: { 'Accept': 'text/html' },
+        });
+        if (!res.ok) throw new Error(await res.text());
+        pane.innerHTML = await res.text();
+        pane.dataset.previewLoaded = 'true';
+      } catch (err) {
+        pane.innerHTML = '<div class="dim">Preview error</div>';
+      }
+    }, 120);
   };
 
-  const pickSelectedView = () => {
-    if (!viewPicker.open) return;
-    const sel = (viewPicker.options || [])[viewPicker.idx];
-    if (!sel || !sel.href) return;
-    const href = String(sel.href || '');
-    closeViewPicker();
-    if (href) window.location.href = href;
-  };
+  const renderOutlineColumns = (root) => {
+    const pane = document.getElementById('outline-columns-pane');
+    if (!root || !pane) return;
+    const statusOpts = parseStatusOptions(root);
+    const order = [];
+    const labelByID = new Map();
+    for (const o of statusOpts) {
+      const id = String(o && o.id || '').trim();
+      if (!id) continue;
+      order.push(id);
+      labelByID.set(id, String(o.label || o.id || id));
+    }
+    const rows = Array.from(root.querySelectorAll('[data-outline-row]'));
+    const groups = new Map();
+    for (const id of order) groups.set(id, []);
+    for (const row of rows) {
+      if (!row || !row.dataset) continue;
+      const itemId = String(row.dataset.id || '').trim();
+      if (!itemId) continue;
+      const li = nativeLiFromRow(row);
+      const parentID = parentIdForLi(li);
+      if (parentID) continue; // columns: top-level only (v1)
+      const statusID = String(row.dataset.status || '').trim();
+      if (!groups.has(statusID)) groups.set(statusID, []);
+      groups.get(statusID).push({ id: itemId, title: row.querySelector('.outline-title')?.textContent || '' });
+    }
 
-  const openViewPicker = () => {
-    if (viewPicker.open) return;
-    viewPicker.open = true;
-    viewPicker.options = viewOptions();
-    viewPicker.restoreEl = document.activeElement;
-    const path = (window.location && window.location.pathname) ? window.location.pathname : '';
-    let idx = 0;
-    if (path.startsWith('/projects')) idx = viewPicker.options.findIndex((o) => o.id === 'projects');
-    else if (path.startsWith('/agenda')) idx = viewPicker.options.findIndex((o) => o.id === 'agenda');
-    else if (path.startsWith('/sync')) idx = viewPicker.options.findIndex((o) => o.id === 'sync');
-    else idx = viewPicker.options.findIndex((o) => o.id === 'home');
-    if (idx < 0) idx = 0;
-    viewPicker.idx = idx;
-    const modal = ensureViewModal();
-    modal.style.display = 'flex';
-    renderViewPicker();
+    const wrap = document.createElement('div');
+    wrap.className = 'outline-columns';
+    for (const statusID of groups.keys()) {
+      const col = document.createElement('div');
+      col.className = 'outline-column';
+      const head = document.createElement('div');
+      head.className = 'outline-column-header';
+      head.textContent = labelByID.get(statusID) || statusID || '(none)';
+      col.appendChild(head);
+      const list = document.createElement('div');
+      list.className = 'outline-column-list';
+      const items = groups.get(statusID) || [];
+      for (const it of items) {
+        const card = document.createElement('div');
+        card.className = 'outline-card';
+        card.tabIndex = 0;
+        card.dataset.kbItem = '';
+        card.dataset.focusId = it.id;
+        card.dataset.openHref = '/items/' + it.id;
+        card.innerHTML = '<span class="dim">' + escapeHTML(it.id) + '</span> ' + escapeHTML(it.title || '');
+        card.addEventListener('click', () => { window.location.href = '/items/' + encodeURIComponent(it.id); });
+        list.appendChild(card);
+      }
+      col.appendChild(list);
+      wrap.appendChild(col);
+    }
+    pane.innerHTML = '';
+    pane.appendChild(wrap);
   };
 
   const ensureActionModal = () => {
@@ -897,7 +985,11 @@
 
   const actionsForContext = () => {
     const opts = [];
-    opts.push({ label: 'Views… (v)', run: () => openViewPicker() });
+    const outlineRoot = nativeOutlineRoot();
+    if (outlineRoot) {
+      opts.push({ label: 'Outline: cycle view (v)', run: () => cycleOutlineViewMode(outlineRoot) });
+    }
+    opts.push({ label: 'Capture… (")', run: () => openCaptureModal() });
     opts.push({ label: 'Toggle theme', run: () => themeApply(themeCurrent() === 'default' ? 'alternative' : 'default') });
     opts.push({ label: 'Help (?)', run: () => toggleHelp() });
     opts.push({ label: 'Go: Home', run: () => { window.location.href = '/'; } });
@@ -905,6 +997,205 @@
     opts.push({ label: 'Go: Agenda', run: () => { window.location.href = '/agenda'; } });
     opts.push({ label: 'Go: Sync', run: () => { window.location.href = '/sync'; } });
     return opts;
+  };
+
+  const captureState = {
+    open: false,
+    restoreEl: null,
+    outlines: [],
+  };
+
+  const ensureCaptureModal = () => {
+    let el = document.getElementById('native-capture-modal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'native-capture-modal';
+    el.style.position = 'fixed';
+    el.style.left = '0';
+    el.style.top = '0';
+    el.style.right = '0';
+    el.style.bottom = '0';
+    el.style.background = 'rgba(0,0,0,.25)';
+    el.style.display = 'none';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+    el.style.zIndex = '9998';
+    el.innerHTML = `
+      <div style="max-width:720px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+          <strong>Capture</strong>
+          <span class="dim" style="font-size:12px;">Esc to cancel</span>
+        </div>
+        <div style="margin-top:10px;">
+          <label class="dim" for="native-capture-title">Title</label>
+          <input id="native-capture-title" type="text" placeholder="What do you want to capture?" />
+        </div>
+        <div style="margin-top:10px;">
+          <label class="dim" for="native-capture-outline">Destination</label>
+          <select id="native-capture-outline"></select>
+        </div>
+        <div id="native-capture-err" class="dim" style="margin-top:10px;display:none;"></div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;align-items:center;">
+          <button type="button" id="native-capture-cancel">Cancel</button>
+          <button type="button" id="native-capture-ok">Capture</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(el);
+    el.addEventListener('click', (ev) => {
+      if (ev.target === el) closeCaptureModal();
+    });
+    el.querySelector('#native-capture-cancel')?.addEventListener('click', () => closeCaptureModal());
+    el.querySelector('#native-capture-ok')?.addEventListener('click', () => submitCapture());
+    return el;
+  };
+
+  const closeCaptureModal = () => {
+    captureState.open = false;
+    const restore = captureState.restoreEl;
+    captureState.restoreEl = null;
+    const modal = document.getElementById('native-capture-modal');
+    if (modal) modal.style.display = 'none';
+    setTimeout(() => {
+      try { restore?.focus?.(); } catch (_) {}
+    }, 0);
+  };
+
+  const setCaptureError = (msg) => {
+    const el = document.getElementById('native-capture-err');
+    if (!el) return;
+    const m = String(msg || '').trim();
+    if (!m) {
+      el.style.display = 'none';
+      el.textContent = '';
+      return;
+    }
+    el.style.display = 'block';
+    el.textContent = m;
+  };
+
+  const loadCaptureOptions = async () => {
+    const res = await fetch('/capture/options', { method: 'GET', headers: { 'Accept': 'application/json' } });
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  };
+
+  const openCaptureModal = () => {
+    if (captureState.open) return;
+    captureState.open = true;
+    captureState.restoreEl = document.activeElement;
+    const modal = ensureCaptureModal();
+    const title = modal.querySelector('#native-capture-title');
+    const sel = modal.querySelector('#native-capture-outline');
+    title.value = '';
+    sel.innerHTML = '<option value="" disabled selected>Loading…</option>';
+    setCaptureError('');
+    modal.style.display = 'flex';
+    setTimeout(() => title.focus(), 0);
+
+    loadCaptureOptions().then((data) => {
+      const outlines = Array.isArray(data?.outlines) ? data.outlines : [];
+      captureState.outlines = outlines;
+      sel.innerHTML = '';
+      outlines.forEach((o) => {
+        const id = String(o?.id || '').trim();
+        if (!id) return;
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = String(o?.label || id);
+        sel.appendChild(opt);
+      });
+      const curOutline = (nativeOutlineRoot()?.dataset?.outlineId || '').trim();
+      if (curOutline) sel.value = curOutline;
+      if (!sel.value && outlines.length) sel.value = String(outlines[0]?.id || '');
+    }).catch((err) => {
+      setCaptureError('Error: ' + (err && err.message ? err.message : 'failed to load options'));
+      sel.innerHTML = '<option value="" disabled selected>(failed to load)</option>';
+    });
+  };
+
+  const appendCapturedItemIfVisible = (outlineId, itemId, title) => {
+    const root = nativeOutlineRoot();
+    if (!root) return false;
+    const cur = (root.dataset.outlineId || '').trim();
+    if (!cur || cur !== String(outlineId || '').trim()) return false;
+
+    const rows = nativeRows();
+    const refRow = rows.length ? rows[rows.length - 1] : null;
+    const li = document.createElement('li');
+    li.id = 'outline-node-' + itemId;
+    li.dataset.nodeId = itemId;
+
+    const row = document.createElement('div');
+    row.className = 'outline-row';
+    row.tabIndex = 0;
+    row.id = 'outline-row-' + itemId;
+    row.dataset.outlineRow = '';
+    row.dataset.kbItem = '';
+    row.dataset.focusId = itemId;
+    row.dataset.id = itemId;
+    const statusOpts = parseStatusOptions(root);
+    const first = statusOpts && statusOpts.length ? statusOpts[0] : { id: 'todo', label: 'TODO', isEndState: false };
+    row.dataset.status = (first.id || '').trim();
+    row.dataset.end = first.isEndState ? 'true' : 'false';
+    row.dataset.canEdit = 'true';
+    row.dataset.priority = 'false';
+    row.dataset.onHold = 'false';
+    row.dataset.dueDate = '';
+    row.dataset.dueTime = '';
+    row.dataset.schDate = '';
+    row.dataset.schTime = '';
+    row.dataset.openHref = '/items/' + itemId;
+    row.title = itemId;
+
+    row.innerHTML = `
+      <span class="outline-caret outline-chevron" aria-hidden="true"></span>
+      <span class="outline-status outline-label">${escapeHTML(first.label || first.id || '')}</span>
+      <span class="outline-title outline-text">${escapeHTML(title || '')}</span>
+      <span class="outline-right"></span>
+    `;
+    li.appendChild(row);
+    const ul = root.querySelector('ul.outline-list');
+    if (!ul) return false;
+    ul.appendChild(li);
+    rememberOutlineFocus(root, itemId);
+    row.focus?.();
+    if (root.dataset.viewMode === 'list+preview') refreshOutlinePreview(root, itemId);
+    if (root.dataset.viewMode === 'columns') renderOutlineColumns(root);
+    return true;
+  };
+
+  const submitCapture = async () => {
+    const modal = ensureCaptureModal();
+    const titleEl = modal.querySelector('#native-capture-title');
+    const selEl = modal.querySelector('#native-capture-outline');
+    const title = String(titleEl?.value || '').trim();
+    const outlineId = String(selEl?.value || '').trim();
+    if (!title || !outlineId) {
+      setCaptureError('Title and destination are required');
+      return;
+    }
+    setCaptureError('');
+    try {
+      const res = await fetch('/capture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ outlineId, title }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const id = String(data?.id || '').trim();
+      const oid = String(data?.outlineId || outlineId).trim();
+      closeCaptureModal();
+      if (id) {
+        if (!appendCapturedItemIfVisible(oid, id, title)) {
+          // If we're not on that outline, navigate there (SSE will converge as well).
+          window.location.href = '/outlines/' + encodeURIComponent(oid);
+        }
+      }
+    } catch (err) {
+      setCaptureError('Error: ' + (err && err.message ? err.message : 'capture failed'));
+    }
   };
 
   const runSelectedAction = () => {
@@ -3130,6 +3421,12 @@
   };
 
   const handleGlobalListKeydown = (ev, key) => {
+    if (key === '/' && window.location && window.location.pathname === '/agenda') {
+      ev.preventDefault();
+      const f = document.getElementById('agenda-filter');
+      f?.focus?.();
+      return true;
+    }
     if (key === 'j') {
       ev.preventDefault();
       moveFocus(+1);
@@ -3146,6 +3443,33 @@
       return true;
     }
     return false;
+  };
+
+  const initAgendaFilter = () => {
+    const input = document.getElementById('agenda-filter');
+    if (!input) return;
+    const key = 'clarity:agendaFilter';
+    try {
+      const prev = sessionStorage.getItem(key) || '';
+      if (prev) input.value = prev;
+    } catch (_) {}
+
+    const apply = () => {
+      const q = String(input.value || '').trim().toLowerCase();
+      try { sessionStorage.setItem(key, q); } catch (_) {}
+      const rows = Array.from(document.querySelectorAll('[data-agenda-row]'));
+      for (const a of rows) {
+        const title = String(a.dataset.title || '').toLowerCase();
+        const status = String(a.dataset.status || '').toLowerCase();
+        const id = String(a.dataset.focusId || '').toLowerCase();
+        const ok = !q || title.includes(q) || status.includes(q) || id.includes(q);
+        const li = a.closest('li');
+        if (li) li.style.display = ok ? '' : 'none';
+      }
+    };
+
+    input.addEventListener('input', apply);
+    apply();
   };
 
   const handleItemPageKeydown = (ev, key) => {
@@ -3240,36 +3564,6 @@
     return false;
   };
 
-  const handleViewPickerKeydown = (ev) => {
-    if (!viewPicker.open) return false;
-    const key = (ev.key || '').toLowerCase();
-    if (key === 'escape') {
-      ev.preventDefault();
-      closeViewPicker();
-      return true;
-    }
-    if (key === 'enter') {
-      ev.preventDefault();
-      pickSelectedView();
-      return true;
-    }
-    if (key === 'arrowdown' || key === 'down' || key === 'j' || (ev.ctrlKey && key === 'n')) {
-      ev.preventDefault();
-      const n = viewPicker.options.length || 0;
-      if (n > 0) viewPicker.idx = (viewPicker.idx + 1) % n;
-      renderViewPicker();
-      return true;
-    }
-    if (key === 'arrowup' || key === 'up' || key === 'k' || (ev.ctrlKey && key === 'p')) {
-      ev.preventDefault();
-      const n = viewPicker.options.length || 0;
-      if (n > 0) viewPicker.idx = (viewPicker.idx - 1 + n) % n;
-      renderViewPicker();
-      return true;
-    }
-    return true;
-  };
-
   const handleActionPaletteKeydown = (ev) => {
     if (!actionPalette.open) return false;
     const key = (ev.key || '').toLowerCase();
@@ -3300,25 +3594,48 @@
     return true;
   };
 
+  const handleCaptureKeydown = (ev) => {
+    if (!captureState.open) return false;
+    const key = String(ev.key || '').toLowerCase();
+    if (key === 'escape') {
+      ev.preventDefault();
+      closeCaptureModal();
+      return true;
+    }
+    if (key === 'enter') {
+      ev.preventDefault();
+      submitCapture();
+      return true;
+    }
+    return true;
+  };
+
   const handleKeydown = (ev) => {
     if (ev.defaultPrevented) return;
     if (ev.metaKey) return;
+    if (handleCaptureKeydown(ev)) return;
     if (handleTagsPickerKeydown(ev)) return;
     if (handleMoveOutlinePickerKeydown(ev)) return;
     if (handleActionPaletteKeydown(ev)) return;
-    if (handleViewPickerKeydown(ev)) return;
     if (handlePromptKeydown(ev)) return;
     if (handleAssigneePickerKeydown(ev)) return;
     if (handleStatusPickerKeydown(ev)) return;
     if (isTypingTarget(ev.target)) return;
 
-    const key = (ev.key || '').toLowerCase();
+    const rawKey = String(ev.key || '');
+    const key = rawKey.toLowerCase();
     const now = Date.now();
     if (state.awaiting && now-state.awaitingAt > 1000) clearAwaiting();
 
     if (key === '?') {
       ev.preventDefault();
       toggleHelp();
+      return;
+    }
+
+    if (rawKey === '"') {
+      ev.preventDefault();
+      openCaptureModal();
       return;
     }
 
@@ -3329,8 +3646,10 @@
     }
 
     if (key === 'v') {
+      const root = nativeOutlineRoot();
+      if (!root) return;
       ev.preventDefault();
-      openViewPicker();
+      cycleOutlineViewMode(root);
       return;
     }
 
@@ -3365,5 +3684,7 @@
   };
 
   initTheme();
+  initOutlineViewMode();
+  initAgendaFilter();
   document.addEventListener('keydown', handleKeydown, { capture: true });
 })();

@@ -8,82 +8,74 @@
     data-can-edit="{{if .CanEdit}}true{{else}}false{{end}}"
     data-status-options='{{.StatusOptionsJSON}}'
     data-actor-options='{{.ActorOptionsJSON}}'
-    style="display:none;"
   ></div>
+
+  <!-- Hidden form controls used by the keyboard-first JS flows (status/tags/assignee/dates/etc). -->
+  <div style="display:none;">
+    <input id="title" value="{{.Item.Title}}">
+    <select id="status">
+      <option value="" {{if eq .Item.StatusID ""}}selected{{end}}>(none)</option>
+      {{range .StatusDefs}}
+        <option value="{{.ID}}" {{if eq $.Item.StatusID .ID}}selected{{end}}>{{if .Label}}{{.Label}}{{else}}{{.ID}}{{end}}</option>
+      {{end}}
+    </select>
+    <select id="assignedActorId">
+      <option value="" {{if eq .AssignedID ""}}selected{{end}}>(unassigned)</option>
+      {{range .ActorOptions}}
+        <option value="{{.ID}}" {{if eq $.AssignedID .ID}}selected{{end}}>@{{.Label}}</option>
+      {{end}}
+    </select>
+    <input id="tags" value="{{.TagsInput}}">
+    <textarea id="description">{{.Item.Description}}</textarea>
+    <input type="checkbox" name="priority" {{if .Item.Priority}}checked{{end}}>
+    <input type="checkbox" name="onHold" {{if .Item.OnHold}}checked{{end}}>
+    <input type="date" name="dueDate" value="{{.DueDate}}">
+    <input type="time" name="dueTime" value="{{.DueTime}}">
+    <input type="date" name="schDate" value="{{.SchDate}}">
+    <input type="time" name="schTime" value="{{.SchTime}}">
+  </div>
+
   <h1>{{.Item.Title}}</h1>
 
   <div class="card">
-    <div><strong>Item</strong>: <code>{{.Item.ID}}</code> <span class="dim">({{.Item.StatusID}})</span></div>
-    <div><strong>Outline</strong>: <code>{{.Item.OutlineID}}</code></div>
-    <div><strong>Owner</strong>: <code>{{.Item.OwnerActorID}}</code></div>
-    {{if .Item.AssignedActorID}}<div><strong>Assignee</strong>: <code>{{.Item.AssignedActorID}}</code></div>{{end}}
-    {{if .Item.ParentID}}<div><strong>Parent</strong>: <code>{{.Item.ParentID}}</code></div>{{end}}
-    {{if .Item.Priority}}<div><strong>Priority</strong>: <span class="dim">true</span></div>{{end}}
-    {{if .Item.OnHold}}<div><strong>On hold</strong>: <span class="dim">true</span></div>{{end}}
-    {{if .Item.Due}}<div><strong>Due</strong>: <code>{{.DueDate}}{{if .DueTime}} {{.DueTime}}{{end}}</code></div>{{end}}
-    {{if .Item.Schedule}}<div><strong>Schedule</strong>: <code>{{.SchDate}}{{if .SchTime}} {{.SchTime}}{{end}}</code></div>{{end}}
-    {{if .Item.Tags}}<div><strong>Tags</strong>: <span class="dim">{{range $i, $t := .Item.Tags}}{{if $i}} {{end}}#{{$t}}{{end}}</span></div>{{end}}
+    <div
+      class="outline-row {{if not .CanEdit}}outline-row--readonly{{end}}"
+      tabindex="0"
+      data-outline-row
+      data-id="{{.Item.ID}}"
+      data-status="{{.Item.StatusID}}"
+      data-end="false"
+      data-can-edit="{{if .CanEdit}}true{{else}}false{{end}}"
+      data-priority="{{if .Item.Priority}}true{{else}}false{{end}}"
+      data-on-hold="{{if .Item.OnHold}}true{{else}}false{{end}}"
+      data-due-date="{{.DueDate}}"
+      data-due-time="{{.DueTime}}"
+      data-sch-date="{{.SchDate}}"
+      data-sch-time="{{.SchTime}}"
+      title="{{.Item.ID}}"
+      style="padding: 8px 10px;"
+    >
+      <span class="outline-status outline-label">{{.Item.StatusID}}</span>
+      <span class="outline-title outline-text">{{.Item.Title}}</span>
+      <span class="outline-right">
+        {{if .Item.Priority}}<span class="outline-flag outline-flag--priority">P</span>{{end}}
+        {{if .Item.OnHold}}<span class="outline-flag outline-flag--hold">H</span>{{end}}
+        {{if .Item.Due}}<span class="outline-meta outline-meta--due outline-due dim">Due {{.DueDate}}{{if .DueTime}} {{.DueTime}}{{end}}</span>{{end}}
+        {{if .Item.Schedule}}<span class="outline-meta outline-meta--sch outline-schedule dim">Sch {{.SchDate}}{{if .SchTime}} {{.SchTime}}{{end}}</span>{{end}}
+        {{if .Item.AssignedActorID}}<span class="outline-assignee outline-assign dim">@{{.Item.AssignedActorID}}</span>{{end}}
+        {{if .Item.Tags}}<span class="outline-tags dim">{{range $i, $t := .Item.Tags}}{{if $i}} {{end}}#{{$t}}{{end}}</span>{{end}}
+      </span>
+    </div>
+    <div class="dim" style="margin-top: 10px;">
+      Item <code>{{.Item.ID}}</code> · Outline <code>{{.Item.OutlineID}}</code> · Owner <code>{{.Item.OwnerActorID}}</code>{{if .Item.ParentID}} · Parent <code>{{.Item.ParentID}}</code>{{end}}
+    </div>
   </div>
 
   {{if .SuccessMessage}}
-    <div class="card"><div><strong>OK</strong> — {{.SuccessMessage}}</div></div>
+    <div class="msg"><div><strong>OK</strong> — {{.SuccessMessage}}</div></div>
   {{end}}
   {{if .ErrorMessage}}
-    <div class="card"><div><strong>Error</strong> — {{.ErrorMessage}}</div></div>
-  {{end}}
-
-  {{if and (not .ReadOnly) .ActorID .CanEdit}}
-    <div class="card">
-      <div><strong>Edit</strong></div>
-      <form method="post" action="/items/{{.Item.ID}}/edit" style="margin-top: 12px;">
-        <div style="margin-top: 8px;">
-          <label for="title"><span class="dim">Title</span></label>
-          <div><input id="title" name="title" value="{{.Item.Title}}" style="width: 100%; max-width: 100%;"></div>
-        </div>
-        <div style="margin-top: 8px;">
-          <label for="status"><span class="dim">Status</span></label>
-          <div>
-            <select id="status" name="status">
-              <option value="" {{if eq .Item.StatusID ""}}selected{{end}}>(none)</option>
-              {{range .StatusDefs}}
-                <option value="{{.ID}}" {{if eq $.Item.StatusID .ID}}selected{{end}}>{{if .Label}}{{.Label}}{{else}}{{.ID}}{{end}}</option>
-              {{end}}
-            </select>
-          </div>
-        </div>
-        <div style="margin-top: 8px;">
-          <label for="assignedActorId"><span class="dim">Assignee</span></label>
-          <div>
-            <select id="assignedActorId" name="assignedActorId">
-              <option value="" {{if eq .AssignedID ""}}selected{{end}}>(unassigned)</option>
-              {{range .ActorOptions}}
-                <option value="{{.ID}}" {{if eq $.AssignedID .ID}}selected{{end}}>@{{.Label}}</option>
-              {{end}}
-            </select>
-          </div>
-        </div>
-        <div style="margin-top: 8px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap;">
-          <label><input type="checkbox" name="priority" value="1" {{if .Item.Priority}}checked{{end}}> <span class="dim">Priority</span></label>
-          <label><input type="checkbox" name="onHold" value="1" {{if .Item.OnHold}}checked{{end}}> <span class="dim">On hold</span></label>
-        </div>
-        <div style="margin-top: 8px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap;">
-          <label class="dim">Due <input type="date" name="dueDate" value="{{.DueDate}}"> <input type="time" name="dueTime" value="{{.DueTime}}"></label>
-          <label class="dim">Schedule <input type="date" name="schDate" value="{{.SchDate}}"> <input type="time" name="schTime" value="{{.SchTime}}"></label>
-        </div>
-        <div style="margin-top: 8px;">
-          <label for="tags"><span class="dim">Tags</span></label>
-          <div><input id="tags" name="tags" value="{{.TagsInput}}" placeholder="#tag1 #tag2" style="width: 100%; max-width: 100%;"></div>
-        </div>
-        <div style="margin-top: 8px;">
-          <label for="description"><span class="dim">Description (Markdown)</span></label>
-          <div><textarea id="description" name="description" rows="10" style="width: 100%; max-width: 100%;">{{.Item.Description}}</textarea></div>
-        </div>
-        <div style="margin-top: 8px; display: flex; gap: 10px; align-items: center;">
-          <button type="submit">Save</button>
-          <button type="submit" name="action" value="archive" onclick="return confirm('Archive this item?')">Archive</button>
-        </div>
-      </form>
-    </div>
+    <div class="err"><div><strong>Error</strong> — {{.ErrorMessage}}</div></div>
   {{end}}
 
   <div class="card">

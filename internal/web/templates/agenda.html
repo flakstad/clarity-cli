@@ -11,10 +11,14 @@
     <div><strong>Items</strong> ({{len .Items}})</div>
     {{if .ActorID}}
       {{if .Items}}
+        <div style="margin: 10px 0;">
+          <label class="dim" for="agenda-filter">Filter</label>
+          <input id="agenda-filter" type="text" placeholder="Type to filter… (press / to focus)" />
+        </div>
         <ul>
           {{range .Items}}
             <li>
-              <a data-kb-item data-focus-id="{{.ID}}" href="/items/{{.ID}}"><code>{{.ID}}</code></a>
+              <a data-kb-item data-focus-id="{{.ID}}" data-agenda-row data-title="{{.Title}}" data-status="{{.StatusID}}" href="/items/{{.ID}}"><code>{{.ID}}</code></a>
               — {{.Title}}
               <span class="dim">({{.StatusID}})</span>
             </li>

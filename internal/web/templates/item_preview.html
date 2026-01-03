@@ -1,0 +1,20 @@
+{{define "item_preview.html"}}
+<div class="outline-preview-card">
+  <div class="dim"><code>{{.Item.ID}}</code> · <code>{{.Item.StatusID}}</code></div>
+  <div style="margin-top: 6px;"><strong>{{.Item.Title}}</strong></div>
+  <div class="dim" style="margin-top: 6px;">
+    <span>Outline <code>{{.Item.OutlineID}}</code></span>
+    {{if .Item.AssignedActorID}} · <span>Assignee <code>{{.Item.AssignedActorID}}</code></span>{{end}}
+    {{if .Item.Due}} · <span>Due <code>{{.DueDate}}{{if .DueTime}} {{.DueTime}}{{end}}</code></span>{{end}}
+    {{if .Item.Schedule}} · <span>Sch <code>{{.SchDate}}{{if .SchTime}} {{.SchTime}}{{end}}</code></span>{{end}}
+  </div>
+  {{if .Item.Tags}}
+    <div class="dim" style="margin-top: 6px;">
+      {{range $i, $t := .Item.Tags}}{{if $i}} {{end}}#{{$t}}{{end}}
+    </div>
+  {{end}}
+  <div style="margin-top: 10px;">
+    {{if .Item.Description}}<pre style="max-height: 48vh; overflow:auto; margin:0;">{{.Item.Description}}</pre>{{else}}<div class="dim">(no description)</div>{{end}}
+  </div>
+</div>
+{{end}}
