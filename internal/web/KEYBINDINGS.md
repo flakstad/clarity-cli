@@ -7,9 +7,7 @@ Goal: make the web UI feel like the TUI: fast, predictable, and keyboard-first, 
 - **Roving focus**: lists expose focusable “rows” (`tabindex="0"`, `data-kb-item`, `data-focus-id`), and keybindings operate on the currently focused row.
 - **Do not steal standard browser keys**: avoid binding `Tab`/`Shift+Tab`, and avoid overriding typing behavior inside inputs/textarea.
 - **Context first**: the same key can mean different things depending on focus (e.g. `j/k` inside an outline vs. a generic list).
-- **Global bindings are small and consistent**:
-  - `?` = help overlay
-  - `g h/p/a/s` = navigation “go to”
+- **TUI parity first**: prefer the same keys and panel structure as the Bubble Tea TUI, even when we could do something more “webby”.
 - **Optimistic UI for “cursor/movement” interactions**: reorder/indent/outdent mutate the DOM immediately, then persist async (debounced) to reduce git churn.
 - **Server remains source of truth**: SSE + Datastar keep pages convergent; optimistic UI should converge or show an error.
 
@@ -36,15 +34,30 @@ All key handling is routed through a single `document.addEventListener('keydown'
 
 ## Global bindings (today)
 
-- `?` toggle help overlay
-- `x` action menu (command palette)
-- `"` capture
-- `g` then:
-  - `h` Home
-  - `p` Projects
-  - `a` Agenda
-  - `s` Sync
+- `x` / `?` open **Actions** (action panel root)
+- `g` open **Go to** (action panel: nav)
+- `a` open **Agenda Commands** (action panel: agenda) — except in outline/item where `a` is assignment
+- `A` open **Agenda Commands** (always available; useful when `a` is assignment)
+- `c` open **Capture** (modal; TUI parity is action-panel capture, but web currently uses a modal)
 
 ## Outline view (native)
 
 - `v` cycle view mode: `list` → `list+preview` → `columns`
+- `h/l` or `←/→` or `Ctrl+B/F` navigate parent/child
+
+## Agenda view
+
+- `j/k`, `↑/↓`, `Ctrl+N/P` move focus; `Enter` opens item
+- `/` focuses the filter input
+- `z/Z` collapse selected / collapse-all (local, persisted)
+- `h/l` or `←/→` or `Ctrl+B/F` navigate parent/child
+- Owner-only mutations: `e` edit title, `Space` change status, `r` archive
+
+## Action panel (web)
+
+The web action panel mirrors the TUI “stack” behavior:
+
+- `Esc` / `Backspace` pops to previous panel; at root, closes
+- `Ctrl+G` closes immediately
+- `j/k` or `↑/↓` or `Ctrl+N/P` navigates entries
+- Pressing an entry’s key executes it (no Enter required)

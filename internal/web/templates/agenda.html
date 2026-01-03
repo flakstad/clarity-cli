@@ -8,22 +8,60 @@
   </div>
 
   <div class="card">
-    <div><strong>Items</strong> ({{len .Items}})</div>
+    <div><strong>Items</strong></div>
     {{if .ActorID}}
-      {{if .Items}}
+      <div id="agenda-native" data-actor-id="{{.ActorID}}"></div>
+      {{if .Rows}}
         <div style="margin: 10px 0;">
           <label class="dim" for="agenda-filter">Filter</label>
           <input id="agenda-filter" type="text" placeholder="Type to filter… (press / to focus)" />
         </div>
-        <ul>
-          {{range .Items}}
-            <li>
-              <a data-kb-item data-focus-id="{{.ID}}" data-agenda-row data-title="{{.Title}}" data-status="{{.StatusID}}" href="/items/{{.ID}}"><code>{{.ID}}</code></a>
-              — {{.Title}}
-              <span class="dim">({{.StatusID}})</span>
-            </li>
+        <ul class="agenda-list">
+          {{range .Rows}}
+            {{if eq .Kind "heading"}}
+              <li class="agenda-heading">
+                <span class="dim">{{.ProjectName}}</span>
+                <span class="dim">/</span>
+                <span>{{.OutlineName}}</span>
+                <span class="dim">(<code>{{.OutlineID}}</code>)</span>
+              </li>
+            {{else}}
+              <li>
+                <div
+                  class="outline-row agenda-row {{if not .CanEdit}}outline-row--readonly{{end}}"
+                  tabindex="0"
+                  data-kb-item
+                  data-focus-id="{{.ItemID}}"
+                  data-agenda-row
+                  data-id="{{.ItemID}}"
+                  data-outline-id="{{.OutlineID}}"
+                  data-project-id="{{.ProjectID}}"
+                  data-can-edit="{{if .CanEdit}}true{{else}}false{{end}}"
+                  data-title="{{.Title}}"
+                  data-status="{{.StatusID}}"
+                  data-status-label="{{.StatusLabel}}"
+                  data-depth="{{.Depth}}"
+                  data-has-children="{{if .HasChildren}}true{{else}}false{{end}}"
+                  data-open-href="/items/{{.ItemID}}"
+                  style="padding-left: {{.IndentPx}}px;"
+                >
+                  <span class="outline-caret outline-chevron" aria-hidden="true" data-ignore-morph>{{if .HasChildren}}▾{{end}}</span>
+                  <span class="outline-status outline-label {{if .IsEndState}}outline-status--end{{else}}outline-status--open{{end}}">{{.StatusLabel}}</span>
+                  <span class="outline-title outline-text">{{.Title}}</span>
+                  <span class="outline-right">
+                    {{if .Priority}}<span class="outline-flag outline-flag--priority">P</span>{{end}}
+                    {{if .OnHold}}<span class="outline-flag outline-flag--hold">H</span>{{end}}
+                    {{if .DueDate}}<span class="outline-meta outline-meta--due outline-due dim">Due {{.DueDate}}{{if .DueTime}} {{.DueTime}}{{end}}</span>{{end}}
+                    {{if .SchDate}}<span class="outline-meta outline-meta--sch outline-schedule dim">Sch {{.SchDate}}{{if .SchTime}} {{.SchTime}}{{end}}</span>{{end}}
+                    {{if .AssignedLabel}}<span class="outline-assignee outline-assign dim">@{{.AssignedLabel}}</span>{{end}}
+                    {{if .Tags}}<span class="outline-tags dim">{{range $i, $t := .Tags}}{{if $i}} {{end}}#{{$t}}{{end}}</span>{{end}}
+                  </span>
+                </div>
+              </li>
+            {{end}}
           {{end}}
         </ul>
+        <div id="outline-status" class="dim" style="margin-top: 10px;"></div>
       {{else}}
         <div>(none)</div>
       {{end}}

@@ -68,6 +68,8 @@
     options: [],
     idx: 0,
     restoreEl: null,
+    mode: 'context', // context|nav|agenda|capture|sync|outline
+    stack: [], // stack of modes; top = current
   };
 
   const isTypingTarget = (el) => {
@@ -215,11 +217,18 @@
 
   const nativeOutlineRoot = () => document.getElementById('outline-native');
   const itemPageRoot = () => document.getElementById('item-native');
+  const agendaRoot = () => document.getElementById('agenda-native');
 
   const nativeRowFromEvent = (ev) => {
     const t = ev && ev.target;
     if (!t || typeof t.closest !== 'function') return null;
     return t.closest('[data-outline-row]');
+  };
+
+  const agendaRowFromEvent = (ev) => {
+    const t = ev && ev.target;
+    if (!t || typeof t.closest !== 'function') return null;
+    return t.closest('[data-agenda-row]');
   };
 
   const nativeOutlineRootOrFromRow = (row) => {
@@ -602,7 +611,16 @@
     const focusId = (id || '').trim();
     if (!focusId) return;
     setTimeout(() => {
-      if (nativeOutlineRoot()) focusNativeRowById(focusId);
+      const native = nativeOutlineRoot();
+      if (native) {
+        focusNativeRowById(focusId);
+        return;
+      }
+      const ar = agendaRoot();
+      if (ar) {
+        const row = document.querySelector('[data-agenda-row][data-id="' + CSS.escape(focusId) + '"]');
+        row?.focus?.();
+      }
     }, 0);
   };
 
@@ -925,7 +943,7 @@
     el.innerHTML = `
       <div style="max-width:620px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
-          <strong>Actions</strong>
+          <strong id="native-action-title">Actions</strong>
           <span class="dim" style="font-size:12px;">Esc to cancel</span>
         </div>
         <div id="native-action-list" style="margin-top:10px;max-height:46vh;overflow:auto;"></div>
@@ -941,8 +959,19 @@
 
   const renderActionPalette = () => {
     const modal = ensureActionModal();
+    const titleEl = modal.querySelector('#native-action-title');
     const list = modal.querySelector('#native-action-list');
     if (!list) return;
+    if (titleEl) {
+      const mode = actionPalette.mode || 'context';
+      titleEl.textContent =
+        mode === 'nav' ? 'Go to' :
+        mode === 'agenda' ? 'Agenda Commands' :
+        mode === 'capture' ? 'Capture' :
+        mode === 'sync' ? 'Sync' :
+        mode === 'outline' ? 'Outline…' :
+        'Actions';
+    }
     const opts = actionPalette.options || [];
     list.innerHTML = '';
     const ul = document.createElement('ul');
@@ -957,21 +986,28 @@
       if (i === actionPalette.idx) {
         li.style.background = 'color-mix(in oklab, Canvas, CanvasText 10%)';
       }
+      const keyLbl = (o && o.key) ? String(o.key) : '';
       const label = (o && o.label) ? String(o.label) : '';
-      li.textContent = label;
+      li.innerHTML = `<code style="display:inline-block;min-width:2.2em;">${escapeHTML(keyLbl)}</code> ${escapeHTML(label)}`;
       li.addEventListener('click', () => {
         actionPalette.idx = i;
-        runSelectedAction();
+        runSelectedAction({ trigger: 'click' });
       });
       ul.appendChild(li);
     });
     list.appendChild(ul);
   };
 
-  const closeActionPalette = () => {
+  const actionPanelReset = () => {
     actionPalette.open = false;
     actionPalette.options = [];
     actionPalette.idx = 0;
+    actionPalette.mode = 'context';
+    actionPalette.stack = [];
+  };
+
+  const closeActionPalette = () => {
+    actionPanelReset();
     const restore = actionPalette.restoreEl;
     actionPalette.restoreEl = null;
     const modal = document.getElementById('native-action-modal');
@@ -983,20 +1019,204 @@
     }, 0);
   };
 
+  const currentProjectId = () => {
+    const fromOutline = (nativeOutlineRoot()?.dataset?.projectId || '').trim();
+    if (fromOutline) return fromOutline;
+    const fromItem = (itemPageRoot()?.dataset?.projectId || '').trim();
+    if (fromItem) return fromItem;
+    const fromMain = (document.getElementById('clarity-main')?.dataset?.projectId || '').trim();
+    return fromMain;
+  };
+
+  const currentOutlineId = () => {
+    const fromOutline = (nativeOutlineRoot()?.dataset?.outlineId || '').trim();
+    if (fromOutline) return fromOutline;
+    const fromItem = (itemPageRoot()?.dataset?.outlineId || '').trim();
+    return fromItem;
+  };
+
+  const currentItemId = () => {
+    const fromItem = (itemPageRoot()?.dataset?.itemId || '').trim();
+    return fromItem;
+  };
+
+  const openJumpToItemPrompt = () => {
+    openPrompt({
+      title: 'Jump to item by id…',
+      hint: 'Esc to close · Enter to go',
+      bodyHTML: `
+        <div>
+          <label class="dim" for="jump-item-id">Item id</label>
+          <input id="jump-item-id" type="text" placeholder="item-…" style="width:100%;" />
+        </div>
+      `,
+      onSubmit: () => {
+        const id = String(document.getElementById('jump-item-id')?.value || '').trim();
+        if (!id) return;
+        closePrompt();
+        window.location.href = '/items/' + encodeURIComponent(id);
+      },
+      focusSelector: '#jump-item-id',
+    });
+  };
+
   const actionsForContext = () => {
     const opts = [];
+    // Root panel: global entrypoints (TUI parity).
+    opts.push({ key: 'g', label: 'Go to…', kind: 'nav', next: 'nav' });
+    opts.push({ key: 'W', label: 'Workspaces…', kind: 'exec', run: () => { window.location.href = '/workspaces'; } });
+    opts.push({ key: 's', label: 'Sync…', kind: 'nav', next: 'sync' });
+    opts.push({ key: 'a', label: 'Agenda Commands…', kind: 'nav', next: 'agenda' });
+    opts.push({ key: 'c', label: 'Capture…', kind: 'exec', run: () => openCaptureModal() });
+
+    // Context actions (best-effort parity; grows over time).
     const outlineRoot = nativeOutlineRoot();
     if (outlineRoot) {
-      opts.push({ label: 'Outline: cycle view (v)', run: () => cycleOutlineViewMode(outlineRoot) });
+      opts.push({ key: 'v', label: 'Cycle view mode', kind: 'exec', run: () => cycleOutlineViewMode(outlineRoot) });
+      opts.push({ key: 'O', label: 'Outline…', kind: 'nav', next: 'outline' });
     }
-    opts.push({ label: 'Capture… (")', run: () => openCaptureModal() });
-    opts.push({ label: 'Toggle theme', run: () => themeApply(themeCurrent() === 'default' ? 'alternative' : 'default') });
-    opts.push({ label: 'Help (?)', run: () => toggleHelp() });
-    opts.push({ label: 'Go: Home', run: () => { window.location.href = '/'; } });
-    opts.push({ label: 'Go: Projects', run: () => { window.location.href = '/projects'; } });
-    opts.push({ label: 'Go: Agenda', run: () => { window.location.href = '/agenda'; } });
-    opts.push({ label: 'Go: Sync', run: () => { window.location.href = '/sync'; } });
     return opts;
+  };
+
+  const actionsForNav = () => {
+    const opts = [];
+    opts.push({ key: 'p', label: 'Projects', kind: 'exec', run: () => { window.location.href = '/projects'; } });
+    opts.push({ key: 's', label: 'Sync…', kind: 'nav', next: 'sync' });
+    opts.push({ key: 'W', label: 'Workspaces…', kind: 'exec', run: () => { window.location.href = '/workspaces'; } });
+    opts.push({ key: 'j', label: 'Jump to item by id…', kind: 'exec', run: () => openJumpToItemPrompt() });
+    opts.push({ key: 'A', label: 'Archived', kind: 'exec', run: () => { window.location.href = '/archived'; } });
+
+    const pid = currentProjectId();
+    if (pid) {
+      opts.push({ key: 'o', label: 'Outlines (current project)', kind: 'exec', run: () => { window.location.href = '/projects/' + encodeURIComponent(pid); } });
+    }
+
+    const oid = currentOutlineId();
+    if (oid) {
+      opts.push({ key: 'l', label: 'Outline (current)', kind: 'exec', run: () => { window.location.href = '/outlines/' + encodeURIComponent(oid); } });
+    }
+
+    const iid = currentItemId();
+    if (iid) {
+      opts.push({ key: 'i', label: 'Item (open)', kind: 'exec', run: () => { window.location.href = '/items/' + encodeURIComponent(iid); } });
+    }
+
+    // Recent items (loaded from server, like TUI's RecentItemIDs).
+    if (Array.isArray(navOptions.recent) && navOptions.recent.length) {
+      for (let i = 0; i < navOptions.recent.length && i < 5; i++) {
+        const it = navOptions.recent[i] || {};
+        const id = String(it.id || '').trim();
+        if (!id) continue;
+        const title = String(it.title || '').trim() || '(untitled)';
+        const key = String(i + 1);
+        opts.push({ key, label: 'Recent: ' + title, kind: 'exec', run: () => { window.location.href = '/items/' + encodeURIComponent(id); } });
+      }
+    }
+    return opts;
+  };
+
+  const navOptions = { recent: [] };
+
+  const loadNavOptions = async () => {
+    const res = await fetch('/nav/options', { method: 'GET', headers: { 'Accept': 'application/json' } });
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  };
+
+  const refreshNavOptionsIfOpen = () => {
+    if (!actionPalette.open || actionPalette.mode !== 'nav') return;
+    const prevKey = String((actionPalette.options || [])[actionPalette.idx]?.key || '');
+    setActionPanelMode('nav');
+    if (prevKey) {
+      const idx = (actionPalette.options || []).findIndex((o) => String(o?.key || '') === prevKey);
+      if (idx >= 0) actionPalette.idx = idx;
+      renderActionPalette();
+    }
+  };
+
+  const actionsForAgenda = () => ([
+    { key: 't', label: 'List all TODO entries', kind: 'exec', run: () => { window.location.href = '/agenda'; } },
+  ]);
+
+  const actionsForSync = () => ([
+    { key: 's', label: 'Refresh status', kind: 'exec', run: () => { window.location.href = '/sync'; } },
+    { key: 'g', label: 'Setup Git…', kind: 'exec', run: () => openSyncSetupGitPrompt() },
+    { key: 'p', label: 'Pull --rebase', kind: 'exec', run: () => submitPost('/sync/pull', {}) },
+    { key: 'P', label: 'Commit + pull + push', kind: 'exec', run: () => submitPost('/sync/push', {}) },
+    { key: 'r', label: 'Resolve conflicts (help)', kind: 'exec', run: () => openSyncResolveHelp() },
+  ]);
+
+  const actionsForOutline = () => {
+    const oid = currentOutlineId();
+    if (!oid) return [];
+    return [
+      { key: 'e', label: 'Rename outline', kind: 'exec', run: () => { window.location.href = '/outlines/' + encodeURIComponent(oid); } },
+      { key: 'D', label: 'Edit outline description', kind: 'exec', run: () => { window.location.href = '/outlines/' + encodeURIComponent(oid); } },
+      { key: 'S', label: 'Edit outline statuses…', kind: 'exec', run: () => { window.location.href = '/outlines/' + encodeURIComponent(oid); } },
+    ];
+  };
+
+  const submitPost = (path, fields) => {
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.action = path;
+    const fs = fields && typeof fields === 'object' ? fields : {};
+    for (const [k, v] of Object.entries(fs)) {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = k;
+      input.value = String(v ?? '');
+      form.appendChild(input);
+    }
+    document.body.appendChild(form);
+    form.submit();
+  };
+
+  const openSyncSetupGitPrompt = () => {
+    openPrompt({
+      title: 'Setup Git…',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+          <div style="flex:0 0 140px;">
+            <label class="dim" for="sync-remote-name">Remote name</label>
+            <input id="sync-remote-name" type="text" value="origin" />
+          </div>
+          <div style="flex:1;min-width:280px;">
+            <label class="dim" for="sync-remote-url">Remote url</label>
+            <input id="sync-remote-url" type="text" placeholder="git@github.com:org/repo.git" style="width:100%;" />
+          </div>
+        </div>
+        <div class="dim" style="margin-top:10px;">Tip: you can also use the Sync screen for full setup.</div>
+      `,
+      onSubmit: () => {
+        const name = String(document.getElementById('sync-remote-name')?.value || '').trim() || 'origin';
+        const url = String(document.getElementById('sync-remote-url')?.value || '').trim();
+        if (!url) return;
+        closePrompt();
+        submitPost('/sync/remote', { remoteName: name, remoteUrl: url });
+      },
+      focusSelector: '#sync-remote-url',
+    });
+  };
+
+  const openSyncResolveHelp = () => {
+    openPrompt({
+      title: 'Resolve conflicts (help)',
+      hint: 'Esc to close',
+      bodyHTML: `
+        <div class="dim">
+          If the repo is unmerged or a rebase is in progress:
+          <ul>
+            <li>Run <code>git status</code> and resolve conflicts</li>
+            <li>Then <code>git add</code> + <code>git rebase --continue</code> (or merge continue)</li>
+            <li>Finally, return to <code>/sync</code> and run <em>Commit + pull + push</em></li>
+          </ul>
+          You can also run <code>clarity doctor --fail</code> to detect multi-head entities.
+        </div>
+      `,
+      onSubmit: () => {},
+    });
   };
 
   const captureState = {
@@ -1198,25 +1418,127 @@
     }
   };
 
-  const runSelectedAction = () => {
+  const setActionPanelMode = (mode) => {
+    mode = String(mode || '').trim() || 'context';
+    actionPalette.mode = mode;
+    switch (mode) {
+      case 'nav':
+        actionPalette.options = actionsForNav();
+        break;
+      case 'agenda':
+        actionPalette.options = actionsForAgenda();
+        break;
+      case 'sync':
+        actionPalette.options = actionsForSync();
+        break;
+      case 'outline':
+        actionPalette.options = actionsForOutline();
+        break;
+      case 'capture':
+        actionPalette.options = [];
+        break;
+      default:
+        actionPalette.options = actionsForContext();
+        break;
+    }
+    actionPalette.idx = 0;
+    renderActionPalette();
+  };
+
+  const pushActionPanel = (mode) => {
+    if (!actionPalette.open) return;
+    const cur = (actionPalette.stack || []).length ? actionPalette.stack[actionPalette.stack.length - 1] : '';
+    if (cur === mode) return;
+    actionPalette.stack.push(mode);
+    setActionPanelMode(mode);
+  };
+
+  const popActionPanel = () => {
+    if (!actionPalette.open) return;
+    if ((actionPalette.stack || []).length <= 1) {
+      closeActionPalette();
+      return;
+    }
+    actionPalette.stack.pop();
+    const top = actionPalette.stack[actionPalette.stack.length - 1] || 'context';
+    setActionPanelMode(top);
+  };
+
+  const runSelectedAction = ({ trigger } = {}) => {
     if (!actionPalette.open) return;
     const sel = (actionPalette.options || [])[actionPalette.idx];
-    if (!sel || typeof sel.run !== 'function') return;
-    closeActionPalette();
-    try {
-      sel.run();
-    } catch (_) {}
+    if (!sel) return;
+    const kind = String(sel.kind || '').trim();
+    if (kind === 'nav') {
+      const next = String(sel.next || '').trim();
+      if (next) pushActionPanel(next);
+      return;
+    }
+    if (typeof sel.run === 'function') {
+      closeActionPalette();
+      try { sel.run(); } catch (_) {}
+      return;
+    }
+    // If it's not runnable, keep the panel open (no-op).
+    if (trigger === 'enter') return;
   };
 
   const openActionPalette = () => {
     if (actionPalette.open) return;
     actionPalette.open = true;
-    actionPalette.options = actionsForContext();
+    actionPalette.stack = ['context'];
+    setActionPanelMode('context');
     actionPalette.restoreEl = document.activeElement;
     actionPalette.idx = 0;
     const modal = ensureActionModal();
     modal.style.display = 'flex';
     renderActionPalette();
+  };
+
+  const openNavPanel = () => {
+    if (!actionPalette.open) {
+      actionPalette.open = true;
+      actionPalette.restoreEl = document.activeElement;
+      actionPalette.stack = ['nav'];
+      setActionPanelMode('nav');
+      const modal = ensureActionModal();
+      modal.style.display = 'flex';
+      renderActionPalette();
+      loadNavOptions().then((data) => {
+        navOptions.recent = Array.isArray(data?.recent) ? data.recent : [];
+        refreshNavOptionsIfOpen();
+      }).catch(() => {});
+      return;
+    }
+    pushActionPanel('nav');
+    loadNavOptions().then((data) => {
+      navOptions.recent = Array.isArray(data?.recent) ? data.recent : [];
+      refreshNavOptionsIfOpen();
+    }).catch(() => {});
+  };
+
+  const openAgendaPanel = () => {
+    if (!actionPalette.open) {
+      actionPalette.open = true;
+      actionPalette.restoreEl = document.activeElement;
+      actionPalette.stack = ['agenda'];
+      setActionPanelMode('agenda');
+      const modal = ensureActionModal();
+      modal.style.display = 'flex';
+      renderActionPalette();
+      return;
+    }
+    pushActionPanel('agenda');
+  };
+
+  const openSyncPanel = () => {
+    if (!actionPalette.open) openActionPalette();
+    pushActionPanel('sync');
+  };
+
+  const openOutlinePanel = () => {
+    if (!actionPalette.open) openActionPalette();
+    pushActionPanel('outline');
   };
 
   const ensureMoveOutlineModal = () => {
@@ -2547,6 +2869,79 @@
     });
   };
 
+  const agendaCollapseKey = (actorId) => 'clarity:agenda:' + (actorId || 'anon') + ':collapsed';
+
+  const loadAgendaCollapsedSet = (root) => {
+    const actorId = (root && root.dataset ? String(root.dataset.actorId || '') : '').trim();
+    try {
+      const raw = localStorage.getItem(agendaCollapseKey(actorId));
+      const xs = raw ? JSON.parse(raw) : [];
+      return new Set(Array.isArray(xs) ? xs : []);
+    } catch (_) {
+      return new Set();
+    }
+  };
+
+  const saveAgendaCollapsedSet = (root, set) => {
+    const actorId = (root && root.dataset ? String(root.dataset.actorId || '') : '').trim();
+    try {
+      localStorage.setItem(agendaCollapseKey(actorId), JSON.stringify(Array.from(set)));
+    } catch (_) {}
+  };
+
+  const agendaApplyVisibility = () => {
+    document.querySelectorAll('[data-agenda-row]').forEach((row) => {
+      const li = row.closest('li');
+      if (!li) return;
+      const filterHidden = li.dataset.filterHidden === '1';
+      const collapsedHidden = li.dataset.collapsedHidden === '1';
+      li.style.display = (filterHidden || collapsedHidden) ? 'none' : '';
+    });
+  };
+
+  const applyAgendaCollapsed = (root, set) => {
+    if (!root) return;
+    const rows = Array.from(document.querySelectorAll('[data-agenda-row]'));
+    const stack = [];
+    for (const row of rows) {
+      if (!row || !row.dataset) continue;
+      const li = row.closest('li');
+      if (!li) continue;
+      const depth = parseInt(String(row.dataset.depth || '0'), 10) || 0;
+      while (stack.length && depth <= stack[stack.length - 1]) stack.pop();
+      li.dataset.collapsedHidden = stack.length ? '1' : '0';
+
+      const hasChildren = String(row.dataset.hasChildren || '') === 'true';
+      const caret = row.querySelector('.outline-caret');
+      const id = String(row.dataset.id || '').trim();
+      if (hasChildren) {
+        const collapsed = id && set.has(id);
+        if (caret) caret.textContent = collapsed ? '▸' : '▾';
+        if (collapsed) stack.push(depth);
+      } else {
+        if (caret) caret.textContent = '';
+      }
+    }
+    agendaApplyVisibility();
+  };
+
+  const ensureAgendaDefaultCollapse = (root) => {
+    if (!root) return;
+    const actorId = (root.dataset ? String(root.dataset.actorId || '') : '').trim();
+    const key = agendaCollapseKey(actorId);
+    try {
+      if (localStorage.getItem(key) != null) return;
+    } catch (_) {
+      return;
+    }
+    const set = new Set();
+    document.querySelectorAll('[data-agenda-row][data-has-children="true"]').forEach((row) => {
+      const id = String(row.dataset.id || '').trim();
+      if (id) set.add(id);
+    });
+    saveAgendaCollapsedSet(root, set);
+  };
+
   const toggleCollapseRow = (row) => {
     const root = nativeOutlineRootOrFromRow(row);
     const li = nativeLiFromRow(row);
@@ -2808,10 +3203,10 @@
         <a href="#" id="clarity-kb-close" class="dim">close</a>
       </div>
       <div style="margin-top:8px;line-height:1.6;">
-        <div><code>g</code> <code>h</code> — Home</div>
-        <div><code>g</code> <code>p</code> — Projects</div>
-        <div><code>g</code> <code>a</code> — Agenda</div>
-        <div><code>g</code> <code>s</code> — Sync</div>
+        <div><code>x</code>/<code>?</code> — Actions</div>
+        <div><code>g</code> — Go to…</div>
+        <div><code>a</code>/<code>A</code> — Agenda commands</div>
+        <div><code>c</code> — Capture</div>
         <div><code>j</code>/<code>k</code> — Move focus in lists</div>
         <div><code>Enter</code> — Open focused item</div>
         <div><code>?</code> — Toggle this help</div>
@@ -2837,7 +3232,11 @@
       if (!el) return false;
       if (el.hasAttribute('disabled')) return false;
       if (el.getAttribute('aria-disabled') === 'true') return false;
-      return true;
+      try {
+        return el.getClientRects().length > 0;
+      } catch (_) {
+        return true;
+      }
     });
   };
 
@@ -2891,6 +3290,11 @@
       const native = nativeOutlineRoot();
       if (native) {
         applyCollapsed(native, loadCollapsedSet(native));
+      }
+      const ar = agendaRoot();
+      if (ar) {
+        ensureAgendaDefaultCollapse(ar);
+        applyAgendaCollapsed(ar, loadAgendaCollapsedSet(ar));
       }
     }, 50);
   };
@@ -3221,6 +3625,16 @@
       nativeReorder(nativeRow, 'prev');
       return true;
     }
+    if (ev.altKey && ev.code === 'KeyL') {
+      ev.preventDefault();
+      nativeIndent(nativeRow);
+      return true;
+    }
+    if (ev.altKey && ev.code === 'KeyH') {
+      ev.preventDefault();
+      nativeOutdent(nativeRow);
+      return true;
+    }
     if (ev.altKey && (key === 'arrowdown' || key === 'down')) {
       ev.preventDefault();
       nativeReorder(nativeRow, 'next');
@@ -3249,6 +3663,39 @@
     if (key === 'arrowup' || key === 'up' || (ev.ctrlKey && key === 'p')) {
       ev.preventDefault();
       nativeRowSibling(nativeRow, -1)?.focus?.();
+      return true;
+    }
+    // Hierarchy navigation (match TUI): Right/L/Ctrl+F => into first child; Left/H/Ctrl+B => parent.
+    if (!ev.altKey && (key === 'arrowright' || key === 'right' || key === 'l' || (ev.ctrlKey && key === 'f'))) {
+      ev.preventDefault();
+      const li = nativeLiFromRow(nativeRow);
+      if (!li) return true;
+      const ul = li.querySelector(':scope > ul.outline-children');
+      if (!ul) return true;
+      if (ul.style.display === 'none') {
+        const root = nativeOutlineRootOrFromRow(nativeRow);
+        if (root) {
+          const set = loadCollapsedSet(root);
+          const id = (li.dataset && li.dataset.nodeId ? String(li.dataset.nodeId) : '').trim();
+          if (id) {
+            set.delete(id);
+            saveCollapsedSet(root, set);
+            applyCollapsed(root, set);
+          }
+        } else {
+          ul.style.display = '';
+        }
+      }
+      const first = ul.querySelector(':scope > li[data-node-id] > [data-outline-row]');
+      first?.focus?.();
+      return true;
+    }
+    if (!ev.altKey && (key === 'arrowleft' || key === 'left' || key === 'h' || (ev.ctrlKey && key === 'b'))) {
+      ev.preventDefault();
+      const li = nativeLiFromRow(nativeRow);
+      const parentLi = li ? li.parentElement?.closest('li[data-node-id]') : null;
+      const row = parentLi ? parentLi.querySelector(':scope > [data-outline-row]') : null;
+      row?.focus?.();
       return true;
     }
     if (key === 'enter') {
@@ -3427,12 +3874,12 @@
       f?.focus?.();
       return true;
     }
-    if (key === 'j') {
+    if (key === 'j' || key === 'arrowdown' || key === 'down' || (ev.ctrlKey && key === 'n')) {
       ev.preventDefault();
       moveFocus(+1);
       return true;
     }
-    if (key === 'k') {
+    if (key === 'k' || key === 'arrowup' || key === 'up' || (ev.ctrlKey && key === 'p')) {
       ev.preventDefault();
       moveFocus(-1);
       return true;
@@ -3460,16 +3907,199 @@
       const rows = Array.from(document.querySelectorAll('[data-agenda-row]'));
       for (const a of rows) {
         const title = String(a.dataset.title || '').toLowerCase();
-        const status = String(a.dataset.status || '').toLowerCase();
+        const status = String(a.dataset.statusLabel || a.dataset.status || '').toLowerCase();
         const id = String(a.dataset.focusId || '').toLowerCase();
         const ok = !q || title.includes(q) || status.includes(q) || id.includes(q);
         const li = a.closest('li');
-        if (li) li.style.display = ok ? '' : 'none';
+        if (li) li.dataset.filterHidden = ok ? '0' : '1';
       }
+      agendaApplyVisibility();
     };
 
     input.addEventListener('input', apply);
     apply();
+  };
+
+  const handleAgendaKeydown = (ev, key, row) => {
+    const root = agendaRoot();
+    if (!root || !row || !row.dataset) return false;
+    const id = String(row.dataset.id || '').trim();
+    const depth = parseInt(String(row.dataset.depth || '0'), 10) || 0;
+    const rows = Array.from(document.querySelectorAll('[data-agenda-row]'));
+    const idx = rows.indexOf(row);
+
+    const loadSet = () => {
+      ensureAgendaDefaultCollapse(root);
+      return loadAgendaCollapsedSet(root);
+    };
+
+    if (key === 'enter') {
+      ev.preventDefault();
+      const href = String(row.dataset.openHref || '').trim();
+      if (href) window.location.href = href;
+      return true;
+    }
+    if (key === 'e') {
+      ev.preventDefault();
+      if ((row.dataset.canEdit || '') !== 'true') {
+        setOutlineStatus('Error: owner-only');
+        setTimeout(() => setOutlineStatus(''), 1200);
+        return true;
+      }
+      openPrompt({
+        title: 'Edit title',
+        hint: 'Esc to cancel · Ctrl+Enter to save',
+        bodyHTML: `
+          <div>
+            <label class="dim" for="agenda-edit-title">Title</label>
+            <input id="agenda-edit-title" type="text" style="width:100%;" value="${escapeHTML(String(row.dataset.title || ''))}" />
+          </div>
+        `,
+        focusSelector: '#agenda-edit-title',
+        restoreFocusId: id,
+        onSubmit: () => {
+          const next = String(document.getElementById('agenda-edit-title')?.value || '').trim();
+          if (!next) return;
+          closePrompt();
+          row.dataset.title = next;
+          const t = row.querySelector('.outline-title');
+          if (t) t.textContent = next;
+          outlineApply(row, 'outline:edit:save', { id, newText: next }).catch((err) => {
+            setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+          });
+        },
+      });
+      return true;
+    }
+    if (key === ' ' || key === 'spacebar') {
+      ev.preventDefault();
+      if ((row.dataset.canEdit || '') !== 'true') {
+        setOutlineStatus('Error: owner-only');
+        setTimeout(() => setOutlineStatus(''), 1200);
+        return true;
+      }
+      const outlineId = String(row.dataset.outlineId || '').trim();
+      if (!outlineId) return true;
+      fetchOutlineMeta(outlineId).then((meta) => {
+        const raw = (meta && Array.isArray(meta.statusOptions)) ? meta.statusOptions : [];
+        const opts = raw.map((o) => ({
+          id: (o && o.id) ? String(o.id) : '',
+          label: (o && o.label) ? String(o.label) : '',
+          isEndState: !!(o && o.isEndState),
+          requiresNote: !!(o && o.requiresNote),
+        })).filter((o) => (o.id || '').trim() !== '' || o.id === '');
+        if (!opts.length) return;
+        statusPicker.open = true;
+        statusPicker.rowId = id;
+        statusPicker.rootEl = row;
+        statusPicker.options = opts;
+        statusPicker.note = '';
+        statusPicker.mode = 'list';
+        statusPicker.title = 'Status';
+        statusPicker.submit = ({ statusID, option, note }) => {
+          if (option) nativeRowUpdateStatus(row, option);
+          // Keep filter-friendly label in sync.
+          row.dataset.statusLabel = (option && option.label) ? String(option.label) : String(statusID || '');
+          return outlineApply(row, 'outline:toggle', { id, to: statusID, note }).then(() => {
+            // If it moved to an end-state, let SSE remove it; keep it visible until then.
+          });
+        };
+        const cur = String(row.dataset.status || '').trim();
+        let sidx = opts.findIndex((o) => String(o.id || '').trim() === cur);
+        if (sidx < 0) sidx = 0;
+        statusPicker.idx = sidx;
+        const modal = ensureStatusModal();
+        modal.style.display = 'flex';
+        renderStatusPicker();
+      }).catch((err) => {
+        setOutlineStatus('Error: ' + (err && err.message ? err.message : 'load failed'));
+      });
+      return true;
+    }
+    if (key === 'r') {
+      ev.preventDefault();
+      if ((row.dataset.canEdit || '') !== 'true') {
+        setOutlineStatus('Error: owner-only');
+        setTimeout(() => setOutlineStatus(''), 1200);
+        return true;
+      }
+      openPrompt({
+        title: 'Archive item',
+        hint: 'Esc to cancel · Enter to archive',
+        bodyHTML: `<div>Archive <code>${escapeHTML(id)}</code>?</div>`,
+        focusSelector: '#native-prompt-save',
+        restoreFocusId: id,
+        onSubmit: () => {
+          closePrompt();
+          outlineApply(row, 'outline:archive', { id }).then(() => {
+            const li = row.closest('li');
+            li && li.remove();
+            agendaApplyVisibility();
+          }).catch((err) => {
+            setOutlineStatus('Error: ' + (err && err.message ? err.message : 'archive failed'));
+          });
+        },
+      });
+      return true;
+    }
+    if (key === 'z' && !ev.shiftKey) {
+      ev.preventDefault();
+      const hasChildren = String(row.dataset.hasChildren || '') === 'true';
+      if (!hasChildren || !id) return true;
+      const set = loadSet();
+      if (set.has(id)) set.delete(id);
+      else set.add(id);
+      saveAgendaCollapsedSet(root, set);
+      applyAgendaCollapsed(root, set);
+      row.focus?.();
+      return true;
+    }
+    if (key === 'z' && ev.shiftKey) {
+      ev.preventDefault();
+      const set = loadSet();
+      const ids = Array.from(document.querySelectorAll('[data-agenda-row][data-has-children="true"]')).map((el) => String(el.dataset.id || '').trim()).filter(Boolean);
+      const anyExpanded = ids.some((x) => !set.has(x));
+      const next = new Set();
+      if (anyExpanded) ids.forEach((x) => next.add(x));
+      saveAgendaCollapsedSet(root, next);
+      applyAgendaCollapsed(root, next);
+      row.focus?.();
+      return true;
+    }
+    if (!ev.altKey && (key === 'arrowright' || key === 'right' || key === 'l' || (ev.ctrlKey && key === 'f'))) {
+      ev.preventDefault();
+      const hasChildren = String(row.dataset.hasChildren || '') === 'true';
+      if (!hasChildren || !id) return true;
+      const set = loadSet();
+      const collapsed = set.has(id);
+      if (collapsed) {
+        set.delete(id);
+        saveAgendaCollapsedSet(root, set);
+        applyAgendaCollapsed(root, set);
+        row.focus?.();
+        return true;
+      }
+      // Move to first child if next row is deeper.
+      if (idx >= 0 && idx+1 < rows.length) {
+        const nextDepth = parseInt(String(rows[idx+1].dataset.depth || '0'), 10) || 0;
+        if (nextDepth > depth) rows[idx+1].focus?.();
+      }
+      return true;
+    }
+    if (!ev.altKey && (key === 'arrowleft' || key === 'left' || key === 'h' || (ev.ctrlKey && key === 'b'))) {
+      ev.preventDefault();
+      if (idx <= 0 || depth <= 0) return true;
+      const want = depth - 1;
+      for (let i = idx - 1; i >= 0; i--) {
+        const d = parseInt(String(rows[i].dataset.depth || '0'), 10) || 0;
+        if (d === want) {
+          rows[i].focus?.();
+          break;
+        }
+      }
+      return true;
+    }
+    return false;
   };
 
   const handleItemPageKeydown = (ev, key) => {
@@ -3567,14 +4197,44 @@
   const handleActionPaletteKeydown = (ev) => {
     if (!actionPalette.open) return false;
     const key = (ev.key || '').toLowerCase();
+    const raw = String(ev.key || '');
     if (key === 'escape') {
+      ev.preventDefault();
+      popActionPanel();
+      return true;
+    }
+    if (key === 'backspace') {
+      ev.preventDefault();
+      popActionPanel();
+      return true;
+    }
+    if (ev.ctrlKey && key === 'g') {
       ev.preventDefault();
       closeActionPalette();
       return true;
     }
+    if (!ev.ctrlKey && !ev.altKey && (raw === 'g' || raw === 'G')) {
+      ev.preventDefault();
+      pushActionPanel('nav');
+      return true;
+    }
+    if (key && key.length === 1 && !ev.ctrlKey && !ev.altKey) {
+      const idx = (actionPalette.options || []).findIndex((o) => {
+        const k = String(o?.key || '');
+        if (!k) return false;
+        if (k.length === 1) return k === raw || k.toLowerCase() === key;
+        return k.toLowerCase() === key;
+      });
+      if (idx >= 0) {
+        ev.preventDefault();
+        actionPalette.idx = idx;
+        runSelectedAction({ trigger: 'key' });
+        return true;
+      }
+    }
     if (key === 'enter') {
       ev.preventDefault();
-      runSelectedAction();
+      runSelectedAction({ trigger: 'enter' });
       return true;
     }
     if (key === 'arrowdown' || key === 'down' || key === 'j' || (ev.ctrlKey && key === 'n')) {
@@ -3624,24 +4284,40 @@
 
     const rawKey = String(ev.key || '');
     const key = rawKey.toLowerCase();
-    const now = Date.now();
-    if (state.awaiting && now-state.awaitingAt > 1000) clearAwaiting();
-
-    if (key === '?') {
-      ev.preventDefault();
-      toggleHelp();
-      return;
-    }
-
-    if (rawKey === '"') {
-      ev.preventDefault();
-      openCaptureModal();
-      return;
-    }
-
-    if (key === 'x') {
+    if (key === '?' || key === 'x') {
       ev.preventDefault();
       openActionPalette();
+      return;
+    }
+
+    if (key === 'g') {
+      ev.preventDefault();
+      openNavPanel();
+      return;
+    }
+
+    // Agenda (TUI parity): 'a' is global except inside outline and item; 'A' is always available.
+    if ((rawKey === 'A') || (key === 'a' && ev.shiftKey)) {
+      ev.preventDefault();
+      openAgendaPanel();
+      return;
+    }
+    if (key === 'a') {
+      const inItem = !!itemPageRoot();
+      const nativeRow = nativeRowFromEvent(ev);
+      const inNativeOutline = !!nativeRow;
+      const inOutlineComponent = eventTouchesOutlineComponent(ev);
+      if (!inItem && !inNativeOutline && !inOutlineComponent) {
+        ev.preventDefault();
+        openAgendaPanel();
+        return;
+      }
+      // Otherwise, 'a' is context-specific (assign) and handled below.
+    }
+
+    if (key === 'c') {
+      ev.preventDefault();
+      openCaptureModal();
       return;
     }
 
@@ -3653,25 +4329,6 @@
       return;
     }
 
-    if (state.awaiting === 'g') {
-      ev.preventDefault();
-      clearAwaiting();
-      switch (key) {
-        case 'h': window.location.href = '/'; return;
-        case 'p': window.location.href = '/projects'; return;
-        case 'a': window.location.href = '/agenda'; return;
-        case 's': window.location.href = '/sync'; return;
-        default: return;
-      }
-    }
-
-    if (key === 'g') {
-      ev.preventDefault();
-      state.awaiting = 'g';
-      state.awaitingAt = now;
-      return;
-    }
-
     const inOutline = eventTouchesOutlineComponent(ev);
     if (inOutline) return;
 
@@ -3680,11 +4337,19 @@
     const nativeRow = nativeRowFromEvent(ev);
     if (handleNativeOutlineKeydown(ev, key, nativeRow)) return;
 
+    const agendaRow = agendaRowFromEvent(ev);
+    if (handleAgendaKeydown(ev, key, agendaRow)) return;
+
     handleGlobalListKeydown(ev, key);
   };
 
   initTheme();
   initOutlineViewMode();
   initAgendaFilter();
+  const ar = agendaRoot();
+  if (ar) {
+    ensureAgendaDefaultCollapse(ar);
+    applyAgendaCollapsed(ar, loadAgendaCollapsedSet(ar));
+  }
   document.addEventListener('keydown', handleKeydown, { capture: true });
 })();

@@ -50,11 +50,75 @@ type ServerConfig struct {
 }
 
 type Server struct {
+        mu   sync.RWMutex
         cfg  ServerConfig
         tmpl *template.Template
 
         autoCommit *gitrepo.DebouncedCommitter
         bc         *resourceBroadcaster
+}
+
+func (s *Server) cfgSnapshot() ServerConfig {
+        s.mu.RLock()
+        cfg := s.cfg
+        s.mu.RUnlock()
+        return cfg
+}
+
+func (s *Server) dir() string {
+        s.mu.RLock()
+        d := s.cfg.Dir
+        s.mu.RUnlock()
+        return d
+}
+
+func (s *Server) workspaceName() string {
+        s.mu.RLock()
+        w := s.cfg.Workspace
+        s.mu.RUnlock()
+        return w
+}
+
+func (s *Server) readOnly() bool {
+        s.mu.RLock()
+        ro := s.cfg.ReadOnly
+        s.mu.RUnlock()
+        return ro
+}
+
+func (s *Server) authMode() string {
+        s.mu.RLock()
+        a := s.cfg.AuthMode
+        s.mu.RUnlock()
+        return a
+}
+
+func (s *Server) outlineMode() string {
+        s.mu.RLock()
+        m := s.cfg.OutlineMode
+        s.mu.RUnlock()
+        return m
+}
+
+func (s *Server) componentsDir() string {
+        s.mu.RLock()
+        d := s.cfg.ComponentsDir
+        s.mu.RUnlock()
+        return d
+}
+
+func (s *Server) broadcaster() *resourceBroadcaster {
+        s.mu.RLock()
+        b := s.bc
+        s.mu.RUnlock()
+        return b
+}
+
+func (s *Server) committer() *gitrepo.DebouncedCommitter {
+        s.mu.RLock()
+        c := s.autoCommit
+        s.mu.RUnlock()
+        return c
 }
 
 type baseVM struct {
@@ -68,19 +132,29 @@ type baseVM struct {
         StreamURL string
 }
 
+type navOptionsVM struct {
+        Recent []navRecentItem `json:"recent"`
+}
+
+type navRecentItem struct {
+        ID    string `json:"id"`
+        Title string `json:"title"`
+}
+
 func (s *Server) baseVMForRequest(r *http.Request, streamURL string) baseVM {
         ctx, cancel := context.WithTimeout(r.Context(), 1200*time.Millisecond)
         defer cancel()
 
-        st, _ := gitrepo.GetStatus(ctx, s.cfg.Dir)
+        cfg := s.cfgSnapshot()
+        st, _ := gitrepo.GetStatus(ctx, cfg.Dir)
 
         return baseVM{
                 Now:       time.Now().Format(time.RFC3339),
-                Workspace: s.cfg.Workspace,
-                Dir:       s.cfg.Dir,
-                ReadOnly:  s.cfg.ReadOnly,
+                Workspace: cfg.Workspace,
+                Dir:       cfg.Dir,
+                ReadOnly:  cfg.ReadOnly,
                 ActorID:   strings.TrimSpace(s.actorForRequest(r)),
-                AuthMode:  s.cfg.AuthMode,
+                AuthMode:  cfg.AuthMode,
                 Git:       st,
                 StreamURL: streamURL,
         }
@@ -149,6 +223,7 @@ func (s *Server) Handler() http.Handler {
         mux := http.NewServeMux()
         mux.HandleFunc("GET /health", s.handleHealth)
         mux.HandleFunc("GET /events", s.handleWorkspaceEvents)
+        mux.HandleFunc("GET /nav/options", s.handleNavOptions)
         mux.HandleFunc("GET /projects/{projectId}/events", s.handleProjectEvents)
         mux.HandleFunc("GET /outlines/{outlineId}/events", s.handleOutlineEvents)
         mux.HandleFunc("GET /items/{itemId}/events", s.handleItemEvents)
@@ -171,6 +246,9 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("POST /sync/push-upstream", s.handleSyncPushUpstream)
         mux.HandleFunc("POST /sync/pull", s.handleSyncPull)
         mux.HandleFunc("POST /sync/push", s.handleSyncPush)
+        mux.HandleFunc("GET /workspaces", s.handleWorkspaces)
+        mux.HandleFunc("POST /workspaces/use", s.handleWorkspacesUse)
+        mux.HandleFunc("GET /archived", s.handleArchived)
         mux.HandleFunc("GET /projects", s.handleProjects)
         mux.HandleFunc("GET /projects/{projectId}", s.handleProject)
         mux.HandleFunc("GET /outlines/{outlineId}", s.handleOutline)
@@ -187,7 +265,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleOutlineJS(w http.ResponseWriter, r *http.Request) {
-        dir := strings.TrimSpace(s.cfg.ComponentsDir)
+        dir := strings.TrimSpace(s.componentsDir())
         if dir == "" {
                 // Avoid noisy 404s when templates include the component bundle unconditionally.
                 w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
@@ -310,14 +388,27 @@ type resourceBroadcaster struct {
         fp      string
         seen    map[string]struct{}
         seenLRU []string
+
+        stopOnce sync.Once
+        stopCh   chan struct{}
 }
 
 func newResourceBroadcaster(dir string) *resourceBroadcaster {
         return &resourceBroadcaster{
-                dir:  filepath.Clean(strings.TrimSpace(dir)),
-                hubs: map[string]*resourceHub{},
-                seen: map[string]struct{}{},
+                dir:    filepath.Clean(strings.TrimSpace(dir)),
+                hubs:   map[string]*resourceHub{},
+                seen:   map[string]struct{}{},
+                stopCh: make(chan struct{}),
         }
+}
+
+func (b *resourceBroadcaster) Stop() {
+        if b == nil {
+                return
+        }
+        b.stopOnce.Do(func() {
+                close(b.stopCh)
+        })
 }
 
 func (b *resourceBroadcaster) hubFor(key resourceKey) *resourceHub {
@@ -416,7 +507,13 @@ func (b *resourceBroadcaster) watchLoop() {
         t := time.NewTicker(1 * time.Second)
         defer t.Stop()
 
-        for range t.C {
+        for {
+                select {
+                case <-b.stopCh:
+                        return
+                case <-t.C:
+                }
+
                 fp := strings.TrimSpace(b.fingerprint())
                 if fp == "" {
                         continue
@@ -539,10 +636,14 @@ func (s *Server) writeHTMLTemplate(w http.ResponseWriter, name string, data any)
 func (s *Server) serveDatastarElementsStream(w http.ResponseWriter, r *http.Request, key resourceKey, selector string, mode datastar.ElementPatchMode, render func() (string, error)) {
         sse := datastar.NewSSE(w, r)
 
-        fp := strings.TrimSpace(s.bc.currentFingerprint())
+        bc := s.broadcaster()
+        fp := ""
+        if bc != nil {
+                fp = strings.TrimSpace(bc.currentFingerprint())
+        }
         _ = sse.MarshalAndPatchSignals(map[string]any{"wsVersion": fp})
 
-        h := s.bc.hubFor(key)
+        h := bc.hubFor(key)
         ch, cancel := h.subscribe()
         defer cancel()
 
@@ -571,7 +672,11 @@ func (s *Server) serveDatastarElementsStream(w http.ResponseWriter, r *http.Requ
                         }
                         _ = sse.PatchElements(html, datastar.WithSelector(selector), datastar.WithMode(mode))
 
-                        fp := strings.TrimSpace(s.bc.currentFingerprint())
+                        fp := ""
+                        bc := s.broadcaster()
+                        if bc != nil {
+                                fp = strings.TrimSpace(bc.currentFingerprint())
+                        }
                         _ = sse.MarshalAndPatchSignals(map[string]any{"wsVersion": fp})
                 }
         }
@@ -584,7 +689,11 @@ func (s *Server) serveDatastarStream(w http.ResponseWriter, r *http.Request, key
 func (s *Server) serveDatastarSignalsStream(w http.ResponseWriter, r *http.Request, key resourceKey, renderSignals func() (map[string]any, error)) {
         sse := datastar.NewSSE(w, r)
 
-        fp := strings.TrimSpace(s.bc.currentFingerprint())
+        bc := s.broadcaster()
+        fp := ""
+        if bc != nil {
+                fp = strings.TrimSpace(bc.currentFingerprint())
+        }
         _ = sse.MarshalAndPatchSignals(map[string]any{"wsVersion": fp})
 
         // Initial state snapshot.
@@ -593,7 +702,7 @@ func (s *Server) serveDatastarSignalsStream(w http.ResponseWriter, r *http.Reque
                 _ = sse.MarshalAndPatchSignals(sig)
         }
 
-        h := s.bc.hubFor(key)
+        h := bc.hubFor(key)
         ch, cancel := h.subscribe()
         defer cancel()
 
@@ -615,7 +724,11 @@ func (s *Server) serveDatastarSignalsStream(w http.ResponseWriter, r *http.Reque
                         if sig == nil {
                                 sig = map[string]any{}
                         }
-                        fp := strings.TrimSpace(s.bc.currentFingerprint())
+                        fp := ""
+                        bc := s.broadcaster()
+                        if bc != nil {
+                                fp = strings.TrimSpace(bc.currentFingerprint())
+                        }
                         sig["wsVersion"] = fp
                         _ = sse.MarshalAndPatchSignals(sig)
                 }
@@ -627,7 +740,7 @@ func (s *Server) handleWorkspaceEvents(w http.ResponseWriter, r *http.Request) {
         switch view {
         case "home":
                 s.serveDatastarStream(w, r, resourceKey{kind: "workspace"}, func() (string, error) {
-                        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+                        db, err := (store.Store{Dir: s.dir()}).Load()
                         if err != nil {
                                 return "", err
                         }
@@ -640,7 +753,7 @@ func (s *Server) handleWorkspaceEvents(w http.ResponseWriter, r *http.Request) {
                 })
         case "projects":
                 s.serveDatastarStream(w, r, resourceKey{kind: "workspace"}, func() (string, error) {
-                        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+                        db, err := (store.Store{Dir: s.dir()}).Load()
                         if err != nil {
                                 return "", err
                         }
@@ -652,14 +765,14 @@ func (s *Server) handleWorkspaceEvents(w http.ResponseWriter, r *http.Request) {
                 })
         case "agenda":
                 s.serveDatastarStream(w, r, resourceKey{kind: "workspace"}, func() (string, error) {
-                        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+                        db, err := (store.Store{Dir: s.dir()}).Load()
                         if err != nil {
                                 return "", err
                         }
                         actorID := strings.TrimSpace(s.actorForRequest(r))
                         vm := agendaVM{
                                 baseVM: s.baseVMForRequest(r, "/events?view=agenda"),
-                                Items:  agendaItems(db, actorID),
+                                Rows:   agendaRowsWeb(db, actorID),
                         }
                         vm.ActorID = actorID
                         return s.renderTemplate("agenda_main", vm)
@@ -672,10 +785,62 @@ func (s *Server) handleWorkspaceEvents(w http.ResponseWriter, r *http.Request) {
                         }
                         return s.renderTemplate("sync_main", vm)
                 })
+        case "archived":
+                s.serveDatastarStream(w, r, resourceKey{kind: "workspace"}, func() (string, error) {
+                        db, err := (store.Store{Dir: s.dir()}).Load()
+                        if err != nil {
+                                return "", err
+                        }
+                        vm := archivedVM{
+                                baseVM:  s.baseVMForRequest(r, "/events?view=archived"),
+                                Rows:    buildArchivedRows(db),
+                                Message: "",
+                        }
+                        return s.renderTemplate("archived_main", vm)
+                })
         default:
-                http.Error(w, "missing/invalid view (expected home|projects|agenda|sync)", http.StatusBadRequest)
+                http.Error(w, "missing/invalid view (expected home|projects|agenda|sync|archived)", http.StatusBadRequest)
                 return
         }
+}
+
+func (s *Server) handleNavOptions(w http.ResponseWriter, r *http.Request) {
+        dir := s.dir()
+        db, err := (store.Store{Dir: dir}).Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        st, err := (store.Store{Dir: dir}).LoadTUIState()
+        if err != nil || st == nil {
+                // best-effort: treat as empty
+                st = &store.TUIState{Version: 1}
+        }
+
+        rec := make([]navRecentItem, 0, 5)
+        seen := map[string]bool{}
+        for _, id0 := range st.RecentItemIDs {
+                id := strings.TrimSpace(id0)
+                if id == "" || seen[id] {
+                        continue
+                }
+                seen[id] = true
+                it, ok := db.FindItem(id)
+                if !ok || it == nil || it.Archived {
+                        continue
+                }
+                title := strings.TrimSpace(it.Title)
+                if title == "" {
+                        title = "(untitled)"
+                }
+                rec = append(rec, navRecentItem{ID: id, Title: title})
+                if len(rec) >= 5 {
+                        break
+                }
+        }
+
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        _ = json.NewEncoder(w).Encode(navOptionsVM{Recent: rec})
 }
 
 func (s *Server) handleProjectEvents(w http.ResponseWriter, r *http.Request) {
@@ -685,7 +850,7 @@ func (s *Server) handleProjectEvents(w http.ResponseWriter, r *http.Request) {
                 return
         }
         s.serveDatastarStream(w, r, resourceKey{kind: "project", id: id}, func() (string, error) {
-                db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+                db, err := (store.Store{Dir: s.dir()}).Load()
                 if err != nil {
                         return "", err
                 }
@@ -710,9 +875,9 @@ func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
         }
 
         // Component mode: drive the component via Datastar signals (no DOM morphing).
-        if s.cfg.OutlineMode == "component" && strings.TrimSpace(s.cfg.ComponentsDir) != "" {
+        if s.outlineMode() == "component" && strings.TrimSpace(s.componentsDir()) != "" {
                 s.serveDatastarSignalsStream(w, r, resourceKey{kind: "outline", id: id}, func() (map[string]any, error) {
-                        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+                        db, err := (store.Store{Dir: s.dir()}).Load()
                         if err != nil {
                                 return nil, err
                         }
@@ -734,7 +899,7 @@ func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
 
         // Native mode: patch only the outline container.
         s.serveDatastarElementsStream(w, r, resourceKey{kind: "outline", id: id}, "#outline-native", datastar.ElementPatchModeInner, func() (string, error) {
-                db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+                db, err := (store.Store{Dir: s.dir()}).Load()
                 if err != nil {
                         return "", err
                 }
@@ -751,15 +916,15 @@ func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
                                 items = append(items, it)
                         }
                 }
-                                openTo, endTo, openLbl, endLbl := outlineToggleTargets(*o)
-                                nodes := buildOutlineNativeNodes(db, *o, actorID)
-                                statusOptions := outlineStatusOptionsJSON(*o)
-                                actorOptions := actorOptionsJSON(db)
-                                outlineOptions := outlineOptionsJSON(db)
+                openTo, endTo, openLbl, endLbl := outlineToggleTargets(*o)
+                nodes := buildOutlineNativeNodes(db, *o, actorID)
+                statusOptions := outlineStatusOptionsJSON(*o)
+                actorOptions := actorOptionsJSON(db)
+                outlineOptions := outlineOptionsJSON(db)
 
-                                vm := outlineVM{
-                                        baseVM:              s.baseVMForRequest(r, "/outlines/"+o.ID+"/events?view=outline"),
-                                        Outline:             *o,
+                vm := outlineVM{
+                        baseVM:              s.baseVMForRequest(r, "/outlines/"+o.ID+"/events?view=outline"),
+                        Outline:             *o,
                         UseOutlineComponent: false,
                         ItemsJSON:           itemsJSON,
                         StatusLabelsJSON:    statusJSON,
@@ -770,11 +935,11 @@ func (s *Server) handleOutlineEvents(w http.ResponseWriter, r *http.Request) {
                         ToggleOpenTo:        openTo,
                         ToggleEndTo:         endTo,
                         ToggleOpenLbl:       openLbl,
-                                        ToggleEndLbl:        endLbl,
-                                        StatusOptionsJSON:   statusOptions,
-                                        ActorOptionsJSON:    actorOptions,
-                                        OutlineOptionsJSON:  outlineOptions,
-                                }
+                        ToggleEndLbl:        endLbl,
+                        StatusOptionsJSON:   statusOptions,
+                        ActorOptionsJSON:    actorOptions,
+                        OutlineOptionsJSON:  outlineOptions,
+                }
                 vm.ActorID = actorID
                 return s.renderTemplate("outline_native_inner", vm)
         })
@@ -787,20 +952,23 @@ func (s *Server) handleItemEvents(w http.ResponseWriter, r *http.Request) {
                 return
         }
         s.serveDatastarStream(w, r, resourceKey{kind: "item", id: id}, func() (string, error) {
-                db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+                db, err := (store.Store{Dir: s.dir()}).Load()
                 if err != nil {
                         return "", err
                 }
                 it, ok := db.FindItem(id)
-                if !ok || it == nil || it.Archived {
+                if !ok || it == nil {
                         return "", errors.New("item not found")
                 }
+                itemReadOnly := it.Archived
 
                 comments := db.CommentsForItem(id)
                 actorID := strings.TrimSpace(s.actorForRequest(r))
-                canEdit := actorID != "" && perm.CanEditItem(db, actorID, it)
+                canEdit := !itemReadOnly && actorID != "" && perm.CanEditItem(db, actorID, it)
                 statusDefs := []model.OutlineStatusDef{}
+                var outline *model.Outline
                 if o, ok := db.FindOutline(it.OutlineID); ok && o != nil {
+                        outline = o
                         statusDefs = o.StatusDefs
                 }
 
@@ -816,20 +984,50 @@ func (s *Server) handleItemEvents(w http.ResponseWriter, r *http.Request) {
                 if it.AssignedActorID != nil {
                         assignedID = strings.TrimSpace(*it.AssignedActorID)
                 }
+                assignedLabel := ""
+                if assignedID != "" {
+                        assignedLabel = actorDisplayLabel(db, assignedID)
+                }
+                statusLabel := strings.TrimSpace(it.StatusID)
+                if outline != nil {
+                        statusLabelByID := map[string]string{}
+                        for _, sd := range outline.StatusDefs {
+                                sid := strings.TrimSpace(sd.ID)
+                                if sid == "" {
+                                        continue
+                                }
+                                lbl := strings.TrimSpace(sd.Label)
+                                if lbl == "" {
+                                        lbl = sid
+                                }
+                                statusLabelByID[sid] = lbl
+                        }
+                        if mapped, ok := statusLabelByID[statusLabel]; ok && strings.TrimSpace(mapped) != "" {
+                                statusLabel = strings.TrimSpace(mapped)
+                        }
+                }
+                if statusLabel == "" {
+                        statusLabel = "(none)"
+                }
 
                 vm := itemVM{
-                        baseVM:       s.baseVMForRequest(r, "/items/"+it.ID+"/events?view=item"),
-                        Item:         *it,
-                        AssignedID:   assignedID,
-                        ActorOptions: []actorOption(nil),
-                        Comments:     comments,
-                        ReplyTo:      "",
-                        Worklog:      worklog,
+                        baseVM:        s.baseVMForRequest(r, "/items/"+it.ID+"/events?view=item"),
+                        Item:          *it,
+                        AssignedID:    assignedID,
+                        AssignedLabel: assignedLabel,
+                        StatusLabel:   statusLabel,
+                        ActorOptions:  []actorOption(nil),
+                        Comments:      comments,
+                        ReplyTo:       "",
+                        Worklog:       worklog,
 
                         CanEdit:        canEdit,
                         StatusDefs:     statusDefs,
                         ErrorMessage:   "",
                         SuccessMessage: "",
+                }
+                if itemReadOnly {
+                        vm.ReadOnly = true
                 }
                 vm.ActorOptions = nil
                 if db != nil {
@@ -896,7 +1094,7 @@ func unarchivedOutlines(outlines []model.Outline, projectID string) []model.Outl
 }
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
-        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        db, err := (store.Store{Dir: s.dir()}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -922,18 +1120,21 @@ type loginVM struct {
 }
 
 func (s *Server) handleLoginGet(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.AuthMode != "dev" && s.cfg.AuthMode != "magic" {
+        authMode := s.authMode()
+        dir := s.dir()
+        ws := s.workspaceName()
+        if authMode != "dev" && authMode != "magic" {
                 http.NotFound(w, r)
                 return
         }
-        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        db, err := (store.Store{Dir: dir}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
         }
 
         actors := []model.Actor{}
-        if s.cfg.AuthMode == "dev" {
+        if authMode == "dev" {
                 for _, a := range db.Actors {
                         if a.Kind == model.ActorKindHuman {
                                 actors = append(actors, a)
@@ -943,20 +1144,23 @@ func (s *Server) handleLoginGet(w http.ResponseWriter, r *http.Request) {
 
         w.Header().Set("Content-Type", "text/html; charset=utf-8")
         tpl := "login_dev.html"
-        if s.cfg.AuthMode == "magic" {
+        if authMode == "magic" {
                 tpl = "login_magic.html"
         }
         _ = s.tmpl.ExecuteTemplate(w, tpl, loginVM{
                 Now:       time.Now().Format(time.RFC3339),
-                Workspace: s.cfg.Workspace,
-                Dir:       s.cfg.Dir,
+                Workspace: ws,
+                Dir:       dir,
                 Actors:    actors,
-                AuthMode:  s.cfg.AuthMode,
+                AuthMode:  authMode,
         })
 }
 
 func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.AuthMode != "dev" && s.cfg.AuthMode != "magic" {
+        authMode := s.authMode()
+        dir := s.dir()
+        ws := s.workspaceName()
+        if authMode != "dev" && authMode != "magic" {
                 http.NotFound(w, r)
                 return
         }
@@ -965,19 +1169,19 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        db, err := (store.Store{Dir: dir}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
         }
 
-        secret, err := loadOrInitSecretKey(s.cfg.Dir)
+        secret, err := loadOrInitSecretKey(dir)
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
         }
 
-        switch s.cfg.AuthMode {
+        switch authMode {
         case "dev":
                 actorID := strings.TrimSpace(r.Form.Get("actor"))
                 if actorID == "" {
@@ -989,10 +1193,10 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
                         w.Header().Set("Content-Type", "text/html; charset=utf-8")
                         _ = s.tmpl.ExecuteTemplate(w, "login_dev.html", loginVM{
                                 Now:       time.Now().Format(time.RFC3339),
-                                Workspace: s.cfg.Workspace,
-                                Dir:       s.cfg.Dir,
+                                Workspace: ws,
+                                Dir:       dir,
                                 Actors:    db.Actors,
-                                AuthMode:  s.cfg.AuthMode,
+                                AuthMode:  authMode,
                                 Error:     "unknown actor",
                         })
                         return
@@ -1017,7 +1221,7 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
                         http.Redirect(w, r, "/login", http.StatusSeeOther)
                         return
                 }
-                users, _, err := store.LoadUsers(s.cfg.Dir)
+                users, _, err := store.LoadUsers(dir)
                 if err != nil {
                         http.Error(w, err.Error(), http.StatusInternalServerError)
                         return
@@ -1027,9 +1231,9 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
                         w.Header().Set("Content-Type", "text/html; charset=utf-8")
                         _ = s.tmpl.ExecuteTemplate(w, "login_magic.html", loginVM{
                                 Now:       time.Now().Format(time.RFC3339),
-                                Workspace: s.cfg.Workspace,
-                                Dir:       s.cfg.Dir,
-                                AuthMode:  s.cfg.AuthMode,
+                                Workspace: ws,
+                                Dir:       dir,
+                                AuthMode:  authMode,
                                 Error:     "email is not registered in meta/users.json",
                         })
                         return
@@ -1046,13 +1250,13 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
                 }
 
                 link := "http://" + r.Host + "/verify?token=" + tok
-                _ = writeOutboxEmail(s.cfg.Dir, email, "Clarity login link", link)
+                _ = writeOutboxEmail(dir, email, "Clarity login link", link)
 
                 w.Header().Set("Content-Type", "text/html; charset=utf-8")
                 _ = s.tmpl.ExecuteTemplate(w, "login_magic_sent.html", map[string]any{
                         "Now":       time.Now().Format(time.RFC3339),
-                        "Workspace": s.cfg.Workspace,
-                        "Dir":       s.cfg.Dir,
+                        "Workspace": ws,
+                        "Dir":       dir,
                         "Email":     email,
                         "Link":      link,
                 })
@@ -1064,7 +1268,8 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogoutPost(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.AuthMode != "dev" && s.cfg.AuthMode != "magic" {
+        authMode := s.authMode()
+        if authMode != "dev" && authMode != "magic" {
                 http.NotFound(w, r)
                 return
         }
@@ -1080,7 +1285,9 @@ func (s *Server) handleLogoutPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVerifyGet(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.AuthMode != "magic" {
+        authMode := s.authMode()
+        dir := s.dir()
+        if authMode != "magic" {
                 http.NotFound(w, r)
                 return
         }
@@ -1090,7 +1297,7 @@ func (s *Server) handleVerifyGet(w http.ResponseWriter, r *http.Request) {
                 http.Error(w, "missing token", http.StatusBadRequest)
                 return
         }
-        secret, err := loadOrInitSecretKey(s.cfg.Dir)
+        secret, err := loadOrInitSecretKey(dir)
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -1101,7 +1308,7 @@ func (s *Server) handleVerifyGet(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        users, _, err := store.LoadUsers(s.cfg.Dir)
+        users, _, err := store.LoadUsers(dir)
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -1129,21 +1336,50 @@ func (s *Server) handleVerifyGet(w http.ResponseWriter, r *http.Request) {
 
 type agendaVM struct {
         baseVM
-        Items []model.Item
+        Rows []agendaRow
+}
+
+type agendaRow struct {
+        Kind string // heading|item
+
+        ProjectID   string
+        ProjectName string
+        OutlineID   string
+        OutlineName string
+
+        // Item row only.
+        ItemID        string
+        Title         string
+        StatusID      string
+        StatusLabel   string
+        IsEndState    bool
+        CanEdit       bool
+        AssignedLabel string
+        Priority      bool
+        OnHold        bool
+        DueDate       string
+        DueTime       string
+        SchDate       string
+        SchTime       string
+        Tags          []string
+
+        Depth       int
+        IndentPx    int
+        HasChildren bool
 }
 
 func (s *Server) handleAgenda(w http.ResponseWriter, r *http.Request) {
-        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        db, err := (store.Store{Dir: s.dir()}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
         }
 
         actorID := strings.TrimSpace(s.actorForRequest(r))
-        items := agendaItems(db, actorID)
+        rows := agendaRowsWeb(db, actorID)
         vm := agendaVM{
                 baseVM: s.baseVMForRequest(r, "/events?view=agenda"),
-                Items:  items,
+                Rows:   rows,
         }
         // Preserve explicit actor resolution semantics used elsewhere.
         vm.ActorID = actorID
@@ -1156,7 +1392,7 @@ type captureOutlineOption struct {
 }
 
 func (s *Server) handleCaptureOptions(w http.ResponseWriter, r *http.Request) {
-        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        db, err := (store.Store{Dir: s.dir()}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -1213,7 +1449,7 @@ type captureCreateReq struct {
 }
 
 func (s *Server) handleCaptureCreate(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.ReadOnly {
+        if s.readOnly() {
                 http.Error(w, "read-only", http.StatusForbidden)
                 return
         }
@@ -1237,7 +1473,7 @@ func (s *Server) handleCaptureCreate(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        st := store.Store{Dir: s.cfg.Dir}
+        st := store.Store{Dir: s.dir()}
         db, err := st.Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1288,12 +1524,12 @@ func (s *Server) handleCaptureCreate(w http.ResponseWriter, r *http.Request) {
                 http.Error(w, err.Error(), http.StatusConflict)
                 return
         }
-        if s.autoCommit != nil {
+        if c := s.committer(); c != nil {
                 actorLabel := strings.TrimSpace(actorID)
                 if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
                         actorLabel = strings.TrimSpace(a.Name)
                 }
-                s.autoCommit.Notify(actorLabel)
+                c.Notify(actorLabel)
         }
 
         w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -1319,7 +1555,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSyncInit(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.ReadOnly {
+        if s.readOnly() {
                 http.Error(w, "read-only", http.StatusForbidden)
                 return
         }
@@ -1327,7 +1563,8 @@ func (s *Server) handleSyncInit(w http.ResponseWriter, r *http.Request) {
         ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
         defer cancel()
 
-        st, err := gitrepo.GetStatus(ctx, s.cfg.Dir)
+        dir := s.dir()
+        st, err := gitrepo.GetStatus(ctx, dir)
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -1337,7 +1574,7 @@ func (s *Server) handleSyncInit(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        if err := gitrepo.Init(ctx, s.cfg.Dir); err != nil {
+        if err := gitrepo.Init(ctx, dir); err != nil {
                 http.Error(w, err.Error(), http.StatusConflict)
                 return
         }
@@ -1345,7 +1582,7 @@ func (s *Server) handleSyncInit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSyncRemote(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.ReadOnly {
+        if s.readOnly() {
                 http.Error(w, "read-only", http.StatusForbidden)
                 return
         }
@@ -1363,7 +1600,8 @@ func (s *Server) handleSyncRemote(w http.ResponseWriter, r *http.Request) {
         ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
         defer cancel()
 
-        st, err := gitrepo.GetStatus(ctx, s.cfg.Dir)
+        dir := s.dir()
+        st, err := gitrepo.GetStatus(ctx, dir)
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -1377,7 +1615,7 @@ func (s *Server) handleSyncRemote(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        if err := gitrepo.SetRemoteURL(ctx, s.cfg.Dir, remoteName, remoteURL); err != nil {
+        if err := gitrepo.SetRemoteURL(ctx, dir, remoteName, remoteURL); err != nil {
                 http.Error(w, err.Error(), http.StatusConflict)
                 return
         }
@@ -1385,7 +1623,7 @@ func (s *Server) handleSyncRemote(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSyncPushUpstream(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.ReadOnly {
+        if s.readOnly() {
                 http.Error(w, "read-only", http.StatusForbidden)
                 return
         }
@@ -1398,7 +1636,8 @@ func (s *Server) handleSyncPushUpstream(w http.ResponseWriter, r *http.Request) 
         ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
         defer cancel()
 
-        before, err := gitrepo.GetStatus(ctx, s.cfg.Dir)
+        dir := s.dir()
+        before, err := gitrepo.GetStatus(ctx, dir)
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -1412,7 +1651,7 @@ func (s *Server) handleSyncPushUpstream(w http.ResponseWriter, r *http.Request) 
                 return
         }
 
-        if err := gitrepo.PushSetUpstream(ctx, s.cfg.Dir, remoteName, "HEAD"); err != nil {
+        if err := gitrepo.PushSetUpstream(ctx, dir, remoteName, "HEAD"); err != nil {
                 http.Error(w, err.Error(), http.StatusConflict)
                 return
         }
@@ -1420,7 +1659,7 @@ func (s *Server) handleSyncPushUpstream(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.ReadOnly {
+        if s.readOnly() {
                 http.Error(w, "read-only", http.StatusForbidden)
                 return
         }
@@ -1428,7 +1667,8 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
         ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
         defer cancel()
 
-        before, err := gitrepo.GetStatus(ctx, s.cfg.Dir)
+        dir := s.dir()
+        before, err := gitrepo.GetStatus(ctx, dir)
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -1446,7 +1686,7 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        if err := gitrepo.PullRebase(ctx, s.cfg.Dir); err != nil {
+        if err := gitrepo.PullRebase(ctx, dir); err != nil {
                 http.Error(w, err.Error(), http.StatusConflict)
                 return
         }
@@ -1454,7 +1694,7 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.ReadOnly {
+        if s.readOnly() {
                 http.Error(w, "read-only", http.StatusForbidden)
                 return
         }
@@ -1462,7 +1702,8 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
         ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
         defer cancel()
 
-        before, err := gitrepo.GetStatus(ctx, s.cfg.Dir)
+        dir := s.dir()
+        before, err := gitrepo.GetStatus(ctx, dir)
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -1484,16 +1725,16 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
         committed := false
         var commitErr error
         if msg == "" {
-                db, loadErr := (store.Store{Dir: s.cfg.Dir}).Load()
+                db, loadErr := (store.Store{Dir: dir}).Load()
                 actorLabel := strings.TrimSpace(s.actorForRequest(r))
                 if loadErr == nil && db != nil && actorLabel != "" {
                         if a, ok := db.FindActor(actorLabel); ok && a != nil && strings.TrimSpace(a.Name) != "" {
                                 actorLabel = strings.TrimSpace(a.Name)
                         }
                 }
-                committed, commitErr = gitrepo.CommitWorkspaceCanonicalAuto(ctx, s.cfg.Dir, actorLabel)
+                committed, commitErr = gitrepo.CommitWorkspaceCanonicalAuto(ctx, dir, actorLabel)
         } else {
-                committed, commitErr = gitrepo.CommitWorkspaceCanonical(ctx, s.cfg.Dir, msg)
+                committed, commitErr = gitrepo.CommitWorkspaceCanonical(ctx, dir, msg)
         }
         if commitErr != nil {
                 http.Error(w, commitErr.Error(), http.StatusConflict)
@@ -1502,26 +1743,26 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
 
         // Pull/rebase (best-effort; same as CLI's default).
         pulled := false
-        cur, err := gitrepo.GetStatus(ctx, s.cfg.Dir)
+        cur, err := gitrepo.GetStatus(ctx, dir)
         if err == nil && strings.TrimSpace(cur.Upstream) != "" {
                 if !cur.Unmerged && !cur.InProgress && !cur.DirtyTracked {
-                        if err := gitrepo.PullRebase(ctx, s.cfg.Dir); err == nil {
+                        if err := gitrepo.PullRebase(ctx, dir); err == nil {
                                 pulled = true
                         }
                 }
         }
 
         pushed := false
-        if err := gitrepo.Push(ctx, s.cfg.Dir); err == nil {
+        if err := gitrepo.Push(ctx, dir); err == nil {
                 pushed = true
         } else if gitrepo.IsNonFastForwardPushErr(err) {
                 // Retry once: pull --rebase + push.
-                if err := gitrepo.PullRebase(ctx, s.cfg.Dir); err != nil {
+                if err := gitrepo.PullRebase(ctx, dir); err != nil {
                         http.Error(w, err.Error(), http.StatusConflict)
                         return
                 }
                 pulled = true
-                if err := gitrepo.Push(ctx, s.cfg.Dir); err != nil {
+                if err := gitrepo.Push(ctx, dir); err != nil {
                         http.Error(w, err.Error(), http.StatusConflict)
                         return
                 }
@@ -1548,13 +1789,296 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
         http.Redirect(w, r, "/sync?msg="+strings.Join(parts, "%20%2B%20")+"%20ok", http.StatusSeeOther)
 }
 
+type workspacesVM struct {
+        baseVM
+        Entries          []store.WorkspaceEntry
+        CurrentWorkspace string
+        Message          string
+}
+
+func (s *Server) switchWorkspace(name string) error {
+        name, err := store.NormalizeWorkspaceName(name)
+        if err != nil {
+                return err
+        }
+
+        dir, err := store.WorkspaceDir(name)
+        if err != nil {
+                return err
+        }
+        st := store.Store{Dir: dir}
+        if err := st.Ensure(); err != nil {
+                return err
+        }
+
+        // Update global config (best-effort MRU).
+        cfg, err := store.LoadConfig()
+        if err == nil && cfg != nil {
+                if cfg.Workspaces != nil {
+                        if ref, ok := cfg.Workspaces[name]; ok {
+                                ref.LastOpened = time.Now().UTC().Format(time.RFC3339Nano)
+                                cfg.Workspaces[name] = ref
+                        }
+                }
+                cfg.CurrentWorkspace = name
+                _ = store.SaveConfig(cfg)
+        }
+
+        // Swap server workspace (affects all subsequent requests).
+        s.mu.Lock()
+        oldBC := s.bc
+        s.cfg.Dir = dir
+        s.cfg.Workspace = name
+        // Restart broadcaster for the new workspace root.
+        s.bc = newResourceBroadcaster(dir)
+        go s.bc.watchLoop()
+        // Reset auto-commit for the new workspace dir.
+        s.autoCommit = nil
+        if !s.cfg.ReadOnly && gitrepo.AutoCommitEnabled() {
+                s.autoCommit = gitrepo.NewDebouncedCommitter(gitrepo.DebouncedCommitterOpts{
+                        WorkspaceDir:   dir,
+                        Debounce:       8 * time.Second,
+                        AutoPush:       gitrepo.AutoPushEnabled(),
+                        AutoPullRebase: gitrepo.AutoPullRebaseEnabled(),
+                })
+        }
+        s.mu.Unlock()
+
+        if oldBC != nil {
+                oldBC.Stop()
+        }
+        return nil
+}
+
+func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
+        cfg, _ := store.LoadConfig()
+        current := ""
+        if cfg != nil {
+                current = strings.TrimSpace(cfg.CurrentWorkspace)
+        }
+        if current == "" {
+                current = strings.TrimSpace(s.workspaceName())
+        }
+        if current == "" {
+                current = "default"
+        }
+
+        ents, err := store.ListWorkspaceEntries()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        msg := strings.TrimSpace(r.URL.Query().Get("msg"))
+        vm := workspacesVM{
+                baseVM:           s.baseVMForRequest(r, ""),
+                Entries:          ents,
+                CurrentWorkspace: current,
+                Message:          msg,
+        }
+        s.writeHTMLTemplate(w, "workspaces.html", vm)
+}
+
+func (s *Server) handleWorkspacesUse(w http.ResponseWriter, r *http.Request) {
+        if err := r.ParseForm(); err != nil {
+                http.Error(w, err.Error(), http.StatusBadRequest)
+                return
+        }
+        name := strings.TrimSpace(r.Form.Get("name"))
+        if name == "" {
+                http.Error(w, "missing workspace name", http.StatusBadRequest)
+                return
+        }
+        if err := s.switchWorkspace(name); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        http.Redirect(w, r, "/?msg=switched%20workspace", http.StatusSeeOther)
+}
+
+type archivedVM struct {
+        baseVM
+        Rows    []archivedRow
+        Message string
+}
+
+type archivedRow struct {
+        Kind        string // heading|project|outline|item
+        Label       string
+        ProjectName string
+        OutlineName string
+        Title       string
+        ProjectID   string
+        OutlineID   string
+        ItemID      string
+}
+
+func outlineDisplayNameWeb(o model.Outline) string {
+        if o.Name != nil {
+                if n := strings.TrimSpace(*o.Name); n != "" {
+                        return n
+                }
+        }
+        return "(unnamed outline)"
+}
+
+func buildArchivedRows(db *store.DB) []archivedRow {
+        if db == nil {
+                return []archivedRow{{Kind: "heading", Label: "No archived content"}}
+        }
+
+        projectNameByID := map[string]string{}
+        for _, p := range db.Projects {
+                projectNameByID[p.ID] = strings.TrimSpace(p.Name)
+        }
+        outlineNameByID := map[string]string{}
+        for _, o := range db.Outlines {
+                outlineNameByID[o.ID] = outlineDisplayNameWeb(o)
+        }
+
+        projects := make([]model.Project, 0, len(db.Projects))
+        for _, p := range db.Projects {
+                if p.Archived {
+                        projects = append(projects, p)
+                }
+        }
+        sort.Slice(projects, func(i, j int) bool {
+                ni := strings.ToLower(strings.TrimSpace(projects[i].Name))
+                nj := strings.ToLower(strings.TrimSpace(projects[j].Name))
+                if ni == nj {
+                        return projects[i].ID < projects[j].ID
+                }
+                if ni == "" {
+                        return false
+                }
+                if nj == "" {
+                        return true
+                }
+                return ni < nj
+        })
+
+        outlines := make([]model.Outline, 0, len(db.Outlines))
+        for _, o := range db.Outlines {
+                if o.Archived {
+                        outlines = append(outlines, o)
+                }
+        }
+        sort.Slice(outlines, func(i, j int) bool {
+                pi := strings.ToLower(strings.TrimSpace(projectNameByID[outlines[i].ProjectID]))
+                pj := strings.ToLower(strings.TrimSpace(projectNameByID[outlines[j].ProjectID]))
+                if pi != pj {
+                        if pi == "" {
+                                return false
+                        }
+                        if pj == "" {
+                                return true
+                        }
+                        return pi < pj
+                }
+                oi := strings.ToLower(strings.TrimSpace(outlineDisplayNameWeb(outlines[i])))
+                oj := strings.ToLower(strings.TrimSpace(outlineDisplayNameWeb(outlines[j])))
+                if oi == oj {
+                        return outlines[i].ID < outlines[j].ID
+                }
+                if oi == "" {
+                        return false
+                }
+                if oj == "" {
+                        return true
+                }
+                return oi < oj
+        })
+
+        itemsOnly := make([]model.Item, 0, len(db.Items))
+        for _, it := range db.Items {
+                if it.Archived {
+                        itemsOnly = append(itemsOnly, it)
+                }
+        }
+        sort.Slice(itemsOnly, func(i, j int) bool {
+                pi := strings.ToLower(strings.TrimSpace(projectNameByID[itemsOnly[i].ProjectID]))
+                pj := strings.ToLower(strings.TrimSpace(projectNameByID[itemsOnly[j].ProjectID]))
+                if pi != pj {
+                        if pi == "" {
+                                return false
+                        }
+                        if pj == "" {
+                                return true
+                        }
+                        return pi < pj
+                }
+                oi := strings.ToLower(strings.TrimSpace(outlineNameByID[itemsOnly[i].OutlineID]))
+                oj := strings.ToLower(strings.TrimSpace(outlineNameByID[itemsOnly[j].OutlineID]))
+                if oi != oj {
+                        if oi == "" {
+                                return false
+                        }
+                        if oj == "" {
+                                return true
+                        }
+                        return oi < oj
+                }
+                ti := strings.ToLower(strings.TrimSpace(itemsOnly[i].Title))
+                tj := strings.ToLower(strings.TrimSpace(itemsOnly[j].Title))
+                if ti == tj {
+                        return itemsOnly[i].ID < itemsOnly[j].ID
+                }
+                if ti == "" {
+                        return false
+                }
+                if tj == "" {
+                        return true
+                }
+                return ti < tj
+        })
+
+        if len(projects) == 0 && len(outlines) == 0 && len(itemsOnly) == 0 {
+                return []archivedRow{{Kind: "heading", Label: "No archived content"}}
+        }
+
+        rows := make([]archivedRow, 0, 8+len(projects)+len(outlines)+len(itemsOnly))
+        rows = append(rows, archivedRow{Kind: "heading", Label: "Archived projects"})
+        for _, p := range projects {
+                rows = append(rows, archivedRow{Kind: "project", ProjectID: p.ID, ProjectName: strings.TrimSpace(p.Name)})
+        }
+        rows = append(rows, archivedRow{Kind: "heading", Label: "Archived outlines"})
+        for _, o := range outlines {
+                rows = append(rows, archivedRow{Kind: "outline", OutlineID: o.ID, ProjectName: projectNameByID[o.ProjectID], OutlineName: outlineDisplayNameWeb(o)})
+        }
+        rows = append(rows, archivedRow{Kind: "heading", Label: "Archived items"})
+        for _, it := range itemsOnly {
+                rows = append(rows, archivedRow{
+                        Kind:        "item",
+                        ProjectName: projectNameByID[it.ProjectID],
+                        OutlineName: outlineNameByID[it.OutlineID],
+                        Title:       strings.TrimSpace(it.Title),
+                        ItemID:      it.ID,
+                })
+        }
+        return rows
+}
+
+func (s *Server) handleArchived(w http.ResponseWriter, r *http.Request) {
+        db, err := (store.Store{Dir: s.dir()}).Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        msg := strings.TrimSpace(r.URL.Query().Get("msg"))
+        vm := archivedVM{
+                baseVM:  s.baseVMForRequest(r, "/events?view=archived"),
+                Rows:    buildArchivedRows(db),
+                Message: msg,
+        }
+        s.writeHTMLTemplate(w, "archived.html", vm)
+}
+
 type projectsVM struct {
         baseVM
         Projects []model.Project
 }
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
-        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        db, err := (store.Store{Dir: s.dir()}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -1580,7 +2104,7 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        db, err := (store.Store{Dir: s.dir()}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -1626,8 +2150,8 @@ type outlineVM struct {
         ToggleOpenLbl string
         ToggleEndLbl  string
 
-        StatusOptionsJSON template.HTMLAttr
-        ActorOptionsJSON  template.HTMLAttr
+        StatusOptionsJSON  template.HTMLAttr
+        ActorOptionsJSON   template.HTMLAttr
         OutlineOptionsJSON template.HTMLAttr
 }
 
@@ -1924,7 +2448,7 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        db, err := (store.Store{Dir: s.dir()}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -1947,7 +2471,7 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
         }
 
         actorID := strings.TrimSpace(s.actorForRequest(r))
-        useComponent := s.cfg.OutlineMode == "component" && strings.TrimSpace(s.cfg.ComponentsDir) != ""
+        useComponent := s.outlineMode() == "component" && strings.TrimSpace(s.componentsDir()) != ""
         itemsJSON, statusJSON, assigneesJSON, tagsJSON := outlineComponentPayload(db, *o, actorID)
         openTo, endTo, openLbl, endLbl := outlineToggleTargets(*o)
         nodes := buildOutlineNativeNodes(db, *o, actorID)
@@ -1978,7 +2502,7 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleOutlineItemCreate(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.ReadOnly {
+        if s.readOnly() {
                 http.Error(w, "read-only", http.StatusForbidden)
                 return
         }
@@ -2005,7 +2529,7 @@ func (s *Server) handleOutlineItemCreate(w http.ResponseWriter, r *http.Request)
                 return
         }
 
-        st := store.Store{Dir: s.cfg.Dir}
+        st := store.Store{Dir: s.dir()}
         db, err := st.Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -2055,12 +2579,12 @@ func (s *Server) handleOutlineItemCreate(w http.ResponseWriter, r *http.Request)
                 http.Error(w, err.Error(), http.StatusConflict)
                 return
         }
-        if s.autoCommit != nil {
+        if c := s.committer(); c != nil {
                 actorLabel := strings.TrimSpace(actorID)
                 if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
                         actorLabel = strings.TrimSpace(a.Name)
                 }
-                s.autoCommit.Notify(actorLabel)
+                c.Notify(actorLabel)
         }
 
         http.Redirect(w, r, "/outlines/"+outlineID, http.StatusSeeOther)
@@ -2295,7 +2819,7 @@ type createdItem struct {
 }
 
 func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.ReadOnly {
+        if s.readOnly() {
                 http.Error(w, "read-only", http.StatusForbidden)
                 return
         }
@@ -2324,7 +2848,7 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                 req.Ops[i].Type = strings.TrimSpace(req.Ops[i].Type)
         }
 
-        st := store.Store{Dir: s.cfg.Dir}
+        st := store.Store{Dir: s.dir()}
         db, err := st.Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -2922,13 +3446,13 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                                 changed = true
                         }
 
-                                case "outline:move":
-                                        var d struct {
-                                                ID       string  `json:"id"`
-                                                ParentID *string `json:"parentId"`
-                                                BeforeID *string `json:"beforeId"`
-                                                AfterID  *string `json:"afterId"`
-                                        }
+                case "outline:move":
+                        var d struct {
+                                ID       string  `json:"id"`
+                                ParentID *string `json:"parentId"`
+                                BeforeID *string `json:"beforeId"`
+                                AfterID  *string `json:"afterId"`
+                        }
                         if err := json.Unmarshal(op.Detail, &d); err != nil {
                                 http.Error(w, err.Error(), http.StatusBadRequest)
                                 return
@@ -2950,64 +3474,64 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                         if d.AfterID != nil {
                                 after = strings.TrimSpace(*d.AfterID)
                         }
-                                        if err := applyItemMoveOrReparent(db, actorID, itemID, outlineID, parentID, before, after, now, st); err != nil {
-                                                http.Error(w, err.Error(), http.StatusConflict)
-                                                return
-                                        }
-                                        changed = true
+                        if err := applyItemMoveOrReparent(db, actorID, itemID, outlineID, parentID, before, after, now, st); err != nil {
+                                http.Error(w, err.Error(), http.StatusConflict)
+                                return
+                        }
+                        changed = true
 
-                                case "outline:move_outline":
-                                        var d struct {
-                                                ID                      string `json:"id"`
-                                                ToOutlineID             string `json:"toOutlineId"`
-                                                To                      string `json:"to"`
-                                                StatusOverride          string `json:"status"`
-                                                SetStatus               string `json:"setStatus"`
-                                                ApplyStatusToInvalidSub bool   `json:"applyStatusToInvalidSubtree"`
-                                        }
-                                        if err := json.Unmarshal(op.Detail, &d); err != nil {
-                                                http.Error(w, err.Error(), http.StatusBadRequest)
-                                                return
-                                        }
-                                        itemID := strings.TrimSpace(d.ID)
-                                        if itemID == "" {
-                                                http.Error(w, "missing id", http.StatusBadRequest)
-                                                return
-                                        }
-                                        to := strings.TrimSpace(d.ToOutlineID)
-                                        if to == "" {
-                                                to = strings.TrimSpace(d.To)
-                                        }
-                                        if to == "" {
-                                                http.Error(w, "missing toOutlineId", http.StatusBadRequest)
-                                                return
-                                        }
-                                        it, ok := db.FindItem(itemID)
-                                        if !ok || it == nil || it.Archived || it.OutlineID != outlineID {
-                                                http.NotFound(w, r)
-                                                return
-                                        }
-                                        statusOverride := strings.TrimSpace(d.StatusOverride)
-                                        if statusOverride == "" {
-                                                statusOverride = strings.TrimSpace(d.SetStatus)
-                                        }
-                                        changed2, payload, err := mutate.MoveItemToOutline(db, actorID, itemID, to, statusOverride, d.ApplyStatusToInvalidSub, now)
-                                        if err != nil {
-                                                http.Error(w, err.Error(), http.StatusConflict)
-                                                return
-                                        }
-                                        if changed2 {
-                                                if err := st.AppendEvent(actorID, "item.move_outline", itemID, payload); err != nil {
-                                                        http.Error(w, err.Error(), http.StatusConflict)
-                                                        return
-                                                }
-                                                changed = true
-                                        }
-
-                                default:
-                                        http.Error(w, "unsupported type: "+op.Type, http.StatusBadRequest)
+                case "outline:move_outline":
+                        var d struct {
+                                ID                      string `json:"id"`
+                                ToOutlineID             string `json:"toOutlineId"`
+                                To                      string `json:"to"`
+                                StatusOverride          string `json:"status"`
+                                SetStatus               string `json:"setStatus"`
+                                ApplyStatusToInvalidSub bool   `json:"applyStatusToInvalidSubtree"`
+                        }
+                        if err := json.Unmarshal(op.Detail, &d); err != nil {
+                                http.Error(w, err.Error(), http.StatusBadRequest)
+                                return
+                        }
+                        itemID := strings.TrimSpace(d.ID)
+                        if itemID == "" {
+                                http.Error(w, "missing id", http.StatusBadRequest)
+                                return
+                        }
+                        to := strings.TrimSpace(d.ToOutlineID)
+                        if to == "" {
+                                to = strings.TrimSpace(d.To)
+                        }
+                        if to == "" {
+                                http.Error(w, "missing toOutlineId", http.StatusBadRequest)
+                                return
+                        }
+                        it, ok := db.FindItem(itemID)
+                        if !ok || it == nil || it.Archived || it.OutlineID != outlineID {
+                                http.NotFound(w, r)
+                                return
+                        }
+                        statusOverride := strings.TrimSpace(d.StatusOverride)
+                        if statusOverride == "" {
+                                statusOverride = strings.TrimSpace(d.SetStatus)
+                        }
+                        changed2, payload, err := mutate.MoveItemToOutline(db, actorID, itemID, to, statusOverride, d.ApplyStatusToInvalidSub, now)
+                        if err != nil {
+                                http.Error(w, err.Error(), http.StatusConflict)
+                                return
+                        }
+                        if changed2 {
+                                if err := st.AppendEvent(actorID, "item.move_outline", itemID, payload); err != nil {
+                                        http.Error(w, err.Error(), http.StatusConflict)
                                         return
                                 }
+                                changed = true
+                        }
+
+                default:
+                        http.Error(w, "unsupported type: "+op.Type, http.StatusBadRequest)
+                        return
+                }
         }
 
         if changed {
@@ -3015,12 +3539,12 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                         http.Error(w, err.Error(), http.StatusConflict)
                         return
                 }
-                if s.autoCommit != nil {
+                if c := s.committer(); c != nil {
                         actorLabel := strings.TrimSpace(actorID)
                         if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
                                 actorLabel = strings.TrimSpace(a.Name)
                         }
-                        s.autoCommit.Notify(actorLabel)
+                        c.Notify(actorLabel)
                 }
         }
 
@@ -3423,12 +3947,14 @@ func isAncestor(db *store.DB, itemID, ancestorID string) bool {
 
 type itemVM struct {
         baseVM
-        Item         model.Item
-        AssignedID   string
-        ActorOptions []actorOption
-        Comments     []model.Comment
-        ReplyTo      string
-        Worklog      []model.WorklogEntry
+        Item          model.Item
+        AssignedID    string
+        AssignedLabel string
+        StatusLabel   string
+        ActorOptions  []actorOption
+        Comments      []model.Comment
+        ReplyTo       string
+        Worklog       []model.WorklogEntry
 
         TagsInput         string
         DueDate           string
@@ -3451,7 +3977,8 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        dir := s.dir()
+        db, err := (store.Store{Dir: dir}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -3461,17 +3988,16 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 http.NotFound(w, r)
                 return
         }
-        if it.Archived {
-                http.NotFound(w, r)
-                return
-        }
+        itemReadOnly := it.Archived
 
         comments := db.CommentsForItem(itemID)
         actorID := strings.TrimSpace(s.actorForRequest(r))
-        canEdit := actorID != "" && perm.CanEditItem(db, actorID, it)
+        canEdit := !itemReadOnly && actorID != "" && perm.CanEditItem(db, actorID, it)
         statusDefs := []model.OutlineStatusDef{}
         statusOptionsJSON := template.HTMLAttr("[]")
+        var outline *model.Outline
         if o, ok := db.FindOutline(it.OutlineID); ok && o != nil {
+                outline = o
                 statusDefs = o.StatusDefs
                 statusOptionsJSON = outlineStatusOptionsJSON(*o)
         }
@@ -3503,6 +4029,31 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
         assignedID := ""
         if it.AssignedActorID != nil {
                 assignedID = strings.TrimSpace(*it.AssignedActorID)
+        }
+        assignedLabel := ""
+        if assignedID != "" {
+                assignedLabel = actorDisplayLabel(db, assignedID)
+        }
+        statusLabel := strings.TrimSpace(it.StatusID)
+        if outline != nil {
+                statusLabelByID := map[string]string{}
+                for _, sd := range outline.StatusDefs {
+                        sid := strings.TrimSpace(sd.ID)
+                        if sid == "" {
+                                continue
+                        }
+                        lbl := strings.TrimSpace(sd.Label)
+                        if lbl == "" {
+                                lbl = sid
+                        }
+                        statusLabelByID[sid] = lbl
+                }
+                if mapped, ok := statusLabelByID[statusLabel]; ok && strings.TrimSpace(mapped) != "" {
+                        statusLabel = strings.TrimSpace(mapped)
+                }
+        }
+        if statusLabel == "" {
+                statusLabel = "(none)"
         }
         tagsInput := ""
         if len(it.Tags) > 0 {
@@ -3536,6 +4087,8 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 baseVM:            s.baseVMForRequest(r, "/items/"+it.ID+"/events?view=item"),
                 Item:              *it,
                 AssignedID:        assignedID,
+                AssignedLabel:     assignedLabel,
+                StatusLabel:       statusLabel,
                 Comments:          comments,
                 ReplyTo:           replyTo,
                 Worklog:           worklog,
@@ -3552,6 +4105,31 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 SuccessMessage:    okMsg,
         }
         vm.ActorID = actorID
+        if itemReadOnly {
+                vm.ReadOnly = true
+        } else {
+                // Record "recent item visits" (TUI parity). Best-effort local-only state.
+                st, err := (store.Store{Dir: dir}).LoadTUIState()
+                if err == nil && st != nil {
+                        id := strings.TrimSpace(it.ID)
+                        next := make([]string, 0, 5)
+                        if id != "" {
+                                next = append(next, id)
+                        }
+                        for _, cur := range st.RecentItemIDs {
+                                cur = strings.TrimSpace(cur)
+                                if cur == "" || cur == id {
+                                        continue
+                                }
+                                next = append(next, cur)
+                                if len(next) >= 5 {
+                                        break
+                                }
+                        }
+                        st.RecentItemIDs = next
+                        _ = (store.Store{Dir: dir}).SaveTUIState(st)
+                }
+        }
         vm.ActorOptions = nil
         if db != nil {
                 opts := make([]actorOption, 0, len(db.Actors))
@@ -3589,7 +4167,7 @@ func (s *Server) handleItemPreview(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        db, err := (store.Store{Dir: s.dir()}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -3670,7 +4248,7 @@ func (s *Server) handleItemPreview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.ReadOnly {
+        if s.readOnly() {
                 http.Error(w, "read-only", http.StatusForbidden)
                 return
         }
@@ -3706,7 +4284,7 @@ func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {
         schTime := strings.TrimSpace(r.Form.Get("schTime"))
         tagsRaw := r.Form.Get("tags")
 
-        st := store.Store{Dir: s.cfg.Dir}
+        st := store.Store{Dir: s.dir()}
         db, err := st.Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -3748,12 +4326,12 @@ func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {
                                 http.Error(w, err.Error(), http.StatusConflict)
                                 return
                         }
-                        if s.autoCommit != nil {
+                        if c := s.committer(); c != nil {
                                 actorLabel := strings.TrimSpace(actorID)
                                 if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
                                         actorLabel = strings.TrimSpace(a.Name)
                                 }
-                                s.autoCommit.Notify(actorLabel)
+                                c.Notify(actorLabel)
                         }
                 }
                 http.Redirect(w, r, "/outlines/"+it.OutlineID+"?ok=archived", http.StatusSeeOther)
@@ -3917,12 +4495,12 @@ func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {
                         http.Error(w, err.Error(), http.StatusConflict)
                         return
                 }
-                if s.autoCommit != nil {
+                if c := s.committer(); c != nil {
                         actorLabel := strings.TrimSpace(actorID)
                         if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
                                 actorLabel = strings.TrimSpace(a.Name)
                         }
-                        s.autoCommit.Notify(actorLabel)
+                        c.Notify(actorLabel)
                 }
         }
 
@@ -3949,7 +4527,7 @@ func (s *Server) handleItemMeta(w http.ResponseWriter, r *http.Request) {
         }
         actorID := strings.TrimSpace(s.actorForRequest(r))
 
-        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        db, err := (store.Store{Dir: s.dir()}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
@@ -3982,7 +4560,7 @@ func urlQueryEscape(s string) string {
 }
 
 func (s *Server) handleItemCommentAdd(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.ReadOnly {
+        if s.readOnly() {
                 http.Error(w, "read-only", http.StatusForbidden)
                 return
         }
@@ -4010,7 +4588,7 @@ func (s *Server) handleItemCommentAdd(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        st := store.Store{Dir: s.cfg.Dir}
+        st := store.Store{Dir: s.dir()}
         db, err := st.Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -4056,19 +4634,19 @@ func (s *Server) handleItemCommentAdd(w http.ResponseWriter, r *http.Request) {
                 http.Error(w, err.Error(), http.StatusConflict)
                 return
         }
-        if s.autoCommit != nil {
+        if c2 := s.committer(); c2 != nil {
                 actorLabel := strings.TrimSpace(actorID)
                 if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
                         actorLabel = strings.TrimSpace(a.Name)
                 }
-                s.autoCommit.Notify(actorLabel)
+                c2.Notify(actorLabel)
         }
 
         http.Redirect(w, r, "/items/"+itemID, http.StatusSeeOther)
 }
 
 func (s *Server) handleItemWorklogAdd(w http.ResponseWriter, r *http.Request) {
-        if s.cfg.ReadOnly {
+        if s.readOnly() {
                 http.Error(w, "read-only", http.StatusForbidden)
                 return
         }
@@ -4095,7 +4673,7 @@ func (s *Server) handleItemWorklogAdd(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        st := store.Store{Dir: s.cfg.Dir}
+        st := store.Store{Dir: s.dir()}
         db, err := st.Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -4126,12 +4704,12 @@ func (s *Server) handleItemWorklogAdd(w http.ResponseWriter, r *http.Request) {
                 http.Error(w, err.Error(), http.StatusConflict)
                 return
         }
-        if s.autoCommit != nil {
+        if c2 := s.committer(); c2 != nil {
                 actorLabel := strings.TrimSpace(actorID)
                 if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
                         actorLabel = strings.TrimSpace(a.Name)
                 }
-                s.autoCommit.Notify(actorLabel)
+                c2.Notify(actorLabel)
         }
 
         http.Redirect(w, r, "/items/"+itemID, http.StatusSeeOther)
@@ -4140,16 +4718,17 @@ func (s *Server) handleItemWorklogAdd(w http.ResponseWriter, r *http.Request) {
 const sessionCookieName = "clarity_web_session"
 
 func (s *Server) actorForRequest(r *http.Request) string {
+        cfg := s.cfgSnapshot()
         // Fixed actor override is useful for local-only usage and early automation.
-        if strings.TrimSpace(s.cfg.ActorID) != "" {
-                return strings.TrimSpace(s.cfg.ActorID)
+        if strings.TrimSpace(cfg.ActorID) != "" {
+                return strings.TrimSpace(cfg.ActorID)
         }
 
         c, err := r.Cookie(sessionCookieName)
         if err != nil {
                 return ""
         }
-        secret, err := loadOrInitSecretKey(s.cfg.Dir)
+        secret, err := loadOrInitSecretKey(cfg.Dir)
         if err != nil {
                 return ""
         }
@@ -4190,30 +4769,279 @@ func readyItems(db *store.DB) []model.Item {
         return out
 }
 
-func agendaItems(db *store.DB, actorID string) []model.Item {
+type agendaFlatRow struct {
+        Item        model.Item
+        Depth       int
+        HasChildren bool
+}
+
+func agendaCompareItems(a, b model.Item) int {
+        ra := strings.TrimSpace(a.Rank)
+        rb := strings.TrimSpace(b.Rank)
+        if ra != "" && rb != "" {
+                if ra < rb {
+                        return -1
+                }
+                if ra > rb {
+                        return 1
+                }
+                if a.CreatedAt.Before(b.CreatedAt) {
+                        return -1
+                }
+                if a.CreatedAt.After(b.CreatedAt) {
+                        return 1
+                }
+                if a.ID < b.ID {
+                        return -1
+                }
+                if a.ID > b.ID {
+                        return 1
+                }
+                return 0
+        }
+        if a.CreatedAt.Before(b.CreatedAt) {
+                return -1
+        }
+        if a.CreatedAt.After(b.CreatedAt) {
+                return 1
+        }
+        if a.ID < b.ID {
+                return -1
+        }
+        if a.ID > b.ID {
+                return 1
+        }
+        return 0
+}
+
+func agendaFlattenOutline(o model.Outline, items []model.Item) []agendaFlatRow {
+        children := map[string][]model.Item{}
+        hasChildren := map[string]bool{}
+        var roots []model.Item
+        present := map[string]bool{}
+        for _, it := range items {
+                present[it.ID] = true
+        }
+        for _, it := range items {
+                if it.ParentID == nil || strings.TrimSpace(*it.ParentID) == "" {
+                        roots = append(roots, it)
+                        continue
+                }
+                if !present[*it.ParentID] {
+                        roots = append(roots, it)
+                        continue
+                }
+                children[*it.ParentID] = append(children[*it.ParentID], it)
+        }
+        for pid, ch := range children {
+                if len(ch) > 0 {
+                        hasChildren[pid] = true
+                }
+        }
+        sort.Slice(roots, func(i, j int) bool { return agendaCompareItems(roots[i], roots[j]) < 0 })
+        for pid := range children {
+                sibs := children[pid]
+                sort.Slice(sibs, func(i, j int) bool { return agendaCompareItems(sibs[i], sibs[j]) < 0 })
+                children[pid] = sibs
+        }
+
+        out := make([]agendaFlatRow, 0, len(items))
+        var walk func(it model.Item, depth int)
+        walk = func(it model.Item, depth int) {
+                out = append(out, agendaFlatRow{Item: it, Depth: depth, HasChildren: hasChildren[it.ID]})
+                for _, ch := range children[it.ID] {
+                        walk(ch, depth+1)
+                }
+        }
+        for _, r := range roots {
+                walk(r, 0)
+        }
+        return out
+}
+
+func agendaRowsWeb(db *store.DB, actorID string) []agendaRow {
         actorID = strings.TrimSpace(actorID)
-        if actorID == "" {
+        if db == nil || actorID == "" {
                 return nil
         }
 
-        out := make([]model.Item, 0)
-        for _, it := range db.Items {
-                if it.Archived {
+        // Sort projects by name for stable ordering (match TUI).
+        projects := make([]model.Project, 0, len(db.Projects))
+        for _, p := range db.Projects {
+                if p.Archived {
                         continue
                 }
-                if isEndState(db, it.OutlineID, it.StatusID) {
+                projects = append(projects, p)
+        }
+        sort.Slice(projects, func(i, j int) bool {
+                pi := strings.ToLower(strings.TrimSpace(projects[i].Name))
+                pj := strings.ToLower(strings.TrimSpace(projects[j].Name))
+                if pi == pj {
+                        return projects[i].ID < projects[j].ID
+                }
+                if pi == "" {
+                        return false
+                }
+                if pj == "" {
+                        return true
+                }
+                return pi < pj
+        })
+
+        outlinesByProject := map[string][]model.Outline{}
+        for _, o := range db.Outlines {
+                if o.Archived {
                         continue
                 }
-                if it.OwnerActorID == actorID {
-                        out = append(out, it)
-                        continue
-                }
-                if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) == actorID {
-                        out = append(out, it)
-                        continue
+                outlinesByProject[o.ProjectID] = append(outlinesByProject[o.ProjectID], o)
+        }
+        for pid := range outlinesByProject {
+                outs := outlinesByProject[pid]
+                sort.Slice(outs, func(i, j int) bool {
+                        ni := ""
+                        nj := ""
+                        if outs[i].Name != nil {
+                                ni = strings.ToLower(strings.TrimSpace(*outs[i].Name))
+                        }
+                        if outs[j].Name != nil {
+                                nj = strings.ToLower(strings.TrimSpace(*outs[j].Name))
+                        }
+                        if ni == nj {
+                                return outs[i].ID < outs[j].ID
+                        }
+                        if ni == "" {
+                                return false
+                        }
+                        if nj == "" {
+                                return true
+                        }
+                        return ni < nj
+                })
+                outlinesByProject[pid] = outs
+        }
+
+        rows := make([]agendaRow, 0, 64)
+        for _, p := range projects {
+                outs := outlinesByProject[p.ID]
+                for _, o := range outs {
+                        // Filter items for this outline (match TUI: not archived, not on-hold, not end-state).
+                        its := make([]model.Item, 0, 64)
+                        for _, it := range db.Items {
+                                if it.Archived || it.OnHold {
+                                        continue
+                                }
+                                if it.ProjectID != p.ID || it.OutlineID != o.ID {
+                                        continue
+                                }
+                                if isEndState(db, o.ID, it.StatusID) {
+                                        continue
+                                }
+                                // Owned or assigned to current actor.
+                                if strings.TrimSpace(it.OwnerActorID) == actorID {
+                                        its = append(its, it)
+                                        continue
+                                }
+                                if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) == actorID {
+                                        its = append(its, it)
+                                        continue
+                                }
+                        }
+                        if len(its) == 0 {
+                                continue
+                        }
+
+                        projectName := strings.TrimSpace(p.Name)
+                        if projectName == "" {
+                                projectName = p.ID
+                        }
+                        outName := outlineDisplayNameWeb(o)
+
+                        statusLabelByID := map[string]string{}
+                        for _, sd := range o.StatusDefs {
+                                sid := strings.TrimSpace(sd.ID)
+                                if sid == "" {
+                                        continue
+                                }
+                                lbl := strings.TrimSpace(sd.Label)
+                                if lbl == "" {
+                                        lbl = sid
+                                }
+                                statusLabelByID[sid] = lbl
+                        }
+
+                        rows = append(rows, agendaRow{
+                                Kind:        "heading",
+                                ProjectID:   p.ID,
+                                ProjectName: projectName,
+                                OutlineID:   o.ID,
+                                OutlineName: outName,
+                        })
+
+                        flat := agendaFlattenOutline(o, its)
+                        for _, fr := range flat {
+                                it := fr.Item
+                                title := strings.TrimSpace(it.Title)
+                                if title == "" {
+                                        title = "(untitled)"
+                                }
+                                sid := strings.TrimSpace(it.StatusID)
+                                lbl := sid
+                                if mapped, ok := statusLabelByID[sid]; ok && strings.TrimSpace(mapped) != "" {
+                                        lbl = strings.TrimSpace(mapped)
+                                }
+                                if lbl == "" {
+                                        lbl = "(none)"
+                                }
+                                assignedLabel := ""
+                                if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) != "" {
+                                        assignedLabel = actorDisplayLabel(db, strings.TrimSpace(*it.AssignedActorID))
+                                }
+                                dueDate := ""
+                                dueTime := ""
+                                if it.Due != nil {
+                                        dueDate = strings.TrimSpace(it.Due.Date)
+                                        if it.Due.Time != nil {
+                                                dueTime = strings.TrimSpace(*it.Due.Time)
+                                        }
+                                }
+                                schDate := ""
+                                schTime := ""
+                                if it.Schedule != nil {
+                                        schDate = strings.TrimSpace(it.Schedule.Date)
+                                        if it.Schedule.Time != nil {
+                                                schTime = strings.TrimSpace(*it.Schedule.Time)
+                                        }
+                                }
+                                indent := 12 + (fr.Depth * 18)
+                                canEdit := actorID != "" && perm.CanEditItem(db, actorID, &it)
+                                rows = append(rows, agendaRow{
+                                        Kind:          "item",
+                                        ProjectID:     p.ID,
+                                        ProjectName:   projectName,
+                                        OutlineID:     o.ID,
+                                        OutlineName:   outName,
+                                        ItemID:        it.ID,
+                                        Title:         title,
+                                        StatusID:      it.StatusID,
+                                        StatusLabel:   lbl,
+                                        IsEndState:    false,
+                                        CanEdit:       canEdit,
+                                        AssignedLabel: assignedLabel,
+                                        Priority:      it.Priority,
+                                        OnHold:        it.OnHold,
+                                        DueDate:       dueDate,
+                                        DueTime:       dueTime,
+                                        SchDate:       schDate,
+                                        SchTime:       schTime,
+                                        Tags:          uniqueSortedStringsWeb(normalizeTagsWeb(it.Tags)),
+                                        Depth:         fr.Depth,
+                                        IndentPx:      indent,
+                                        HasChildren:   fr.HasChildren,
+                                })
+                        }
                 }
         }
-        return out
+        return rows
 }
 
 func (s *Server) handleOutlineMeta(w http.ResponseWriter, r *http.Request) {
@@ -4222,7 +5050,7 @@ func (s *Server) handleOutlineMeta(w http.ResponseWriter, r *http.Request) {
                 http.Error(w, "missing outline id", http.StatusBadRequest)
                 return
         }
-        db, err := (store.Store{Dir: s.cfg.Dir}).Load()
+        db, err := (store.Store{Dir: s.dir()}).Load()
         if err != nil {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return

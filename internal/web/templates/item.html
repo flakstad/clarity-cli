@@ -5,6 +5,7 @@
     data-item-page
     data-item-id="{{.Item.ID}}"
     data-outline-id="{{.Item.OutlineID}}"
+    data-project-id="{{.Item.ProjectID}}"
     data-can-edit="{{if .CanEdit}}true{{else}}false{{end}}"
     data-status-options='{{.StatusOptionsJSON}}'
     data-actor-options='{{.ActorOptionsJSON}}'
@@ -35,6 +36,10 @@
     <input type="time" name="schTime" value="{{.SchTime}}">
   </div>
 
+  {{if .Item.Archived}}
+    <div class="msg"><div><strong>Archived</strong> — This item is read-only.</div></div>
+  {{end}}
+
   <h1>{{.Item.Title}}</h1>
 
   <div class="card">
@@ -55,14 +60,14 @@
       title="{{.Item.ID}}"
       style="padding: 8px 10px;"
     >
-      <span class="outline-status outline-label">{{.Item.StatusID}}</span>
+      <span class="outline-status outline-label">{{.StatusLabel}}</span>
       <span class="outline-title outline-text">{{.Item.Title}}</span>
       <span class="outline-right">
         {{if .Item.Priority}}<span class="outline-flag outline-flag--priority">P</span>{{end}}
         {{if .Item.OnHold}}<span class="outline-flag outline-flag--hold">H</span>{{end}}
         {{if .Item.Due}}<span class="outline-meta outline-meta--due outline-due dim">Due {{.DueDate}}{{if .DueTime}} {{.DueTime}}{{end}}</span>{{end}}
         {{if .Item.Schedule}}<span class="outline-meta outline-meta--sch outline-schedule dim">Sch {{.SchDate}}{{if .SchTime}} {{.SchTime}}{{end}}</span>{{end}}
-        {{if .Item.AssignedActorID}}<span class="outline-assignee outline-assign dim">@{{.Item.AssignedActorID}}</span>{{end}}
+        {{if .AssignedLabel}}<span class="outline-assignee outline-assign dim">@{{.AssignedLabel}}</span>{{end}}
         {{if .Item.Tags}}<span class="outline-tags dim">{{range $i, $t := .Item.Tags}}{{if $i}} {{end}}#{{$t}}{{end}}</span>{{end}}
       </span>
     </div>
