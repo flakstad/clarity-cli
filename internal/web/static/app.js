@@ -1126,6 +1126,10 @@
       opts.push({ key: 'S', label: 'Edit outline statuses…', kind: 'exec', run: () => openOutlineStatusesEditor({ preferCurrentOutline: false }) });
       opts.push({ key: 'r', label: 'Archive outline', kind: 'exec', run: () => archiveFocusedOutline() });
     }
+    if (view === 'workspaces') {
+      opts.push({ key: 'n', label: 'New workspace', kind: 'exec', run: () => openNewWorkspacePrompt() });
+      opts.push({ key: 'r', label: 'Rename workspace', kind: 'exec', run: () => openRenameWorkspacePrompt() });
+    }
 
     const outlineRoot = nativeOutlineRoot();
     if (outlineRoot) {
@@ -1350,6 +1354,54 @@
         submitPost('/projects', { name });
       },
       focusSelector: '#new-project-name',
+    });
+  };
+
+  const focusedWorkspace = () => {
+    const a = document.activeElement;
+    const name = a && a.dataset ? String(a.dataset.focusId || '').trim() : '';
+    return { name };
+  };
+
+  const openNewWorkspacePrompt = () => {
+    openPrompt({
+      title: 'New workspace',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `
+        <div>
+          <label class="dim" for="new-workspace-name">Workspace name</label>
+          <input id="new-workspace-name" type="text" placeholder="Name" style="width:100%;" />
+        </div>
+      `,
+      onSubmit: () => {
+        const name = String(document.getElementById('new-workspace-name')?.value || '').trim();
+        if (!name) return;
+        closePrompt();
+        submitPost('/workspaces/new', { name });
+      },
+      focusSelector: '#new-workspace-name',
+    });
+  };
+
+  const openRenameWorkspacePrompt = () => {
+    const fw = focusedWorkspace();
+    if (!fw.name) return;
+    openPrompt({
+      title: 'Rename workspace',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `
+        <div>
+          <label class="dim" for="rename-workspace-name">Workspace name</label>
+          <input id="rename-workspace-name" type="text" value="${escapeAttr(fw.name)}" style="width:100%;" />
+        </div>
+      `,
+      onSubmit: () => {
+        const to = String(document.getElementById('rename-workspace-name')?.value || '').trim();
+        if (!to) return;
+        closePrompt();
+        submitPost('/workspaces/rename', { from: fw.name, to });
+      },
+      focusSelector: '#rename-workspace-name',
     });
   };
 
@@ -3811,7 +3863,8 @@
   };
 
   const focusables = () => {
-    const root = document.getElementById('clarity-main');
+    const scope = document.querySelector('[data-kb-scope-active="true"]');
+    const root = scope || document.getElementById('clarity-main');
     if (!root) return [];
     return Array.from(root.querySelectorAll('[data-kb-item]')).filter((el) => {
       if (!el) return false;
@@ -3838,6 +3891,10 @@
   const openFocused = () => {
     const el = document.activeElement;
     if (!el) return;
+    if (el.tagName && el.tagName.toLowerCase() === 'a' && el.getAttribute('href')) {
+      window.location.href = el.getAttribute('href');
+      return;
+    }
     if (typeof el.click === 'function') el.click();
   };
 
@@ -3915,6 +3972,20 @@
     if (!row) return;
     ev.preventDefault();
     toggleCollapseRow(row);
+  }, { capture: true });
+
+  // Item side panels: click a related row to open the panel.
+  document.addEventListener('click', (ev) => {
+    const root = itemPageRoot();
+    if (!root) return;
+    const t = ev && ev.target;
+    if (!t || typeof t.closest !== 'function') return;
+    const el = t.closest('[data-item-side-open]');
+    if (!el || !el.dataset) return;
+    const kind = String(el.dataset.itemSideOpen || '').trim();
+    if (!kind) return;
+    ev.preventDefault();
+    itemSideOpen(kind, String(el.dataset.focusId || '').trim());
   }, { capture: true });
 
   // Outline component events (delegated so it survives Datastar morphs).
@@ -4610,6 +4681,19 @@
       }
       return false;
     }
+    if (view === 'workspaces') {
+      if (key === 'n' && !ev.shiftKey) {
+        ev.preventDefault();
+        openNewWorkspacePrompt();
+        return true;
+      }
+      if (key === 'r') {
+        ev.preventDefault();
+        openRenameWorkspacePrompt();
+        return true;
+      }
+      return false;
+    }
     return false;
   };
 
@@ -4943,6 +5027,143 @@
     return false;
   };
 
+  const itemSide = {
+    open: false,
+    kind: '',
+    restoreFocusId: '',
+  };
+
+  const itemSidePane = () => document.getElementById('item-side-pane');
+
+  const itemSideOpen = (kind, restoreFocusId) => {
+    const pane = itemSidePane();
+    const main = document.getElementById('clarity-main');
+    if (!pane || !main) return;
+    kind = String(kind || '').trim();
+    if (!kind) kind = 'comments';
+
+    itemSide.open = true;
+    itemSide.kind = kind;
+    itemSide.restoreFocusId = String(restoreFocusId || '').trim();
+
+    main.dataset.itemSideOpen = 'true';
+    pane.style.display = 'block';
+    pane.dataset.kbScopeActive = 'true';
+
+    const title = document.getElementById('item-side-title');
+    if (title) title.textContent = kind === 'worklog' ? 'Worklog' : (kind === 'history' ? 'History' : 'Comments');
+
+    pane.querySelectorAll('[data-item-side-panel]').forEach((el) => {
+      el.style.display = (String(el.dataset.itemSidePanel || '') === kind) ? 'block' : 'none';
+    });
+
+    // Focus the first row inside the panel (or the textarea).
+    const first = pane.querySelector('[data-item-side-panel="' + CSS.escape(kind) + '"] [data-kb-item]') ||
+      pane.querySelector('[data-item-side-panel="' + CSS.escape(kind) + '"] textarea');
+    first && first.focus && first.focus();
+  };
+
+  const itemSideClose = () => {
+    const pane = itemSidePane();
+    const main = document.getElementById('clarity-main');
+    if (main) delete main.dataset.itemSideOpen;
+    if (pane) {
+      pane.style.display = 'none';
+      pane.removeAttribute('data-kb-scope-active');
+    }
+    const restoreId = itemSide.restoreFocusId;
+    itemSide.open = false;
+    itemSide.kind = '';
+    itemSide.restoreFocusId = '';
+    if (restoreId) {
+      const el = document.querySelector('[data-focus-id="' + CSS.escape(restoreId) + '"]');
+      el && el.focus && el.focus();
+    }
+  };
+
+  const postItemComment = (itemId, body, replyTo) => {
+    const id = String(itemId || '').trim();
+    body = String(body || '').trim();
+    replyTo = String(replyTo || '').trim();
+    if (!id || !body) return Promise.resolve();
+    const params = new URLSearchParams({ body });
+    if (replyTo) params.set('replyTo', replyTo);
+    return fetch('/items/' + encodeURIComponent(id) + '/comments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+    });
+  };
+
+  const commentQuote = (meta) => {
+    const author = String(meta?.author || '').trim();
+    const ts = String(meta?.ts || '').trim();
+    const body = String(meta?.body || '').trim();
+    const head = (author || ts) ? (author + (ts ? (' · ' + ts) : '')) : '';
+    const lines = body.split('\n').map((l) => '> ' + l);
+    return (head ? ('> ' + head + '\n') : '') + lines.join('\n') + '\n\n';
+  };
+
+  const openReplyPromptForFocusedComment = () => {
+    const root = itemPageRoot();
+    if (!root) return;
+    const itemId = String(root.dataset.itemId || '').trim();
+    if (!itemId) return;
+    const a = document.activeElement;
+    const row = a && typeof a.closest === 'function' ? a.closest('[data-comment-id]') : null;
+    const commentId = String(row?.dataset?.commentId || '').trim();
+    if (!commentId) return;
+    const li = row.closest('li');
+    const bodyEl = li ? li.querySelector('pre') : null;
+    const body = bodyEl ? String(bodyEl.textContent || '') : '';
+    const authorEl = row.querySelector('code');
+    const author = authorEl ? String(authorEl.textContent || '') : '';
+    const tsEl = row.querySelector('.dim');
+    const ts = tsEl ? String(tsEl.textContent || '') : '';
+    const initial = commentQuote({ author, ts, body });
+    openPrompt({
+      title: 'Reply',
+      hint: 'Esc to close · Ctrl+Enter to post',
+      bodyHTML: `<textarea id="native-prompt-textarea" rows="8" style="width:100%;font-family:var(--mono);">${escapeHTML(initial)}</textarea>`,
+      focusSelector: '#native-prompt-textarea',
+      onSubmit: () => {
+        const modal = document.getElementById('native-prompt-modal');
+        const ta = modal ? modal.querySelector('#native-prompt-textarea') : null;
+        const txt = ta ? String(ta.value || '').trim() : '';
+        if (!txt) return;
+        closePrompt();
+        postItemComment(itemId, txt, commentId).catch(() => {});
+      },
+    });
+  };
+
+  const handleItemSideKeydown = (ev, rawKey, key) => {
+    if (!itemPageRoot()) return false;
+    if (!itemSide.open) return false;
+    // Always allow closing the side pane, even while typing in inputs.
+    if (key === 'escape' || (ev.ctrlKey && key === 'g')) {
+      ev.preventDefault();
+      itemSideClose();
+      return true;
+    }
+    if (isTypingTarget(ev.target)) return false;
+    if (rawKey === 'R' && itemSide.kind === 'comments') {
+      ev.preventDefault();
+      openReplyPromptForFocusedComment();
+      return true;
+    }
+    if (key === 'enter' && itemSide.kind === 'comments') {
+      const a = document.activeElement;
+      const isComment = a && typeof a.closest === 'function' ? a.closest('[data-comment-id]') : null;
+      if (isComment) {
+        ev.preventDefault();
+        openReplyPromptForFocusedComment();
+        return true;
+      }
+    }
+    return false;
+  };
+
   const handleActionPaletteKeydown = (ev) => {
     if (!actionPalette.open) return false;
     const key = (ev.key || '').toLowerCase();
@@ -5035,10 +5256,12 @@
     if (handleAssigneePickerKeydown(ev)) return;
     if (handleStatusPickerKeydown(ev)) return;
     if (handleOutlineStatusesKeydown(ev)) return;
-    if (isTypingTarget(ev.target)) return;
 
     const rawKey = String(ev.key || '');
     const key = rawKey.toLowerCase();
+
+    if (handleItemSideKeydown(ev, rawKey, key)) return;
+    if (isTypingTarget(ev.target)) return;
     if (key === '?' || key === 'x') {
       ev.preventDefault();
       openActionPalette();
@@ -5088,6 +5311,57 @@
     if (inOutline) return;
 
     if (handleItemPageKeydown(ev, key)) return;
+
+    // Item details (Enter activates focused field).
+    if (key === 'enter' && itemPageRoot()) {
+      const a = document.activeElement;
+      const field = a && a.dataset ? String(a.dataset.itemField || '').trim() : '';
+      if (field) {
+        ev.preventDefault();
+        const root = itemPageRoot();
+        if (!root) return;
+        switch (field) {
+          case 'title':
+            openItemTitlePrompt(root);
+            return;
+          case 'status':
+            openStatusPickerForItemPage(root);
+            return;
+          case 'assign':
+            openAssigneePickerForItemPage(root);
+            return;
+          case 'tags':
+            openItemTagsPrompt(root);
+            return;
+          case 'due':
+            openItemDatePrompt(root, 'due');
+            return;
+          case 'schedule':
+            openItemDatePrompt(root, 'schedule');
+            return;
+          case 'priority':
+            handleItemPageKeydown(new KeyboardEvent('keydown', { key: 'p' }), 'p');
+            return;
+          case 'onHold':
+            handleItemPageKeydown(new KeyboardEvent('keydown', { key: 'o' }), 'o');
+            return;
+          case 'description':
+            openItemDescriptionPrompt(root);
+            return;
+        }
+      }
+    }
+
+    // Item side panels (comments/worklog/history): Enter on a "Related" row opens the side pane.
+    if (key === 'enter' && itemPageRoot()) {
+      const a = document.activeElement;
+      const openKind = a && a.dataset ? String(a.dataset.itemSideOpen || '').trim() : '';
+      if (openKind) {
+        ev.preventDefault();
+        itemSideOpen(openKind, String(a.dataset.focusId || '').trim());
+        return;
+      }
+    }
 
     const nativeRow = nativeRowFromEvent(ev);
     if (handleNativeOutlineKeydown(ev, key, nativeRow)) return;

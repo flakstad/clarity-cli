@@ -248,6 +248,8 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("POST /sync/push", s.handleSyncPush)
         mux.HandleFunc("GET /workspaces", s.handleWorkspaces)
         mux.HandleFunc("POST /workspaces/use", s.handleWorkspacesUse)
+        mux.HandleFunc("POST /workspaces/new", s.handleWorkspacesNew)
+        mux.HandleFunc("POST /workspaces/rename", s.handleWorkspacesRename)
         mux.HandleFunc("GET /archived", s.handleArchived)
         mux.HandleFunc("GET /projects", s.handleProjects)
         mux.HandleFunc("POST /projects", s.handleProjectCreate)
@@ -991,26 +993,8 @@ func (s *Server) handleItemEvents(w http.ResponseWriter, r *http.Request) {
                         outline = o
                         statusDefs = o.StatusDefs
                 }
-
-                var worklog []model.WorklogEntry
-                if actorID != "" {
-                        for _, w := range db.WorklogForItem(id) {
-                                if strings.TrimSpace(w.AuthorID) == actorID {
-                                        worklog = append(worklog, w)
-                                }
-                        }
-                }
-                assignedID := ""
-                if it.AssignedActorID != nil {
-                        assignedID = strings.TrimSpace(*it.AssignedActorID)
-                }
-                assignedLabel := ""
-                if assignedID != "" {
-                        assignedLabel = actorDisplayLabel(db, assignedID)
-                }
-                statusLabel := strings.TrimSpace(it.StatusID)
+                statusLabelByID := map[string]string{}
                 if outline != nil {
-                        statusLabelByID := map[string]string{}
                         for _, sd := range outline.StatusDefs {
                                 sid := strings.TrimSpace(sd.ID)
                                 if sid == "" {
@@ -1022,29 +1006,139 @@ func (s *Server) handleItemEvents(w http.ResponseWriter, r *http.Request) {
                                 }
                                 statusLabelByID[sid] = lbl
                         }
-                        if mapped, ok := statusLabelByID[statusLabel]; ok && strings.TrimSpace(mapped) != "" {
-                                statusLabel = strings.TrimSpace(mapped)
+                }
+
+                var worklog []model.WorklogEntry
+                if actorID != "" {
+                        for _, w := range db.WorklogForItem(id) {
+                                if strings.TrimSpace(w.AuthorID) == actorID {
+                                        worklog = append(worklog, w)
+                                }
                         }
+                }
+                commentsCount := len(comments)
+                lastComment := ""
+                for _, c := range comments {
+                        if lastComment == "" || c.CreatedAt.UTC().Format(time.RFC3339) > lastComment {
+                                lastComment = c.CreatedAt.UTC().Format(time.RFC3339)
+                        }
+                }
+                worklogCount := len(worklog)
+                lastWorklog := ""
+                for _, wle := range worklog {
+                        if lastWorklog == "" || wle.CreatedAt.UTC().Format(time.RFC3339) > lastWorklog {
+                                lastWorklog = wle.CreatedAt.UTC().Format(time.RFC3339)
+                        }
+                }
+                historyRows, lastHistory := itemHistoryRowsForItem(s.dir(), id, 250)
+                assignedID := ""
+                if it.AssignedActorID != nil {
+                        assignedID = strings.TrimSpace(*it.AssignedActorID)
+                }
+                assignedLabel := ""
+                if assignedID != "" {
+                        assignedLabel = actorDisplayLabel(db, assignedID)
+                }
+                statusLabel := strings.TrimSpace(it.StatusID)
+                if mapped, ok := statusLabelByID[statusLabel]; ok && strings.TrimSpace(mapped) != "" {
+                        statusLabel = strings.TrimSpace(mapped)
                 }
                 if statusLabel == "" {
                         statusLabel = "(none)"
                 }
 
+                tagsInput := ""
+                if len(it.Tags) > 0 {
+                        parts := make([]string, 0, len(it.Tags))
+                        for _, t := range it.Tags {
+                                t = strings.TrimSpace(t)
+                                if t == "" {
+                                        continue
+                                }
+                                parts = append(parts, "#"+t)
+                        }
+                        tagsInput = strings.Join(parts, " ")
+                }
+                dueDate := ""
+                dueTime := ""
+                if it.Due != nil {
+                        dueDate = strings.TrimSpace(it.Due.Date)
+                        if it.Due.Time != nil {
+                                dueTime = strings.TrimSpace(*it.Due.Time)
+                        }
+                }
+                schDate := ""
+                schTime := ""
+                if it.Schedule != nil {
+                        schDate = strings.TrimSpace(it.Schedule.Date)
+                        if it.Schedule.Time != nil {
+                                schTime = strings.TrimSpace(*it.Schedule.Time)
+                        }
+                }
+
                 vm := itemVM{
-                        baseVM:        s.baseVMForRequest(r, "/items/"+it.ID+"/events?view=item"),
-                        Item:          *it,
-                        AssignedID:    assignedID,
-                        AssignedLabel: assignedLabel,
-                        StatusLabel:   statusLabel,
-                        ActorOptions:  []actorOption(nil),
-                        Comments:      comments,
-                        ReplyTo:       "",
-                        Worklog:       worklog,
+                        baseVM:             s.baseVMForRequest(r, "/items/"+it.ID+"/events?view=item"),
+                        Item:               *it,
+                        AssignedID:         assignedID,
+                        AssignedLabel:      assignedLabel,
+                        StatusLabel:        statusLabel,
+                        ActorOptions:       []actorOption(nil),
+                        Comments:           comments,
+                        ReplyTo:            "",
+                        Worklog:            worklog,
+                        TagsInput:          tagsInput,
+                        DueDate:            dueDate,
+                        DueTime:            dueTime,
+                        SchDate:            schDate,
+                        SchTime:            schTime,
+                        StatusOptionsJSON:  template.HTMLAttr("[]"),
+                        ActorOptionsJSON:   actorOptionsJSON(db),
+                        OutlineOptionsJSON: outlineOptionsJSON(db),
 
                         CanEdit:        canEdit,
                         StatusDefs:     statusDefs,
                         ErrorMessage:   "",
                         SuccessMessage: "",
+                        CommentsCount:  commentsCount,
+                        LastComment:    lastComment,
+                        WorklogCount:   worklogCount,
+                        LastWorklog:    lastWorklog,
+                        HistoryCount:   len(historyRows),
+                        LastHistory:    lastHistory,
+                        History:        historyRows,
+                }
+                if outline != nil {
+                        vm.StatusOptionsJSON = outlineStatusOptionsJSON(*outline)
+                }
+                // Parent + Children (TUI parity).
+                if it.ParentID != nil && strings.TrimSpace(*it.ParentID) != "" {
+                        if pit, ok := db.FindItem(strings.TrimSpace(*it.ParentID)); ok && pit != nil && !pit.Archived {
+                                row := itemOutlineRowVMFromItem(db, outline, statusLabelByID, *pit)
+                                vm.ParentRow = &row
+                        }
+                }
+                {
+                        kids := db.ChildrenOf(it.ID)
+                        kptrs := make([]*model.Item, 0, len(kids))
+                        for i := range kids {
+                                if kids[i].Archived {
+                                        continue
+                                }
+                                kptrs = append(kptrs, &kids[i])
+                        }
+                        store.SortItemsByRankOrder(kptrs)
+                        maxRows := 8
+                        if len(kptrs) > maxRows {
+                                vm.ChildrenMore = len(kptrs) - maxRows
+                                kptrs = kptrs[:maxRows]
+                        }
+                        vm.Children = make([]itemOutlineRowVM, 0, len(kptrs))
+                        for _, p := range kptrs {
+                                if p == nil {
+                                        continue
+                                }
+                                vm.Children = append(vm.Children, itemOutlineRowVMFromItem(db, outline, statusLabelByID, *p))
+                        }
                 }
                 if itemReadOnly {
                         vm.ReadOnly = true
@@ -1915,6 +2009,118 @@ func (s *Server) handleWorkspacesUse(w http.ResponseWriter, r *http.Request) {
         http.Redirect(w, r, "/?msg=switched%20workspace", http.StatusSeeOther)
 }
 
+func (s *Server) handleWorkspacesNew(w http.ResponseWriter, r *http.Request) {
+        if err := r.ParseForm(); err != nil {
+                http.Error(w, err.Error(), http.StatusBadRequest)
+                return
+        }
+        name := strings.TrimSpace(r.Form.Get("name"))
+        name, err := store.NormalizeWorkspaceName(name)
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusBadRequest)
+                return
+        }
+
+        // Create under legacy root (v1 convenience). Teams can still "migrate" to a Git-backed path later.
+        dir, err := store.LegacyWorkspaceDir(name)
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if err := (store.Store{Dir: dir}).Ensure(); err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if err := s.switchWorkspace(name); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        http.Redirect(w, r, "/?msg=created%20workspace", http.StatusSeeOther)
+}
+
+func (s *Server) handleWorkspacesRename(w http.ResponseWriter, r *http.Request) {
+        if err := r.ParseForm(); err != nil {
+                http.Error(w, err.Error(), http.StatusBadRequest)
+                return
+        }
+        from := strings.TrimSpace(r.Form.Get("from"))
+        to := strings.TrimSpace(r.Form.Get("to"))
+        from, err := store.NormalizeWorkspaceName(from)
+        if err != nil {
+                http.Error(w, "invalid from: "+err.Error(), http.StatusBadRequest)
+                return
+        }
+        to, err = store.NormalizeWorkspaceName(to)
+        if err != nil {
+                http.Error(w, "invalid to: "+err.Error(), http.StatusBadRequest)
+                return
+        }
+        if from == to {
+                http.Redirect(w, r, "/workspaces?msg=no-op", http.StatusSeeOther)
+                return
+        }
+
+        cfg, err := store.LoadConfig()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if cfg == nil {
+                cfg = &store.GlobalConfig{}
+        }
+
+        // Determine whether this is a registry entry (preferred) or legacy.
+        ref, hasRef := store.WorkspaceRef{}, false
+        if cfg.Workspaces != nil {
+                if r, ok := cfg.Workspaces[from]; ok {
+                        ref = r
+                        hasRef = true
+                }
+        }
+
+        if hasRef {
+                // Rename registry key (path stays the same).
+                if cfg.Workspaces == nil {
+                        cfg.Workspaces = map[string]store.WorkspaceRef{}
+                }
+                delete(cfg.Workspaces, from)
+                cfg.Workspaces[to] = ref
+        } else {
+                // Legacy: rename directory under ~/.clarity/workspaces.
+                fromDir, err := store.LegacyWorkspaceDir(from)
+                if err != nil {
+                        http.Error(w, err.Error(), http.StatusInternalServerError)
+                        return
+                }
+                toDir, err := store.LegacyWorkspaceDir(to)
+                if err != nil {
+                        http.Error(w, err.Error(), http.StatusInternalServerError)
+                        return
+                }
+                if err := os.Rename(fromDir, toDir); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+        }
+
+        wasCurrent := strings.TrimSpace(cfg.CurrentWorkspace) == from
+        if wasCurrent {
+                cfg.CurrentWorkspace = to
+        }
+        if err := store.SaveConfig(cfg); err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+
+        // If the server is currently using that workspace name, switch to the new name so
+        // the broadcaster and auto-commit stay consistent.
+        if strings.TrimSpace(s.workspaceName()) == from || wasCurrent {
+                _ = s.switchWorkspace(to)
+        }
+
+        http.Redirect(w, r, "/workspaces?msg=renamed", http.StatusSeeOther)
+}
+
 type archivedVM struct {
         baseVM
         Rows    []archivedRow
@@ -2437,6 +2643,9 @@ type outlineNativeNode struct {
         SchTime  string
         Tags     []string
 
+        DoneChildren  int
+        TotalChildren int
+
         Children []outlineNativeNode
 }
 
@@ -2658,6 +2867,20 @@ func buildOutlineNativeNodes(db *store.DB, o model.Outline, actorID string) []ou
                         if it == nil {
                                 continue
                         }
+                        // Direct child progress (TUI parity): count only direct children.
+                        doneChildren := 0
+                        totalChildren := 0
+                        if kids := children[it.ID]; len(kids) > 0 {
+                                totalChildren = len(kids)
+                                for _, ch := range kids {
+                                        if ch == nil {
+                                                continue
+                                        }
+                                        if statusutil.IsEndState(o, ch.StatusID) {
+                                                doneChildren++
+                                        }
+                                }
+                        }
                         sid := strings.TrimSpace(it.StatusID)
                         lbl := sid
                         if mapped, ok := statusLabelByID[sid]; ok && strings.TrimSpace(mapped) != "" {
@@ -2698,6 +2921,8 @@ func buildOutlineNativeNodes(db *store.DB, o model.Outline, actorID string) []ou
                                 SchDate:       schDate,
                                 SchTime:       schTime,
                                 Tags:          it.Tags,
+                                DoneChildren:  doneChildren,
+                                TotalChildren: totalChildren,
                                 Children:      build(it.ID),
                         })
                 }
@@ -4765,10 +4990,157 @@ type itemVM struct {
         ActorOptionsJSON   template.HTMLAttr
         OutlineOptionsJSON template.HTMLAttr
 
+        ParentRow    *itemOutlineRowVM
+        Children     []itemOutlineRowVM
+        ChildrenMore int
+
+        CommentsCount int
+        LastComment   string
+
+        WorklogCount int
+        LastWorklog  string
+
+        HistoryCount int
+        LastHistory  string
+        History      []itemHistoryRowVM
+
         CanEdit        bool
         StatusDefs     []model.OutlineStatusDef
         ErrorMessage   string
         SuccessMessage string
+}
+
+type itemOutlineRowVM struct {
+        ID            string
+        Title         string
+        StatusID      string
+        StatusLabel   string
+        IsEndState    bool
+        AssignedLabel string
+        Priority      bool
+        OnHold        bool
+        DueDate       string
+        DueTime       string
+        SchDate       string
+        SchTime       string
+        Tags          []string
+        HasChildren   bool
+        DoneChildren  int
+        TotalChildren int
+}
+
+type itemHistoryRowVM struct {
+        TS   string
+        Type string
+}
+
+func itemOutlineRowVMFromItem(db *store.DB, outline *model.Outline, statusLabelByID map[string]string, it model.Item) itemOutlineRowVM {
+        statusID := strings.TrimSpace(it.StatusID)
+        statusLabel := statusID
+        if statusLabelByID != nil {
+                if mapped, ok := statusLabelByID[statusID]; ok && strings.TrimSpace(mapped) != "" {
+                        statusLabel = strings.TrimSpace(mapped)
+                }
+        }
+        if statusLabel == "" {
+                statusLabel = "(none)"
+        }
+
+        assignedLabel := ""
+        if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) != "" {
+                assignedLabel = actorDisplayLabel(db, strings.TrimSpace(*it.AssignedActorID))
+        }
+
+        dueDate := ""
+        dueTime := ""
+        if it.Due != nil {
+                dueDate = strings.TrimSpace(it.Due.Date)
+                if it.Due.Time != nil {
+                        dueTime = strings.TrimSpace(*it.Due.Time)
+                }
+        }
+        schDate := ""
+        schTime := ""
+        if it.Schedule != nil {
+                schDate = strings.TrimSpace(it.Schedule.Date)
+                if it.Schedule.Time != nil {
+                        schTime = strings.TrimSpace(*it.Schedule.Time)
+                }
+        }
+
+        doneChildren := 0
+        totalChildren := 0
+        kids := db.ChildrenOf(it.ID)
+        if len(kids) > 0 {
+                totalChildren = len(kids)
+                for _, ch := range kids {
+                        if outline != nil && statusutil.IsEndState(*outline, ch.StatusID) {
+                                doneChildren++
+                        }
+                }
+        }
+
+        isEnd := false
+        if outline != nil {
+                isEnd = statusutil.IsEndState(*outline, it.StatusID)
+        }
+
+        return itemOutlineRowVM{
+                ID:            it.ID,
+                Title:         it.Title,
+                StatusID:      it.StatusID,
+                StatusLabel:   statusLabel,
+                IsEndState:    isEnd,
+                AssignedLabel: assignedLabel,
+                Priority:      it.Priority,
+                OnHold:        it.OnHold,
+                DueDate:       dueDate,
+                DueTime:       dueTime,
+                SchDate:       schDate,
+                SchTime:       schTime,
+                Tags:          it.Tags,
+                HasChildren:   totalChildren > 0,
+                DoneChildren:  doneChildren,
+                TotalChildren: totalChildren,
+        }
+}
+
+func itemHistoryRowsForItem(dir string, itemID string, limit int) (rows []itemHistoryRowVM, last string) {
+        itemID = strings.TrimSpace(itemID)
+        if itemID == "" {
+                return nil, ""
+        }
+        if limit <= 0 {
+                limit = 200
+        }
+        evs, err := store.ReadEventsTail(dir, limit)
+        if err != nil || len(evs) == 0 {
+                return nil, ""
+        }
+        filtered := make([]model.Event, 0, len(evs))
+        for _, ev := range evs {
+                if strings.TrimSpace(ev.EntityID) == itemID {
+                        filtered = append(filtered, ev)
+                        continue
+                }
+                // comment.add / worklog.add store itemId in payload; include those too.
+                if p, ok := ev.Payload.(map[string]any); ok {
+                        if v, ok := p["itemId"].(string); ok && strings.TrimSpace(v) == itemID {
+                                filtered = append(filtered, ev)
+                        }
+                }
+        }
+        if len(filtered) == 0 {
+                return nil, ""
+        }
+        // Newest first (events tail is newest-first already, but keep stable).
+        rows = make([]itemHistoryRowVM, 0, len(filtered))
+        for _, ev := range filtered {
+                ts := ev.TS.UTC().Format(time.RFC3339)
+                rows = append(rows, itemHistoryRowVM{TS: ts, Type: strings.TrimSpace(ev.Type)})
+        }
+        last = rows[0].TS
+        return rows, last
 }
 
 func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
@@ -4802,6 +5174,20 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 statusDefs = o.StatusDefs
                 statusOptionsJSON = outlineStatusOptionsJSON(*o)
         }
+        statusLabelByID := map[string]string{}
+        if outline != nil {
+                for _, sd := range outline.StatusDefs {
+                        sid := strings.TrimSpace(sd.ID)
+                        if sid == "" {
+                                continue
+                        }
+                        lbl := strings.TrimSpace(sd.Label)
+                        if lbl == "" {
+                                lbl = sid
+                        }
+                        statusLabelByID[sid] = lbl
+                }
+        }
         replyTo := strings.TrimSpace(r.URL.Query().Get("replyTo"))
         if replyTo != "" {
                 ok := false
@@ -4826,6 +5212,21 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                         }
                 }
         }
+        commentsCount := len(comments)
+        lastComment := ""
+        for _, c := range comments {
+                if lastComment == "" || c.CreatedAt.UTC().Format(time.RFC3339) > lastComment {
+                        lastComment = c.CreatedAt.UTC().Format(time.RFC3339)
+                }
+        }
+        worklogCount := len(worklog)
+        lastWorklog := ""
+        for _, wle := range worklog {
+                if lastWorklog == "" || wle.CreatedAt.UTC().Format(time.RFC3339) > lastWorklog {
+                        lastWorklog = wle.CreatedAt.UTC().Format(time.RFC3339)
+                }
+        }
+        historyRows, lastHistory := itemHistoryRowsForItem(dir, itemID, 250)
 
         assignedID := ""
         if it.AssignedActorID != nil {
@@ -4836,22 +5237,8 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 assignedLabel = actorDisplayLabel(db, assignedID)
         }
         statusLabel := strings.TrimSpace(it.StatusID)
-        if outline != nil {
-                statusLabelByID := map[string]string{}
-                for _, sd := range outline.StatusDefs {
-                        sid := strings.TrimSpace(sd.ID)
-                        if sid == "" {
-                                continue
-                        }
-                        lbl := strings.TrimSpace(sd.Label)
-                        if lbl == "" {
-                                lbl = sid
-                        }
-                        statusLabelByID[sid] = lbl
-                }
-                if mapped, ok := statusLabelByID[statusLabel]; ok && strings.TrimSpace(mapped) != "" {
-                        statusLabel = strings.TrimSpace(mapped)
-                }
+        if mapped, ok := statusLabelByID[statusLabel]; ok && strings.TrimSpace(mapped) != "" {
+                statusLabel = strings.TrimSpace(mapped)
         }
         if statusLabel == "" {
                 statusLabel = "(none)"
@@ -4905,8 +5292,46 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 StatusDefs:         statusDefs,
                 ErrorMessage:       errMsg,
                 SuccessMessage:     okMsg,
+                CommentsCount:      commentsCount,
+                LastComment:        lastComment,
+                WorklogCount:       worklogCount,
+                LastWorklog:        lastWorklog,
+                HistoryCount:       len(historyRows),
+                LastHistory:        lastHistory,
+                History:            historyRows,
         }
         vm.ActorID = actorID
+
+        // Parent + Children (TUI parity).
+        if it.ParentID != nil && strings.TrimSpace(*it.ParentID) != "" {
+                if pit, ok := db.FindItem(strings.TrimSpace(*it.ParentID)); ok && pit != nil && !pit.Archived {
+                        row := itemOutlineRowVMFromItem(db, outline, statusLabelByID, *pit)
+                        vm.ParentRow = &row
+                }
+        }
+        {
+                kids := db.ChildrenOf(it.ID)
+                kptrs := make([]*model.Item, 0, len(kids))
+                for i := range kids {
+                        if kids[i].Archived {
+                                continue
+                        }
+                        kptrs = append(kptrs, &kids[i])
+                }
+                store.SortItemsByRankOrder(kptrs)
+                maxRows := 8
+                if len(kptrs) > maxRows {
+                        vm.ChildrenMore = len(kptrs) - maxRows
+                        kptrs = kptrs[:maxRows]
+                }
+                vm.Children = make([]itemOutlineRowVM, 0, len(kptrs))
+                for _, p := range kptrs {
+                        if p == nil {
+                                continue
+                        }
+                        vm.Children = append(vm.Children, itemOutlineRowVMFromItem(db, outline, statusLabelByID, *p))
+                }
+        }
         if itemReadOnly {
                 vm.ReadOnly = true
         } else {

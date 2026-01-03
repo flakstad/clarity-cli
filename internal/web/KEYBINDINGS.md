@@ -58,6 +58,12 @@ All key handling is routed through a single `document.addEventListener('keydown'
 - `d/s` due/schedule, `p/o` priority/on-hold
 - `C` comment, `w` worklog, `m` move outline, `r` archive
 - `y/Y` copy ref / copy show command
+- In side panels: `Esc` close, `R` reply (comments)
+
+## Workspaces view
+
+- list navigation: `j/k`, `↑/↓`, `Ctrl+N/P`, `Enter` switch
+- `n` new workspace, `r` rename focused
 
 ## Outline statuses (web)
 

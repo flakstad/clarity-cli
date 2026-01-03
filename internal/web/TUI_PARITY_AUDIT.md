@@ -62,6 +62,15 @@ This document is the running “source of truth” for keyboard parity between t
 | `r` | Archive outline | Archive focused outline | ✅ |
 | `S` | Edit outline statuses | Outline statuses modal | ✅ |
 
+### Workspaces list (web: `/workspaces`)
+
+| Key | TUI | Web | Status |
+|---|---|---|---|
+| `j/k` `↑/↓` `Ctrl+N/P` | Move selection | Move focus | ✅ |
+| `Enter` | Switch workspace | Switch workspace | ✅ |
+| `n` | New workspace | New workspace prompt | ✅ |
+| `r` | Rename workspace | Rename focused workspace prompt | ✅ |
+
 ## Native outline view
 
 The native outline web mode aims to match the TUI’s outline bindings (move/reorder, indent/outdent, status cycling, collapse, etc.).
@@ -111,6 +120,13 @@ The goal is: the web action panel should expose the same actions as the TUI for 
 | `y/Y` | Copy ref / show cmd | Copy item ref / Copy show command | ✅ |
 | `m` | Move to outline… | Move to outline… | ✅ |
 | `r` | Archive item | Archive item | ✅ |
+
+## Item side panels
+
+| Behavior | TUI | Web | Status |
+|---|---|---|---|
+| Open side pane | focus “Comments/Worklog/History” row + Enter | focus “Related” row + Enter | ✅ |
+| Reply to comment | `R` (reply) | `R` (reply) | ✅ |
 
 ## Agenda commands panel
 

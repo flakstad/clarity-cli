@@ -43,11 +43,15 @@
 
   <h1>{{.Item.Title}}</h1>
 
+  <div class="item-shell" id="item-shell">
+  <div id="item-left-pane">
   <div class="card">
     <div
       class="outline-row {{if not .CanEdit}}outline-row--readonly{{end}}"
       tabindex="0"
       data-outline-row
+      data-kb-item
+      data-focus-id="{{.Item.ID}}"
       data-id="{{.Item.ID}}"
       data-status="{{.Item.StatusID}}"
       data-end="false"
@@ -78,6 +82,78 @@
     <div id="outline-status" class="dim" style="margin-top: 10px;"></div>
   </div>
 
+  <div class="card">
+    <div><strong>Details</strong></div>
+    <div class="dim" style="margin-top:8px;">Enter opens the editor/picker (TUI parity)</div>
+    <div style="margin-top:10px;">
+      <div class="list-row" tabindex="0" data-kb-item data-focus-id="fld-title" data-item-field="title"><span class="dim">Title:</span> <span>{{.Item.Title}}</span></div>
+      <div class="list-row" tabindex="0" data-kb-item data-focus-id="fld-status" data-item-field="status"><span class="dim">Status:</span> <span class="outline-status outline-label">{{.StatusLabel}}</span></div>
+      <div class="list-row" tabindex="0" data-kb-item data-focus-id="fld-assign" data-item-field="assign"><span class="dim">Assigned:</span> <span>{{if .AssignedLabel}}@{{.AssignedLabel}}{{else}}-{{end}}</span></div>
+      <div class="list-row" tabindex="0" data-kb-item data-focus-id="fld-tags" data-item-field="tags"><span class="dim">Tags:</span> <span>{{if .Item.Tags}}{{range $i, $t := .Item.Tags}}{{if $i}} {{end}}#{{$t}}{{end}}{{else}}-{{end}}</span></div>
+      <div class="list-row" tabindex="0" data-kb-item data-focus-id="fld-due" data-item-field="due"><span class="dim">Due:</span> <span>{{if .Item.Due}}{{.DueDate}}{{if .DueTime}} {{.DueTime}}{{end}}{{else}}-{{end}}</span></div>
+      <div class="list-row" tabindex="0" data-kb-item data-focus-id="fld-schedule" data-item-field="schedule"><span class="dim">Schedule:</span> <span>{{if .Item.Schedule}}{{.SchDate}}{{if .SchTime}} {{.SchTime}}{{end}}{{else}}-{{end}}</span></div>
+      <div class="list-row" tabindex="0" data-kb-item data-focus-id="fld-priority" data-item-field="priority"><span class="dim">Priority:</span> <span>{{if .Item.Priority}}true{{else}}false{{end}}</span></div>
+      <div class="list-row" tabindex="0" data-kb-item data-focus-id="fld-hold" data-item-field="onHold"><span class="dim">On hold:</span> <span>{{if .Item.OnHold}}true{{else}}false{{end}}</span></div>
+      <div class="list-row" tabindex="0" data-kb-item data-focus-id="fld-desc" data-item-field="description"><span class="dim">Description:</span> <span class="dim">{{if .Item.Description}}(set){{else}}(none){{end}}</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    {{if .ParentRow}}
+      <div><strong>Parent</strong></div>
+      <ul class="outline-list">
+        <li>
+          <a
+            class="outline-row"
+            href="/items/{{.ParentRow.ID}}"
+            data-kb-item
+            data-focus-id="{{.ParentRow.ID}}"
+          >
+            <span class="outline-caret outline-chevron outline-caret--none" aria-hidden="true">▸</span>
+            {{if gt .ParentRow.TotalChildren 0}}<span class="outline-progress dim">[{{.ParentRow.DoneChildren}}/{{.ParentRow.TotalChildren}}]</span>{{end}}
+            <span class="outline-status outline-label {{if .ParentRow.IsEndState}}outline-status--end{{else}}outline-status--open{{end}}">{{.ParentRow.StatusLabel}}</span>
+            <span class="outline-title outline-text">{{.ParentRow.Title}}</span>
+          </a>
+        </li>
+      </ul>
+      <div style="margin-top:12px;"></div>
+    {{end}}
+
+    <div><strong>Children</strong></div>
+    {{if .Children}}
+      <ul class="outline-list">
+        {{range .Children}}
+          <li>
+            <a
+              class="outline-row"
+              href="/items/{{.ID}}"
+              data-kb-item
+              data-focus-id="{{.ID}}"
+            >
+              <span class="outline-caret outline-chevron {{if not .HasChildren}}outline-caret--none{{end}}" aria-hidden="true">{{if .HasChildren}}▸{{end}}</span>
+              {{if gt .TotalChildren 0}}<span class="outline-progress dim">[{{.DoneChildren}}/{{.TotalChildren}}]</span>{{end}}
+              <span class="outline-status outline-label {{if .IsEndState}}outline-status--end{{else}}outline-status--open{{end}}">{{.StatusLabel}}</span>
+              <span class="outline-title outline-text">{{.Title}}</span>
+              <span class="outline-right">
+                {{if .Priority}}<span class="outline-flag outline-flag--priority">P</span>{{end}}
+                {{if .OnHold}}<span class="outline-flag outline-flag--hold">H</span>{{end}}
+                {{if .DueDate}}<span class="outline-meta outline-meta--due outline-due dim">Due {{.DueDate}}{{if .DueTime}} {{.DueTime}}{{end}}</span>{{end}}
+                {{if .SchDate}}<span class="outline-meta outline-meta--sch outline-schedule dim">Sch {{.SchDate}}{{if .SchTime}} {{.SchTime}}{{end}}</span>{{end}}
+                {{if .AssignedLabel}}<span class="outline-assignee outline-assign dim">@{{.AssignedLabel}}</span>{{end}}
+                {{if .Tags}}<span class="outline-tags dim">{{range $i, $t := .Tags}}{{if $i}} {{end}}#{{$t}}{{end}}</span>{{end}}
+              </span>
+            </a>
+          </li>
+        {{end}}
+        {{if gt .ChildrenMore 0}}
+          <li class="dim">… and {{.ChildrenMore}} more</li>
+        {{end}}
+      </ul>
+    {{else}}
+      <div class="dim">(no children)</div>
+    {{end}}
+  </div>
+
   {{if .SuccessMessage}}
     <div class="msg"><div><strong>OK</strong> — {{.SuccessMessage}}</div></div>
   {{end}}
@@ -91,57 +167,108 @@
   </div>
 
   <div class="card">
-    <div><strong>Comments</strong> ({{len .Comments}})</div>
-    {{if and (not .ReadOnly) .ActorID}}
-      <form id="comment-form" method="post" action="/items/{{.Item.ID}}/comments" style="margin-top: 12px;">
-        {{if .ReplyTo}}
-          <div class="dim">Replying to <code>{{.ReplyTo}}</code> — <a href="/items/{{.Item.ID}}#comment-form">cancel</a></div>
-          <input type="hidden" name="replyTo" value="{{.ReplyTo}}">
-        {{end}}
-        <div><label for="body"><span class="dim">Add comment</span></label></div>
-        <div><textarea id="body" name="body" rows="4" style="width: 100%; max-width: 100%;"></textarea></div>
-        <div style="margin-top: 8px;"><button type="submit">Post</button></div>
-      </form>
-    {{end}}
-    {{if .Comments}}
-      <ul>
-        {{range .Comments}}
-          <li>
-            <span class="dim">{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</span>
-            — <code>{{.AuthorID}}</code>
-            {{if .ReplyToCommentID}} <span class="dim">(reply to <code>{{.ReplyToCommentID}}</code>)</span>{{end}}
-            {{if and (not $.ReadOnly) $.ActorID}} <span class="dim">— <a href="/items/{{$.Item.ID}}?replyTo={{.ID}}#comment-form">reply</a></span>{{end}}
-            <pre>{{.Body}}</pre>
-          </li>
-        {{end}}
-      </ul>
-    {{else}}
-      <div>(none)</div>
-    {{end}}
+    <div><strong>Related</strong></div>
+    <div class="dim" style="margin-top:8px;">Use <code>j/k</code> or <code>↑/↓</code> to focus a row · <code>Enter</code> to open the side panel · <code>x</code> for actions</div>
+    <div style="margin-top:10px;">
+      <div class="list-row" tabindex="0" data-kb-item data-focus-id="rel-comments" data-item-side-open="comments">
+        <span>Comments:</span>
+        <span>{{.CommentsCount}}</span>
+        <span class="dim">(last {{if .LastComment}}{{.LastComment}}{{else}}-{{end}})</span>
+      </div>
+      <div class="list-row" tabindex="0" data-kb-item data-focus-id="rel-worklog" data-item-side-open="worklog">
+        <span>Worklog:</span>
+        <span>{{.WorklogCount}}</span>
+        <span class="dim">(last {{if .LastWorklog}}{{.LastWorklog}}{{else}}-{{end}})</span>
+      </div>
+      <div class="list-row" tabindex="0" data-kb-item data-focus-id="rel-history" data-item-side-open="history">
+        <span>History:</span>
+        <span>{{.HistoryCount}}</span>
+        <span class="dim">(last {{if .LastHistory}}{{.LastHistory}}{{else}}-{{end}})</span>
+      </div>
+    </div>
   </div>
 
-  <div class="card">
-    <div><strong>Worklog</strong> (private)</div>
-    {{if and (not .ReadOnly) .ActorID}}
-      <form id="worklog-form" method="post" action="/items/{{.Item.ID}}/worklog" style="margin-top: 12px;">
-        <div><label for="worklog"><span class="dim">Add worklog entry (only visible to you)</span></label></div>
-        <div><textarea id="worklog" name="body" rows="4" style="width: 100%; max-width: 100%;"></textarea></div>
-        <div style="margin-top: 8px;"><button type="submit">Add</button></div>
-      </form>
-    {{end}}
-    {{if .Worklog}}
-      <ul>
-        {{range .Worklog}}
-          <li>
-            <span class="dim">{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</span>
-            <pre>{{.Body}}</pre>
-          </li>
-        {{end}}
-      </ul>
-    {{else}}
-      <div class="dim">(none)</div>
-    {{end}}
-  </div>
+  </div><!-- /item-left-pane -->
+
+  <aside id="item-side-pane" class="item-side" style="display:none;" data-kb-scope="item-side">
+    <div class="item-side-head">
+      <strong id="item-side-title">Side</strong>
+      <span class="dim">Esc/Ctrl+G close · <code>R</code> reply (comments)</span>
+    </div>
+
+    <div data-item-side-panel="comments" style="display:none;">
+      <div class="dim" style="margin: 8px 0;">Comments</div>
+      {{if .Comments}}
+        <ul class="kb-list">
+          {{range .Comments}}
+            <li>
+              <div class="list-row" tabindex="0" data-kb-item data-comment-id="{{.ID}}" data-focus-id="cmt-{{.ID}}">
+                <span class="dim">{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</span>
+                <span>—</span>
+                <span><code>{{.AuthorID}}</code></span>
+                {{if .ReplyToCommentID}}<span class="dim">(reply)</span>{{end}}
+              </div>
+              <pre style="margin: 6px 0 10px;">{{.Body}}</pre>
+            </li>
+          {{end}}
+        </ul>
+      {{else}}
+        <div class="dim">(none)</div>
+      {{end}}
+      {{if and (not .ReadOnly) .ActorID}}
+        <form method="post" action="/items/{{.Item.ID}}/comments" style="margin-top: 12px;">
+          <div><label class="dim" for="side-comment-body">Add comment</label></div>
+          <textarea id="side-comment-body" name="body" rows="4"></textarea>
+          <div style="margin-top: 8px;"><button type="submit">Post</button></div>
+        </form>
+      {{end}}
+    </div>
+
+    <div data-item-side-panel="worklog" style="display:none;">
+      <div class="dim" style="margin: 8px 0;">Worklog (private)</div>
+      {{if .Worklog}}
+        <ul class="kb-list">
+          {{range .Worklog}}
+            <li>
+              <div class="list-row" tabindex="0" data-kb-item data-focus-id="wlg-{{.ID}}">
+                <span class="dim">{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</span>
+              </div>
+              <pre style="margin: 6px 0 10px;">{{.Body}}</pre>
+            </li>
+          {{end}}
+        </ul>
+      {{else}}
+        <div class="dim">(none)</div>
+      {{end}}
+      {{if and (not .ReadOnly) .ActorID}}
+        <form method="post" action="/items/{{.Item.ID}}/worklog" style="margin-top: 12px;">
+          <div><label class="dim" for="side-worklog-body">Add worklog entry</label></div>
+          <textarea id="side-worklog-body" name="body" rows="4"></textarea>
+          <div style="margin-top: 8px;"><button type="submit">Add</button></div>
+        </form>
+      {{end}}
+    </div>
+
+    <div data-item-side-panel="history" style="display:none;">
+      <div class="dim" style="margin: 8px 0;">History (events)</div>
+      {{if .History}}
+        <ul class="kb-list">
+          {{range .History}}
+            <li>
+              <div class="list-row" tabindex="0" data-kb-item>
+                <span class="dim">{{.TS}}</span>
+                <span>—</span>
+                <span><code>{{.Type}}</code></span>
+              </div>
+            </li>
+          {{end}}
+        </ul>
+      {{else}}
+        <div class="dim">(none)</div>
+      {{end}}
+    </div>
+  </aside>
+  </div><!-- /item-shell -->
 </main>
 {{end}}
 

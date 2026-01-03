@@ -11,28 +11,25 @@
   <div class="card">
     <div><strong>All workspaces</strong> ({{len .Entries}})</div>
     {{if .Entries}}
-      <ul>
+      <ul class="kb-list">
         {{range .Entries}}
-          <li style="margin: 6px 0;">
+          <li>
             <form method="post" action="/workspaces/use" style="display:inline;">
               <input type="hidden" name="name" value="{{.Name}}">
               <button
                 type="submit"
+                class="list-row"
                 data-kb-item
                 data-focus-id="{{.Name}}"
-                style="font: inherit; padding: 4px 8px; border-radius: 8px;"
               >
-                {{if eq $.CurrentWorkspace .Name}}<strong>{{.Name}}</strong>{{else}}{{.Name}}{{end}}
+                <span class="list-title">{{if eq $.CurrentWorkspace .Name}}<strong>{{.Name}}</strong>{{else}}{{.Name}}{{end}}</span>
+                <span class="dim">{{if .Ref.Kind}}{{.Ref.Kind}}{{else}}workspace{{end}} — <code>{{.Ref.Path}}</code></span>
               </button>
             </form>
-            <span class="dim" style="margin-left: 8px;">
-              {{if .Ref.Kind}}{{.Ref.Kind}}{{else}}workspace{{end}}
-              — <code>{{.Ref.Path}}</code>
-            </span>
           </li>
         {{end}}
       </ul>
-      <div class="dim" style="margin-top: 10px;">Keys: <code>j/k</code>, <code>↑/↓</code>, <code>Enter</code></div>
+      <div class="dim" style="margin-top: 10px;">Keys: <code>j/k</code>, <code>↑/↓</code>, <code>Enter</code> · <code>n</code> new · <code>r</code> rename</div>
     {{else}}
       <div>(none)</div>
     {{end}}

@@ -258,6 +258,8 @@ ul {
   padding: 0.3rem 0.5rem;
   border-radius: 0;
   outline: none;
+  text-decoration: none;
+  color: inherit;
 }
 
 .outline-row:hover {
@@ -310,6 +312,14 @@ ul {
 
 .outline-status--end {
   color: var(--clarity-outline-color-done);
+}
+
+.outline-progress {
+  font-size: 0.85em;
+  color: var(--clarity-outline-text-muted);
+  user-select: none;
+  white-space: nowrap;
+  margin-right: 0.15rem;
 }
 
 .outline-title {
@@ -384,6 +394,35 @@ ul {
 #outline-native[data-view-mode="list+preview"] .outline-shell {
   grid-template-columns: 1fr minmax(280px, 420px);
   align-items: start;
+}
+
+.item-shell {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+#clarity-main[data-item-side-open="true"] .item-shell {
+  grid-template-columns: 1fr minmax(280px, 420px);
+  align-items: start;
+}
+
+.item-side {
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  padding: 12px;
+  max-height: calc(100vh - 140px);
+  overflow: auto;
+}
+
+.item-side-head {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  align-items: baseline;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .outline-preview {
