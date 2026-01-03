@@ -217,6 +217,76 @@ button:hover {
   background: var(--clarity-outline-hover);
 }
 
+/* Native (JS) modals: keep them consistent and themeable. */
+.native-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.25);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 9998;
+}
+
+.native-modal-box {
+  max-width: 640px;
+  width: 92vw;
+  background: var(--clarity-outline-bg-secondary);
+  color: var(--clarity-outline-text-primary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  padding: 12px 14px;
+}
+
+.native-modal-box--narrow {
+  max-width: 520px;
+}
+
+.native-modal-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.native-modal-body {
+  margin-top: 10px;
+}
+
+.native-modal-list {
+  margin-top: 10px;
+  max-height: 46vh;
+  overflow: auto;
+}
+
+.native-modal-hint {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.native-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+  align-items: center;
+}
+
+.native-modal-field-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.native-modal-field-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
 ul {
   margin: 8px 0 0 18px;
 }
@@ -510,6 +580,13 @@ ul {
 .outline-column-header {
   font-weight: 650;
   margin-bottom: 8px;
+  outline: none;
+  border-radius: 8px;
+  padding: 4px 6px;
+}
+
+.outline-column-header:focus {
+  background: var(--clarity-outline-focus);
 }
 
 .outline-card {

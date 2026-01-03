@@ -270,6 +270,23 @@
     row?.focus?.();
   };
 
+  const focusOutlineById = (id) => {
+    id = String(id || '').trim();
+    if (!id) return;
+    const root = nativeOutlineRoot();
+    if (!root) return;
+    const mode = outlineViewNormalize(root.dataset.viewMode || '');
+    if (mode === 'columns') {
+      const pane = document.getElementById('outline-columns-pane');
+      const el = pane ? pane.querySelector('[data-focus-id="' + CSS.escape(id) + '"]') : null;
+      if (el && typeof el.focus === 'function') {
+        el.focus();
+        return;
+      }
+    }
+    focusNativeRowById(id);
+  };
+
   const nativeRowSibling = (row, delta) => {
     const rows = nativeRows();
     if (!rows.length) return null;
@@ -534,29 +551,20 @@
     if (el) return el;
     el = document.createElement('div');
     el.id = 'native-tags-modal';
-    el.style.position = 'fixed';
-    el.style.left = '0';
-    el.style.top = '0';
-    el.style.right = '0';
-    el.style.bottom = '0';
-    el.style.background = 'rgba(0,0,0,.25)';
-    el.style.display = 'none';
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'center';
-    el.style.zIndex = '9998';
+    el.className = 'native-modal-backdrop';
     el.innerHTML = `
-      <div style="max-width:560px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+      <div class="native-modal-box native-modal-box--narrow">
+        <div class="native-modal-head">
           <strong>Tags</strong>
           <span class="dim" style="font-size:12px;">Esc to cancel</span>
         </div>
-        <div id="native-tags-list" tabindex="0" style="margin-top:10px;max-height:40vh;overflow:auto;outline:none;"></div>
-        <div style="margin-top:10px;display:flex;gap:10px;align-items:center;">
+        <div id="native-tags-list" tabindex="0" class="native-modal-list" style="max-height:40vh;outline:none;"></div>
+        <div class="native-modal-field-row" style="margin-top:10px;">
           <input id="native-tags-new" placeholder="Add tag (without #)" style="flex:1;">
           <button type="button" id="native-tags-add">Add</button>
         </div>
-        <div class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Space to toggle (saves) · a to add · Enter to close</div>
-        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;align-items:center;">
+        <div class="dim native-modal-hint">Up/Down or Ctrl+P/N to move · Space to toggle (saves) · a to add · Enter to close</div>
+        <div class="native-modal-actions">
           <button type="button" id="native-tags-cancel">Cancel</button>
           <button type="button" id="native-tags-done">Done</button>
         </div>
@@ -925,12 +933,17 @@
 
     const wrap = document.createElement('div');
     wrap.className = 'outline-columns';
-    for (const statusID of groups.keys()) {
+    const ordered = order.length ? order : Array.from(groups.keys());
+    for (const statusID of ordered) {
       const col = document.createElement('div');
       col.className = 'outline-column';
       const head = document.createElement('div');
       head.className = 'outline-column-header';
       head.textContent = labelByID.get(statusID) || statusID || '(none)';
+      head.tabIndex = 0;
+      head.dataset.kbItem = '';
+      head.dataset.focusId = 'col-' + statusID;
+      head.dataset.colStatus = statusID;
       col.appendChild(head);
       const list = document.createElement('div');
       list.className = 'outline-column-list';
@@ -941,8 +954,10 @@
         card.tabIndex = 0;
         card.dataset.kbItem = '';
         card.dataset.focusId = it.id;
+        card.dataset.itemId = it.id;
+        card.dataset.colStatus = statusID;
         card.dataset.openHref = '/items/' + it.id;
-        card.innerHTML = '<span class="dim">' + escapeHTML(it.id) + '</span> ' + escapeHTML(it.title || '');
+        card.innerHTML = `<span class="outline-title outline-text">${escapeHTML(it.title || '(untitled)')}</span>`;
         card.addEventListener('click', () => { window.location.href = '/items/' + encodeURIComponent(it.id); });
         list.appendChild(card);
       }
@@ -958,24 +973,15 @@
     if (el) return el;
     el = document.createElement('div');
     el.id = 'native-action-modal';
-    el.style.position = 'fixed';
-    el.style.left = '0';
-    el.style.top = '0';
-    el.style.right = '0';
-    el.style.bottom = '0';
-    el.style.background = 'rgba(0,0,0,.25)';
-    el.style.display = 'none';
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'center';
-    el.style.zIndex = '9998';
+    el.className = 'native-modal-backdrop';
     el.innerHTML = `
-      <div style="max-width:620px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+      <div class="native-modal-box">
+        <div class="native-modal-head">
           <strong id="native-action-title">Actions</strong>
           <span class="dim" style="font-size:12px;">Esc to cancel</span>
         </div>
-        <div id="native-action-list" style="margin-top:10px;max-height:46vh;overflow:auto;"></div>
-        <div class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Enter to run</div>
+        <div id="native-action-list" class="native-modal-list"></div>
+        <div class="dim native-modal-hint">Up/Down or Ctrl+P/N to move · Enter to run</div>
       </div>
     `;
     document.body.appendChild(el);
@@ -1539,24 +1545,15 @@
     if (el) return el;
     el = document.createElement('div');
     el.id = 'native-outline-statuses-modal';
-    el.style.position = 'fixed';
-    el.style.left = '0';
-    el.style.top = '0';
-    el.style.right = '0';
-    el.style.bottom = '0';
-    el.style.background = 'rgba(0,0,0,.25)';
-    el.style.display = 'none';
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'center';
-    el.style.zIndex = '9999';
+    el.className = 'native-modal-backdrop';
     el.innerHTML = `
-      <div style="max-width:760px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+      <div class="native-modal-box">
+        <div class="native-modal-head">
           <strong>Outline statuses</strong>
           <span class="dim" style="font-size:12px;">a:add r:rename e:end n:note d:delete ctrl+j/k:move esc:close</span>
         </div>
         <div id="native-outline-statuses-msg" class="dim" style="margin-top:8px;"></div>
-        <div id="native-outline-statuses-list" style="margin-top:10px;max-height:55vh;overflow:auto;"></div>
+        <div id="native-outline-statuses-list" class="native-modal-list" style="max-height:55vh;"></div>
       </div>
     `;
     document.body.appendChild(el);
@@ -1819,7 +1816,7 @@
   const captureState = {
     open: false,
     restoreEl: null,
-    phase: 'select', // select|draft
+    phase: 'select', // select|draft|templates|templates-add|templates-delete
     outlines: [],
     templates: [],
     statusByOutline: {},
@@ -1827,11 +1824,16 @@
     prefix: [],
     list: [],
     idx: 0,
+    templatesIdx: 0,
+    templatesDeleteKeyPath: '',
     selectedTemplate: null,
     draftOutlineId: '',
     draftStatusId: '',
     draftTitle: '',
     draftDesc: '',
+    tmplName: '',
+    tmplKeyPath: '',
+    tmplOutlineId: '',
     err: '',
   };
 
@@ -1840,26 +1842,17 @@
     if (el) return el;
     el = document.createElement('div');
     el.id = 'native-capture-modal';
-    el.style.position = 'fixed';
-    el.style.left = '0';
-    el.style.top = '0';
-    el.style.right = '0';
-    el.style.bottom = '0';
-    el.style.background = 'rgba(0,0,0,.25)';
-    el.style.display = 'none';
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'center';
-    el.style.zIndex = '9998';
+    el.className = 'native-modal-backdrop';
     el.innerHTML = `
-      <div style="max-width:820px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+      <div class="native-modal-box">
+        <div class="native-modal-head">
           <strong>Capture</strong>
           <span class="dim" style="font-size:12px;">Esc to cancel</span>
         </div>
         <div id="native-capture-hint" class="dim" style="margin-top:8px;font-size:12px;"></div>
-        <div id="native-capture-body" style="margin-top:10px;"></div>
+        <div id="native-capture-body" class="native-modal-body"></div>
         <div id="native-capture-err" class="dim" style="margin-top:10px;display:none;"></div>
-        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;align-items:center;">
+        <div class="native-modal-actions">
           <button type="button" id="native-capture-cancel">Cancel</button>
           <button type="button" id="native-capture-ok">OK</button>
         </div>
@@ -1946,6 +1939,8 @@
   const captureRefreshList = () => {
     const node = captureNodeAtPrefix();
     const opts = [];
+    // Always provide a manual capture option (works even with zero templates).
+    opts.push({ kind: 'manual', key: '', label: 'Manual… (choose outline)' });
     if (node && node.template) {
       opts.push({ kind: 'select', key: 'Enter', label: 'Use template: ' + node.template.name, template: node.template });
     }
@@ -1964,7 +1959,9 @@
   const captureStartDraft = (tmpl) => {
     captureState.selectedTemplate = tmpl;
     captureState.phase = 'draft';
-    captureState.draftOutlineId = String(tmpl?.outlineId || '').trim();
+    let outID = String(tmpl?.outlineId || '').trim();
+    if (!outID) outID = String((captureState.outlines || [])[0]?.id || '').trim();
+    captureState.draftOutlineId = outID;
     const sts = captureState.statusByOutline && captureState.draftOutlineId ? (captureState.statusByOutline[captureState.draftOutlineId] || []) : [];
     captureState.draftStatusId = String(sts[0]?.id || '').trim();
     captureState.draftTitle = '';
@@ -1975,6 +1972,10 @@
   const captureSelectCurrent = () => {
     const cur = (captureState.list || [])[captureState.idx] || null;
     if (!cur) return;
+    if (cur.kind === 'manual') {
+      captureStartDraft(null);
+      return;
+    }
     if (cur.kind === 'select') {
       captureStartDraft(cur.template);
       return;
@@ -1990,6 +1991,76 @@
     }
   };
 
+  const captureOpenTemplates = () => {
+    captureState.phase = 'templates';
+    captureState.templatesIdx = 0;
+    captureState.templatesDeleteKeyPath = '';
+    renderCapture();
+  };
+
+  const captureStartAddTemplate = () => {
+    captureState.phase = 'templates-add';
+    captureState.tmplName = '';
+    captureState.tmplKeyPath = '';
+    captureState.tmplOutlineId = String((captureState.outlines || [])[0]?.id || '').trim();
+    renderCapture();
+  };
+
+  const captureConfirmDeleteTemplate = (keyPath) => {
+    captureState.phase = 'templates-delete';
+    captureState.templatesDeleteKeyPath = String(keyPath || '').trim();
+    renderCapture();
+  };
+
+  const submitCaptureTemplateUpsert = async () => {
+    const modal = ensureCaptureModal();
+    const body = modal.querySelector('#native-capture-body');
+    const name = String(body?.querySelector('#native-capture-tmpl-name')?.value || captureState.tmplName || '').trim();
+    const keyPath = String(body?.querySelector('#native-capture-tmpl-keys')?.value || captureState.tmplKeyPath || '').trim();
+    const outlineId = String(body?.querySelector('#native-capture-tmpl-outline')?.value || captureState.tmplOutlineId || '').trim();
+    if (!name || !keyPath || !outlineId) {
+      setCaptureError('Error: missing name, keys, or outline');
+      return;
+    }
+    const res = await fetch('/capture/templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ name, keyPath, outlineId }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await loadCaptureOptions();
+    captureState.outlines = Array.isArray(data?.outlines) ? data.outlines : [];
+    captureState.templates = Array.isArray(data?.templates) ? data.templates : [];
+    captureState.statusByOutline = (data && typeof data.statusOptionsByOutline === 'object' && data.statusOptionsByOutline) ? data.statusOptionsByOutline : {};
+    captureState.tree = buildCaptureTree(captureState.templates);
+    setCaptureError('');
+    captureState.phase = 'templates';
+    renderCapture();
+  };
+
+  const submitCaptureTemplateDelete = async () => {
+    const keyPath = String(captureState.templatesDeleteKeyPath || '').trim();
+    if (!keyPath) {
+      captureState.phase = 'templates';
+      renderCapture();
+      return;
+    }
+    const res = await fetch('/capture/templates/' + encodeURIComponent(keyPath), {
+      method: 'DELETE',
+      headers: { 'Accept': 'application/json' },
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await loadCaptureOptions();
+    captureState.outlines = Array.isArray(data?.outlines) ? data.outlines : [];
+    captureState.templates = Array.isArray(data?.templates) ? data.templates : [];
+    captureState.statusByOutline = (data && typeof data.statusOptionsByOutline === 'object' && data.statusOptionsByOutline) ? data.statusOptionsByOutline : {};
+    captureState.tree = buildCaptureTree(captureState.templates);
+    captureState.phase = 'templates';
+    captureState.templatesDeleteKeyPath = '';
+    setCaptureError('');
+    renderCapture();
+  };
+
   const renderCapture = () => {
     const modal = ensureCaptureModal();
     const hint = modal.querySelector('#native-capture-hint');
@@ -1998,8 +2069,100 @@
     if (!hint || !body || !okBtn) return;
 
     const prefix = (captureState.prefix || []).join('');
+    if (captureState.phase === 'templates') {
+      hint.textContent = 'Capture templates (current workspace) · a add · d delete · Enter back · Ctrl+T templates';
+      okBtn.textContent = 'Back';
+      const rows = Array.isArray(captureState.templates) ? captureState.templates : [];
+      const outlineLabels = captureOutlineLabelByID();
+      const idx = Math.max(0, Math.min(rows.length - 1, captureState.templatesIdx || 0));
+      captureState.templatesIdx = idx;
+      body.innerHTML = `
+        <div class="dim" style="margin-bottom:8px;">Templates</div>
+        <ul class="kb-list" id="native-capture-templates-list" style="list-style:none;padding:0;margin:0;"></ul>
+        <div class="dim native-modal-hint">Tip: configure more templates per-workspace via <code>Ctrl+T</code> in the TUI, or here.</div>
+      `;
+      const ul = body.querySelector('#native-capture-templates-list');
+      if (ul) {
+        if (!rows.length) {
+          const li = document.createElement('li');
+          li.className = 'dim';
+          li.textContent = '(none) — press a to add';
+          ul.appendChild(li);
+        } else {
+          rows.forEach((t, i) => {
+            const keyPath = String(t?.keyPath || '').trim();
+            const name = String(t?.name || '').trim();
+            const outID = String(t?.outlineId || '').trim();
+            const dst = outlineLabels.get(outID) || outID;
+            const li = document.createElement('li');
+            li.className = 'list-row';
+            li.tabIndex = -1;
+            li.style.cursor = 'pointer';
+            if (i === idx) li.style.background = 'color-mix(in oklab, var(--bg), var(--fg) 8%)';
+            li.innerHTML = `<span style="min-width:80px;display:inline-block;"><code>${escapeHTML(keyPath)}</code></span><span>${escapeHTML(name || '(unnamed)')}</span><span class="dim" style="margin-left:10px;">→ ${escapeHTML(dst || '-')}</span>`;
+            li.addEventListener('click', () => { captureState.templatesIdx = i; renderCapture(); });
+            ul.appendChild(li);
+          });
+        }
+      }
+      return;
+    }
+    if (captureState.phase === 'templates-delete') {
+      hint.textContent = 'Delete template · Enter confirm · Esc back';
+      okBtn.textContent = 'Delete';
+      const keyPath = String(captureState.templatesDeleteKeyPath || '').trim();
+      body.innerHTML = `<div>Delete capture template <code>${escapeHTML(keyPath)}</code>?</div>`;
+      return;
+    }
+    if (captureState.phase === 'templates-add') {
+      hint.textContent = 'New template · Ctrl+S save · Esc back';
+      okBtn.textContent = 'Save';
+      body.innerHTML = `
+        <div class="dim">New capture template (current workspace)</div>
+        <div style="margin-top:12px;">
+          <label class="dim" for="native-capture-tmpl-name">Name</label>
+          <input id="native-capture-tmpl-name" type="text" placeholder="e.g. Inbox task" />
+        </div>
+        <div style="margin-top:10px;">
+          <label class="dim" for="native-capture-tmpl-keys">Keys</label>
+          <input id="native-capture-tmpl-keys" type="text" placeholder="e.g. tt" />
+        </div>
+        <div style="margin-top:10px;">
+          <label class="dim" for="native-capture-tmpl-outline">Outline</label>
+          <select id="native-capture-tmpl-outline"></select>
+        </div>
+      `;
+      const nameEl = body.querySelector('#native-capture-tmpl-name');
+      const keysEl = body.querySelector('#native-capture-tmpl-keys');
+      const outEl = body.querySelector('#native-capture-tmpl-outline');
+      if (nameEl) {
+        nameEl.value = captureState.tmplName || '';
+        nameEl.addEventListener('input', () => { captureState.tmplName = String(nameEl.value || ''); });
+      }
+      if (keysEl) {
+        keysEl.value = captureState.tmplKeyPath || '';
+        keysEl.addEventListener('input', () => { captureState.tmplKeyPath = String(keysEl.value || ''); });
+      }
+      if (outEl) {
+        outEl.innerHTML = '';
+        for (const o of (captureState.outlines || [])) {
+          const id = String(o?.id || '').trim();
+          const label = String(o?.label || '').trim() || id;
+          if (!id) continue;
+          const opt = document.createElement('option');
+          opt.value = id;
+          opt.textContent = label;
+          if (id === captureState.tmplOutlineId) opt.selected = true;
+          outEl.appendChild(opt);
+        }
+        outEl.addEventListener('change', () => { captureState.tmplOutlineId = String(outEl.value || '').trim(); });
+      }
+      setTimeout(() => nameEl?.focus?.(), 0);
+      return;
+    }
+
     if (captureState.phase === 'select') {
-      hint.textContent = prefix ? ('Keys: ' + prefix + ' · type next key · Backspace up · Enter select') : 'Type a key to start a capture template sequence.';
+      hint.textContent = prefix ? ('Keys: ' + prefix + ' · type next key · Backspace up · Enter select · Ctrl+T templates') : 'Type a key to start a capture template sequence. Enter for manual capture · Ctrl+T templates';
       okBtn.textContent = 'Select';
       captureRefreshList();
       const rows = captureState.list || [];
@@ -2014,8 +2177,8 @@
           li.className = 'list-row';
           li.tabIndex = -1;
           li.style.cursor = 'pointer';
-          if (i === captureState.idx) li.style.background = 'color-mix(in oklab, Canvas, CanvasText 10%)';
-          li.innerHTML = `<span style="min-width:64px;display:inline-block;"><code>${escapeHTML(o.key)}</code></span><span>${escapeHTML(o.label)}</span>`;
+          if (i === captureState.idx) li.style.background = 'color-mix(in oklab, var(--bg), var(--fg) 8%)';
+          li.innerHTML = `<span style="min-width:64px;display:inline-block;">${o.key ? ('<code>' + escapeHTML(o.key) + '</code>') : ''}</span><span>${escapeHTML(o.label)}</span>`;
           li.addEventListener('click', () => {
             captureState.idx = i;
             renderCapture();
@@ -2034,7 +2197,7 @@
     const statusOpts = captureState.statusByOutline && captureState.draftOutlineId ? (captureState.statusByOutline[captureState.draftOutlineId] || []) : [];
     const statusLabel = (statusOpts.find((o) => String(o?.id || '') === String(captureState.draftStatusId || ''))?.label) || captureState.draftStatusId || '-';
     body.innerHTML = `
-      <div class="dim">Template: <strong>${escapeHTML(String(captureState.selectedTemplate?.name || ''))}</strong></div>
+      <div class="dim">Template: <strong>${escapeHTML(String(captureState.selectedTemplate?.name || 'Manual'))}</strong></div>
       <div class="dim" style="margin-top:6px;">Destination: <strong>${escapeHTML(outlineLabel)}</strong></div>
       <div class="dim" style="margin-top:6px;">Status: <strong>${escapeHTML(statusLabel)}</strong></div>
       <div style="margin-top:12px;">
@@ -2045,7 +2208,7 @@
         <label class="dim" for="native-capture-draft-desc">Description (markdown)</label>
         <textarea id="native-capture-draft-desc" rows="6" style="font-family:var(--mono);"></textarea>
       </div>
-      <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;">
+      <div class="native-modal-field-row" style="margin-top:10px;">
         <label class="dim">Outline
           <select id="native-capture-draft-outline"></select>
         </label>
@@ -2108,11 +2271,16 @@
     captureState.phase = 'select';
     captureState.prefix = [];
     captureState.idx = 0;
+    captureState.templatesIdx = 0;
+    captureState.templatesDeleteKeyPath = '';
     captureState.selectedTemplate = null;
     captureState.draftOutlineId = '';
     captureState.draftStatusId = '';
     captureState.draftTitle = '';
     captureState.draftDesc = '';
+    captureState.tmplName = '';
+    captureState.tmplKeyPath = '';
+    captureState.tmplOutlineId = '';
     captureState.outlines = [];
     captureState.templates = [];
     captureState.statusByOutline = {};
@@ -2185,12 +2353,33 @@
   };
 
   const submitCapture = async () => {
-    const modal = ensureCaptureModal();
     if (!captureState.open) return;
+    if (captureState.phase === 'templates') {
+      captureState.phase = 'select';
+      renderCapture();
+      return;
+    }
+    if (captureState.phase === 'templates-add') {
+      try {
+        await submitCaptureTemplateUpsert();
+      } catch (err) {
+        setCaptureError('Error: ' + (err && err.message ? err.message : 'save failed'));
+      }
+      return;
+    }
+    if (captureState.phase === 'templates-delete') {
+      try {
+        await submitCaptureTemplateDelete();
+      } catch (err) {
+        setCaptureError('Error: ' + (err && err.message ? err.message : 'delete failed'));
+      }
+      return;
+    }
     if (captureState.phase === 'select') {
       captureSelectCurrent();
       return;
     }
+    const modal = ensureCaptureModal();
     const body = modal.querySelector('#native-capture-body');
     const title = String(body?.querySelector('#native-capture-draft-title')?.value || '').trim();
     const outlineId = String(body?.querySelector('#native-capture-draft-outline')?.value || captureState.draftOutlineId || '').trim();
@@ -2214,7 +2403,6 @@
       closeCaptureModal();
       if (id) {
         if (!appendCapturedItemIfVisible(oid, id, title)) {
-          // If we're not on that outline, navigate there (SSE will converge as well).
           window.location.href = '/outlines/' + encodeURIComponent(oid);
         }
       }
@@ -2351,25 +2539,16 @@
     if (el) return el;
     el = document.createElement('div');
     el.id = 'native-move-outline-modal';
-    el.style.position = 'fixed';
-    el.style.left = '0';
-    el.style.top = '0';
-    el.style.right = '0';
-    el.style.bottom = '0';
-    el.style.background = 'rgba(0,0,0,.25)';
-    el.style.display = 'none';
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'center';
-    el.style.zIndex = '9998';
+    el.className = 'native-modal-backdrop';
     el.innerHTML = `
-      <div style="max-width:680px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+      <div class="native-modal-box">
+        <div class="native-modal-head">
           <strong>Move to outline</strong>
           <span class="dim" style="font-size:12px;">Esc to cancel</span>
         </div>
-        <div id="native-move-outline-list" style="margin-top:10px;max-height:46vh;overflow:auto;"></div>
-        <div class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Enter to select</div>
-        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;align-items:center;">
+        <div id="native-move-outline-list" class="native-modal-list"></div>
+        <div class="dim native-modal-hint">Up/Down or Ctrl+P/N to move · Enter to select</div>
+        <div class="native-modal-actions">
           <button type="button" id="native-move-outline-cancel">Cancel</button>
           <button type="button" id="native-move-outline-ok">Move</button>
         </div>
@@ -2569,25 +2748,16 @@
     if (el) return el;
     el = document.createElement('div');
     el.id = 'native-assignee-modal';
-    el.style.position = 'fixed';
-    el.style.left = '0';
-    el.style.top = '0';
-    el.style.right = '0';
-    el.style.bottom = '0';
-    el.style.background = 'rgba(0,0,0,.25)';
-    el.style.display = 'none';
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'center';
-    el.style.zIndex = '9998';
+    el.className = 'native-modal-backdrop';
     el.innerHTML = `
-      <div style="max-width:520px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+      <div class="native-modal-box native-modal-box--narrow">
+        <div class="native-modal-head">
           <strong>Assign</strong>
           <span class="dim" style="font-size:12px;">Esc to cancel</span>
         </div>
-        <div id="native-assignee-list" style="margin-top:10px;max-height:46vh;overflow:auto;"></div>
-        <div class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Enter to select</div>
-        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;align-items:center;">
+        <div id="native-assignee-list" class="native-modal-list"></div>
+        <div class="dim native-modal-hint">Up/Down or Ctrl+P/N to move · Enter to select</div>
+        <div class="native-modal-actions">
           <button type="button" id="native-assignee-cancel">Cancel</button>
           <button type="button" id="native-assignee-ok">Select</button>
         </div>
@@ -2676,6 +2846,24 @@
     return row.querySelector('.outline-right') || row;
   };
 
+  const findOutlineRowById = (root, id) => {
+    id = String(id || '').trim();
+    if (!id) return null;
+    let row = null;
+    try {
+      row = root && root.querySelector ? root.querySelector('[data-outline-row][data-id="' + CSS.escape(id) + '"]') : null;
+    } catch (_) {
+      row = null;
+    }
+    if (row) return row;
+    const main = document.getElementById('clarity-main') || document;
+    try {
+      return main.querySelector ? main.querySelector('[data-outline-row][data-id="' + CSS.escape(id) + '"]') : null;
+    } catch (_) {
+      return null;
+    }
+  };
+
   const nativeRowUpdateAssignee = (row, opt) => {
     if (!row) return;
     const root = outlineRowRight(row);
@@ -2703,7 +2891,7 @@
     const root = assigneePicker.rootEl || nativeOutlineRoot();
     if (!root || !id) return;
 
-    const row = root.querySelector('[data-outline-row][data-id="' + CSS.escape(id) + '"]');
+    const row = findOutlineRowById(root, id);
     if (row) nativeRowUpdateAssignee(row, sel);
     const assignedActorId = (sel.id || '').trim();
     if (root && root.id === 'item-native') {
@@ -2711,7 +2899,7 @@
       if (selEl) selEl.value = assignedActorId;
     }
     closeAssigneePicker();
-    if (nativeOutlineRoot()) focusNativeRowById(id);
+    focusOutlineById(id);
 
     outlineApply(root, 'outline:set_assign', { id, assignedActorId }).catch((err) => {
       setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
@@ -2736,29 +2924,20 @@
     if (el) return el;
     el = document.createElement('div');
     el.id = 'native-status-modal';
-    el.style.position = 'fixed';
-    el.style.left = '0';
-    el.style.top = '0';
-    el.style.right = '0';
-    el.style.bottom = '0';
-    el.style.background = 'rgba(0,0,0,.25)';
-    el.style.display = 'none';
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'center';
-    el.style.zIndex = '9998';
+    el.className = 'native-modal-backdrop';
     el.innerHTML = `
-      <div id="native-status-modal-box" style="max-width:520px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+      <div id="native-status-modal-box" class="native-modal-box native-modal-box--narrow">
+        <div class="native-modal-head">
           <strong id="native-status-title">Status</strong>
           <span class="dim" style="font-size:12px;">Esc to cancel</span>
         </div>
-        <div id="native-status-note-wrap" style="margin-top:10px;display:none;">
+        <div id="native-status-note-wrap" class="native-modal-body" style="display:none;">
           <div class="dim" style="font-size:12px;margin-bottom:6px;">Note required</div>
           <input id="native-status-note" type="text" placeholder="Add a note…" style="width:100%;" />
         </div>
-        <div id="native-status-list" style="margin-top:10px;max-height:46vh;overflow:auto;"></div>
-        <div id="native-status-hint" class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Enter to select</div>
-        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;align-items:center;">
+        <div id="native-status-list" class="native-modal-list"></div>
+        <div id="native-status-hint" class="dim native-modal-hint">Up/Down or Ctrl+P/N to move · Enter to select</div>
+        <div class="native-modal-actions">
           <button type="button" id="native-status-cancel">Cancel</button>
           <button type="button" id="native-status-ok">Select</button>
         </div>
@@ -2989,14 +3168,15 @@
 
     const root = statusPicker.rootEl || nativeOutlineRoot();
     if (!root) return;
-    const row = root.querySelector('[data-outline-row][data-id="' + CSS.escape(id) + '"]');
+    const row = findOutlineRowById(root, id);
     if (row) nativeRowUpdateStatus(row, sel);
     if (root && root.id === 'item-native') {
       const selEl = document.getElementById('status');
       if (selEl) selEl.value = statusID;
     }
     closeStatusPicker();
-    if (nativeOutlineRoot()) focusNativeRowById(id);
+    if (outlineViewNormalize(root.dataset?.viewMode || '') === 'columns') renderOutlineColumns(root);
+    focusOutlineById(id);
 
     // Persist async; SSE will converge state.
     outlineApply(root, 'outline:toggle', { id, to: statusID, note }).catch((err) => {
@@ -3059,24 +3239,15 @@
     if (el) return el;
     el = document.createElement('div');
     el.id = 'native-prompt-modal';
-    el.style.position = 'fixed';
-    el.style.left = '0';
-    el.style.top = '0';
-    el.style.right = '0';
-    el.style.bottom = '0';
-    el.style.background = 'rgba(0,0,0,.25)';
-    el.style.display = 'none';
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'center';
-    el.style.zIndex = '9998';
+    el.className = 'native-modal-backdrop';
     el.innerHTML = `
-      <div id="native-prompt-box" style="max-width:640px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+      <div id="native-prompt-box" class="native-modal-box">
+        <div class="native-modal-head">
           <strong id="native-prompt-title"></strong>
           <span class="dim" id="native-prompt-hint" style="font-size:12px;">Esc to close · Ctrl+Enter to save</span>
         </div>
-        <div id="native-prompt-body" style="margin-top:10px;"></div>
-        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;align-items:center;">
+        <div id="native-prompt-body" class="native-modal-body"></div>
+        <div class="native-modal-actions">
           <button type="button" id="native-prompt-cancel">Cancel</button>
           <button type="button" id="native-prompt-save">Save</button>
         </div>
@@ -3345,6 +3516,12 @@
         if (titleInput) titleInput.value = newText;
         const h1 = document.querySelector('#clarity-main h1');
         if (h1) h1.textContent = newText;
+        const row = findOutlineRowById(root, id);
+        if (row) {
+          row.dataset.title = newText;
+          const t = row.querySelector('.outline-title');
+          if (t) t.textContent = newText;
+        }
         closePrompt();
         outlineApply(root, 'outline:edit:save', { id, newText }).catch(() => {});
       },
@@ -3405,6 +3582,8 @@
         const tags = parseTagsText(txt);
         const t = document.getElementById('tags');
         if (t) t.value = tags.map((x) => '#' + x).join(' ');
+        const row = findOutlineRowById(root, id);
+        if (row) nativeRowUpdateTags(row, tags);
         closePrompt();
         outlineApply(root, 'outline:set_tags', { id, tags }).catch(() => {});
       },
@@ -3426,9 +3605,9 @@
       title: kind === 'due' ? 'Set due' : 'Set schedule',
       hint: 'Esc to close · Ctrl+Enter to save',
       bodyHTML: `
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-          <label class="dim" style="font-size:12px;">Date <input id="native-prompt-date" type="date" value="${escapeAttr(curDate)}"></label>
-          <label class="dim" style="font-size:12px;">Time <input id="native-prompt-time" type="time" value="${escapeAttr(curTime)}"></label>
+        <div class="native-modal-field-row">
+          <label class="dim">Date <input id="native-prompt-date" type="date" value="${escapeAttr(curDate)}"></label>
+          <label class="dim">Time <input id="native-prompt-time" type="time" value="${escapeAttr(curTime)}"></label>
           <button type="button" id="native-prompt-clear">Clear</button>
         </div>
       `,
@@ -3441,6 +3620,8 @@
         const time = ti ? (ti.value || '').trim() : '';
         if (dateEl) dateEl.value = date;
         if (timeEl) timeEl.value = time;
+        const row = findOutlineRowById(root, id);
+        if (row) nativeRowUpdateDateTime(row, kind === 'due' ? 'due' : 'schedule', date ? { date, time: time || null } : null);
         closePrompt();
         const typ = kind === 'due' ? 'outline:set_due' : 'outline:set_schedule';
         outlineApply(root, typ, { id, date, time }).catch(() => {});
@@ -3502,6 +3683,7 @@
         closePrompt();
         const tempId = randomTempID();
         const optimisticRow = insertOptimisticNativeItem({ root, mode, refRow: row, tempId, title });
+        if (root.dataset.viewMode === 'columns') renderOutlineColumns(root);
         const typ = mode === 'child' ? 'outline:new_child' : 'outline:new_sibling';
         const detail = mode === 'child' ? { title, parentId: refId, tempId } : { title, afterId: refId, tempId };
         outlineApply(root, typ, detail).then((resp) => {
@@ -3636,9 +3818,9 @@
       title: kind === 'due' ? 'Set due' : 'Set schedule',
       hint: 'Esc to close · Ctrl+Enter to save',
       bodyHTML: `
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-          <label class="dim" style="font-size:12px;">Date <input id="native-prompt-date" type="date" value="${escapeAttr(curDate)}"></label>
-          <label class="dim" style="font-size:12px;">Time <input id="native-prompt-time" type="time" value="${escapeAttr(curTime)}"></label>
+        <div class="native-modal-field-row">
+          <label class="dim">Date <input id="native-prompt-date" type="date" value="${escapeAttr(curDate)}"></label>
+          <label class="dim">Time <input id="native-prompt-time" type="time" value="${escapeAttr(curTime)}"></label>
           <button type="button" id="native-prompt-clear">Clear</button>
         </div>
       `,
@@ -4234,6 +4416,10 @@
     state.restoreTimer = setTimeout(() => {
       state.restoreTimer = null;
       if (activeIsTyping()) return;
+      // Keep item-side panels open across Datastar morphs (state is client-side).
+      if (itemPageRoot()) {
+        try { applyItemSideState(); } catch (_) {}
+      }
       restoreFocus();
       const native = nativeOutlineRoot();
       if (native) {
@@ -4251,6 +4437,34 @@
 
   document.addEventListener('focusin', () => {
     rememberFocus();
+  }, { capture: true });
+
+  // Keep the outline "focused item" in sync for list+preview mode.
+  document.addEventListener('focusin', (ev) => {
+    const row = nativeRowFromEvent(ev);
+    if (!row || !row.dataset) return;
+    const root = nativeOutlineRootOrFromRow(row);
+    if (!root) return;
+    const id = String(row.dataset.id || '').trim();
+    if (!id) return;
+    rememberOutlineFocus(root, id);
+    if (outlineViewNormalize(root.dataset.viewMode || '') === 'list+preview') {
+      refreshOutlinePreview(root, id);
+    }
+  }, { capture: true });
+
+  document.addEventListener('focusin', (ev) => {
+    const root = nativeOutlineRoot();
+    if (!root) return;
+    if (outlineViewNormalize(root.dataset.viewMode || '') !== 'columns') return;
+    const pane = document.getElementById('outline-columns-pane');
+    if (!pane) return;
+    const t = ev && ev.target;
+    const card = t && typeof t.closest === 'function' ? t.closest('.outline-card') : null;
+    if (!card || !pane.contains(card)) return;
+    const id = String(card.dataset.itemId || card.dataset.focusId || '').trim();
+    if (!id) return;
+    rememberOutlineFocus(root, id);
   }, { capture: true });
 
   const obs = new MutationObserver(() => {
@@ -4311,15 +4525,39 @@
     if (!action.endsWith('/comments') && !action.endsWith('/worklog')) return;
     ev.preventDefault();
     const fd = new FormData(form);
+    const bodyTxt = String(fd.get('body') || '').trim();
+    const optimisticInsert = () => {
+      if (!bodyTxt) return;
+      const pane = itemSidePane();
+      const kind = action.endsWith('/worklog') ? 'worklog' : 'comments';
+      const panel = pane ? pane.querySelector('[data-item-side-panel="' + CSS.escape(kind) + '"]') : null;
+      const ul = panel ? panel.querySelector('ul.kb-list') : null;
+      if (!ul) return;
+      const now = new Date().toISOString().replace('.000Z', 'Z');
+      const li = document.createElement('li');
+      li.innerHTML = `
+        <div class="list-row dim" tabindex="-1">
+          <span>${escapeHTML(now)}</span>
+          <span>—</span>
+          <span>(pending)</span>
+        </div>
+        <div class="md comment-body" style="margin: 6px 0 10px;">${escapeHTML(bodyTxt)}</div>
+      `;
+      ul.insertBefore(li, ul.firstChild);
+    };
     fetch(action, {
       method: String(form.getAttribute('method') || 'POST').toUpperCase(),
       body: new URLSearchParams(fd).toString(),
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     }).then(async (res) => {
       if (!res.ok) throw new Error(await res.text());
+      optimisticInsert();
       // Clear textarea on success (SSE will bring the new entry).
       const ta = form.querySelector('textarea[name="body"]');
-      if (ta) ta.value = '';
+      if (ta) {
+        ta.value = '';
+        ta.focus?.();
+      }
     }).catch((err) => {
       setOutlineStatus('Error: ' + (err && err.message ? err.message : 'post failed'));
       setTimeout(() => setOutlineStatus(''), 1800);
@@ -4437,6 +4675,11 @@
       pickSelectedStatus();
       return true;
     }
+    if (ev.ctrlKey && k === 's') {
+      ev.preventDefault();
+      pickSelectedStatus();
+      return true;
+    }
     if (k === 'enter') {
       ev.preventDefault();
       pickSelectedStatus();
@@ -4545,6 +4788,11 @@
       pickSelectedAssignee();
       return true;
     }
+    if (ev.ctrlKey && k === 's') {
+      ev.preventDefault();
+      pickSelectedAssignee();
+      return true;
+    }
     if (k === 'enter') {
       ev.preventDefault();
       pickSelectedAssignee();
@@ -4591,6 +4839,11 @@
       return true;
     }
     if (ev.ctrlKey && k === 'enter') {
+      ev.preventDefault();
+      closeTagsPicker('done');
+      return true;
+    }
+    if (ev.ctrlKey && k === 's') {
       ev.preventDefault();
       closeTagsPicker('done');
       return true;
@@ -4644,6 +4897,11 @@
       pickSelectedMoveOutline();
       return true;
     }
+    if (ev.ctrlKey && k === 's') {
+      ev.preventDefault();
+      pickSelectedMoveOutline();
+      return true;
+    }
     if (k === 'enter') {
       ev.preventDefault();
       pickSelectedMoveOutline();
@@ -4683,6 +4941,11 @@
       submitPrompt();
       return true;
     }
+    if (ev.ctrlKey && k === 's') {
+      ev.preventDefault();
+      submitPrompt();
+      return true;
+    }
     if (k === 'enter') {
       const tag = (ev.target && ev.target.tagName ? ev.target.tagName.toLowerCase() : '');
       if (tag && tag !== 'textarea') {
@@ -4693,6 +4956,156 @@
     }
     // When modal is open, swallow other keys to avoid triggering app navigation.
     return true;
+  };
+
+  const handleOutlineColumnsKeydown = (ev, rawKey, key) => {
+    const root = nativeOutlineRoot();
+    if (!root) return false;
+    if (outlineViewNormalize(root.dataset.viewMode || '') !== 'columns') return false;
+    const pane = document.getElementById('outline-columns-pane');
+    if (!pane || pane.style.display === 'none') return false;
+    const a = document.activeElement;
+    if (!a || !pane.contains(a)) return false;
+    if (isTypingTarget(ev.target)) return false;
+
+    const card = a.closest ? a.closest('.outline-card') : null;
+    const header = !card ? ((a.classList && a.classList.contains('outline-column-header')) ? a : (a.closest ? a.closest('.outline-column-header') : null)) : null;
+    const col = (card || header) && (card || header).closest ? (card || header).closest('.outline-column') : null;
+    if (!col) return false;
+    const wrap = col.parentElement;
+    const cols = wrap ? Array.from(wrap.querySelectorAll(':scope > .outline-column')) : [];
+    const colIdx = cols.indexOf(col);
+    const cards = Array.from(col.querySelectorAll('.outline-column-list > .outline-card'));
+    const cardIdx = card ? cards.indexOf(card) : -1;
+
+    const focusInCol = (colEl, idx, fallbackToHeader) => {
+      const cs = Array.from(colEl.querySelectorAll('.outline-column-list > .outline-card'));
+      if (cs.length > 0) {
+        const i = Math.max(0, Math.min(cs.length - 1, idx));
+        cs[i]?.focus?.();
+        return;
+      }
+      if (fallbackToHeader) colEl.querySelector('.outline-column-header')?.focus?.();
+    };
+
+    const moveCol = (delta) => {
+      if (!cols.length || colIdx < 0) return;
+      const next = Math.max(0, Math.min(cols.length - 1, colIdx + delta));
+      if (next === colIdx) return;
+      focusInCol(cols[next], cardIdx >= 0 ? cardIdx : 0, true);
+    };
+
+    // Status cycling (TUI parity) takes precedence over column navigation.
+    if (card && ev.shiftKey && (key === 'arrowright' || key === 'right')) {
+      ev.preventDefault();
+      const itemId = String(card.dataset.itemId || card.dataset.focusId || '').trim();
+      const row = findOutlineRowById(root, itemId);
+      if (row) cycleStatus(row, +1);
+      renderOutlineColumns(root);
+      focusOutlineById(itemId);
+      return true;
+    }
+    if (card && ev.shiftKey && (key === 'arrowleft' || key === 'left')) {
+      ev.preventDefault();
+      const itemId = String(card.dataset.itemId || card.dataset.focusId || '').trim();
+      const row = findOutlineRowById(root, itemId);
+      if (row) cycleStatus(row, -1);
+      renderOutlineColumns(root);
+      focusOutlineById(itemId);
+      return true;
+    }
+
+    // Column navigation (left/right).
+    if (!ev.shiftKey && !ev.altKey && (key === 'arrowright' || key === 'right' || key === 'l' || (ev.ctrlKey && key === 'f'))) {
+      ev.preventDefault();
+      moveCol(+1);
+      return true;
+    }
+    if (!ev.shiftKey && !ev.altKey && (key === 'arrowleft' || key === 'left' || key === 'h' || (ev.ctrlKey && key === 'b'))) {
+      ev.preventDefault();
+      moveCol(-1);
+      return true;
+    }
+
+    // Within-column navigation (up/down).
+    if (key === 'j' || key === 'arrowdown' || key === 'down' || (ev.ctrlKey && key === 'n')) {
+      ev.preventDefault();
+      if (!cards.length) return true;
+      const next = card ? Math.min(cards.length - 1, cardIdx + 1) : 0;
+      cards[next]?.focus?.();
+      return true;
+    }
+    if (key === 'k' || key === 'arrowup' || key === 'up' || (ev.ctrlKey && key === 'p')) {
+      ev.preventDefault();
+      if (!cards.length) return true;
+      if (!card) {
+        col.querySelector('.outline-column-header')?.focus?.();
+        return true;
+      }
+      const prev = Math.max(0, cardIdx - 1);
+      cards[prev]?.focus?.();
+      return true;
+    }
+
+    if (key === 'enter') {
+      if (card) {
+        ev.preventDefault();
+        const href = String(card.dataset.openHref || '').trim();
+        if (href) window.location.href = href;
+        return true;
+      }
+      return false;
+    }
+
+    if (card && key === 'e') {
+      ev.preventDefault();
+      const itemId = String(card.dataset.itemId || card.dataset.focusId || '').trim();
+      const row = findOutlineRowById(root, itemId);
+      const before = String(row?.querySelector?.('.outline-title')?.textContent || card.textContent || '').trim();
+      openPrompt({
+        title: 'Edit title',
+        hint: 'Esc to cancel · Ctrl+S save',
+        bodyHTML: `<input id="native-prompt-input" placeholder="Title" style="width:100%;" value="${escapeAttr(before)}">`,
+        focusSelector: '#native-prompt-input',
+        restoreFocusId: itemId,
+        onSubmit: () => {
+          const modal = document.getElementById('native-prompt-modal');
+          const input = modal ? modal.querySelector('#native-prompt-input') : null;
+          const next = input ? String(input.value || '').trim() : '';
+          if (!next) return;
+          if (row) {
+            row.dataset.title = next;
+            const t = row.querySelector('.outline-title');
+            if (t) t.textContent = next;
+          }
+          const t2 = card.querySelector('.outline-title');
+          if (t2) t2.textContent = next;
+          closePrompt();
+          outlineApply(root, 'outline:edit:save', { id: itemId, newText: next }).catch((err) => {
+            setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+          });
+        },
+      });
+      return true;
+    }
+
+    // Delegate remaining item operations to the native outline handler using the hidden row as source of truth.
+    if (card) {
+      const itemId = String(card.dataset.itemId || card.dataset.focusId || '').trim();
+      const row = findOutlineRowById(root, itemId);
+      if (row) {
+        const handled = handleNativeOutlineKeydown(ev, key, row);
+        if (handled) {
+          // Keep the columns view in sync and restore focus to the card.
+          setTimeout(() => {
+            renderOutlineColumns(root);
+            focusOutlineById(itemId);
+          }, 0);
+          return true;
+        }
+      }
+    }
+    return false;
   };
 
   const handleNativeOutlineKeydown = (ev, key, nativeRow) => {
@@ -5373,17 +5786,17 @@
 
   const itemSidePane = () => document.getElementById('item-side-pane');
 
-  const itemSideOpen = (kind, restoreFocusId) => {
+  const applyItemSideState = () => {
     const pane = itemSidePane();
     const main = document.getElementById('clarity-main');
     if (!pane || !main) return;
-    kind = String(kind || '').trim();
-    if (!kind) kind = 'comments';
-
-    itemSide.open = true;
-    itemSide.kind = kind;
-    itemSide.restoreFocusId = String(restoreFocusId || '').trim();
-
+    if (!itemSide.open) {
+      delete main.dataset.itemSideOpen;
+      pane.style.display = 'none';
+      pane.removeAttribute('data-kb-scope-active');
+      return;
+    }
+    const kind = String(itemSide.kind || 'comments').trim() || 'comments';
     main.dataset.itemSideOpen = 'true';
     pane.style.display = 'block';
     pane.dataset.kbScopeActive = 'true';
@@ -5394,6 +5807,19 @@
     pane.querySelectorAll('[data-item-side-panel]').forEach((el) => {
       el.style.display = (String(el.dataset.itemSidePanel || '') === kind) ? 'block' : 'none';
     });
+  };
+
+  const itemSideOpen = (kind, restoreFocusId) => {
+    const pane = itemSidePane();
+    const main = document.getElementById('clarity-main');
+    if (!pane || !main) return;
+    kind = String(kind || '').trim();
+    if (!kind) kind = 'comments';
+
+    itemSide.open = true;
+    itemSide.kind = kind;
+    itemSide.restoreFocusId = String(restoreFocusId || '').trim();
+    applyItemSideState();
 
     // Focus the first row inside the panel (or the textarea).
     const first = pane.querySelector('[data-item-side-panel="' + CSS.escape(kind) + '"] [data-kb-item]') ||
@@ -5402,17 +5828,11 @@
   };
 
   const itemSideClose = () => {
-    const pane = itemSidePane();
-    const main = document.getElementById('clarity-main');
-    if (main) delete main.dataset.itemSideOpen;
-    if (pane) {
-      pane.style.display = 'none';
-      pane.removeAttribute('data-kb-scope-active');
-    }
     const restoreId = itemSide.restoreFocusId;
     itemSide.open = false;
     itemSide.kind = '';
     itemSide.restoreFocusId = '';
+    applyItemSideState();
     if (restoreId) {
       const el = document.querySelector('[data-focus-id="' + CSS.escape(restoreId) + '"]');
       el && el.focus && el.focus();
@@ -5589,9 +6009,102 @@
       closeCaptureModal();
       return true;
     }
+    if (ev.ctrlKey && key === 't') {
+      ev.preventDefault();
+      captureOpenTemplates();
+      return true;
+    }
     if (key === 'escape') {
       ev.preventDefault();
+      if (captureState.phase === 'templates-add' || captureState.phase === 'templates-delete') {
+        captureState.phase = 'templates';
+        renderCapture();
+        return true;
+      }
+      if (captureState.phase === 'templates') {
+        captureState.phase = 'select';
+        renderCapture();
+        return true;
+      }
       closeCaptureModal();
+      return true;
+    }
+
+    if (captureState.phase === 'templates') {
+      const rows = Array.isArray(captureState.templates) ? captureState.templates : [];
+      if (key === 'enter') {
+        ev.preventDefault();
+        captureState.phase = 'select';
+        renderCapture();
+        return true;
+      }
+      if (key === 'a' && !ev.ctrlKey && !ev.altKey) {
+        ev.preventDefault();
+        captureStartAddTemplate();
+        return true;
+      }
+      if (key === 'd' && !ev.ctrlKey && !ev.altKey) {
+        ev.preventDefault();
+        const cur = rows[captureState.templatesIdx] || null;
+        const kp = String(cur?.keyPath || '').trim();
+        if (kp) captureConfirmDeleteTemplate(kp);
+        return true;
+      }
+      if (key === 'arrowdown' || key === 'down' || key === 'j' || (ev.ctrlKey && key === 'n')) {
+        ev.preventDefault();
+        if (rows.length) captureState.templatesIdx = Math.min(rows.length - 1, (captureState.templatesIdx || 0) + 1);
+        renderCapture();
+        return true;
+      }
+      if (key === 'arrowup' || key === 'up' || key === 'k' || (ev.ctrlKey && key === 'p')) {
+        ev.preventDefault();
+        if (rows.length) captureState.templatesIdx = Math.max(0, (captureState.templatesIdx || 0) - 1);
+        renderCapture();
+        return true;
+      }
+      return true;
+    }
+
+    if (captureState.phase === 'templates-delete') {
+      if (key === 'enter' || (ev.ctrlKey && key === 's')) {
+        ev.preventDefault();
+        submitCapture();
+        return true;
+      }
+      return true;
+    }
+
+    if (captureState.phase === 'templates-add') {
+      const body = document.getElementById('native-capture-body');
+      if (ev.ctrlKey && key === 's') {
+        ev.preventDefault();
+        submitCapture();
+        return true;
+      }
+      if (key === 'enter') {
+        const t = ev && ev.target;
+        const tag = (t && t.tagName ? String(t.tagName).toLowerCase() : '');
+        if (tag !== 'textarea') {
+          ev.preventDefault();
+          submitCapture();
+          return true;
+        }
+      }
+      if (key === 'e') {
+        ev.preventDefault();
+        body?.querySelector('#native-capture-tmpl-name')?.focus?.();
+        return true;
+      }
+      if (key === 'k') {
+        ev.preventDefault();
+        body?.querySelector('#native-capture-tmpl-keys')?.focus?.();
+        return true;
+      }
+      if (key === 'm') {
+        ev.preventDefault();
+        body?.querySelector('#native-capture-tmpl-outline')?.focus?.();
+        return true;
+      }
       return true;
     }
 
@@ -5731,7 +6244,23 @@
       // Otherwise, 'a' is context-specific (assign) and handled below.
     }
 
-    if (key === 'c') {
+    // Capture is lowercase `c` (TUI parity). Uppercase `C` is "Add comment".
+    if (rawKey === 'C') {
+      const itemRoot = itemPageRoot();
+      const nativeRow = nativeRowFromEvent(ev);
+      if (itemRoot) {
+        ev.preventDefault();
+        openItemTextPostPrompt(itemRoot, 'comment');
+        return;
+      }
+      if (nativeRow) {
+        ev.preventDefault();
+        openTextPostPrompt(nativeRow, 'comment');
+        return;
+      }
+    }
+
+    if (rawKey === 'c' && !ev.shiftKey) {
       ev.preventDefault();
       openCaptureModal();
       return;
@@ -5802,6 +6331,7 @@
     }
 
     const nativeRow = nativeRowFromEvent(ev);
+    if (handleOutlineColumnsKeydown(ev, rawKey, key)) return;
     if (handleNativeOutlineKeydown(ev, key, nativeRow)) return;
 
     const agendaRow = agendaRowFromEvent(ev);

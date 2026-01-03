@@ -240,6 +240,8 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("GET /agenda", s.handleAgenda)
         mux.HandleFunc("GET /capture/options", s.handleCaptureOptions)
         mux.HandleFunc("POST /capture", s.handleCaptureCreate)
+        mux.HandleFunc("POST /capture/templates", s.handleCaptureTemplateUpsert)
+        mux.HandleFunc("DELETE /capture/templates/{keyPath}", s.handleCaptureTemplateDelete)
         mux.HandleFunc("GET /sync", s.handleSync)
         mux.HandleFunc("POST /sync/init", s.handleSyncInit)
         mux.HandleFunc("POST /sync/remote", s.handleSyncRemote)
@@ -1766,6 +1768,136 @@ func (s *Server) handleCaptureCreate(w http.ResponseWriter, r *http.Request) {
                 "outlineId": it.OutlineID,
                 "href":      "/items/" + it.ID,
         })
+}
+
+type captureTemplateUpsertReq struct {
+        Name      string `json:"name"`
+        KeyPath   string `json:"keyPath"`
+        OutlineID string `json:"outlineId"`
+}
+
+func (s *Server) handleCaptureTemplateUpsert(w http.ResponseWriter, r *http.Request) {
+        if s.readOnly() {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+        wsName := strings.TrimSpace(s.workspaceName())
+        if wsName == "" {
+                http.Error(w, "missing workspace", http.StatusBadRequest)
+                return
+        }
+        var req captureTemplateUpsertReq
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+                http.Error(w, "invalid json", http.StatusBadRequest)
+                return
+        }
+        name := strings.TrimSpace(req.Name)
+        keyPath := strings.TrimSpace(req.KeyPath)
+        outlineID := strings.TrimSpace(req.OutlineID)
+        if name == "" || keyPath == "" || outlineID == "" {
+                http.Error(w, "missing name, keyPath, or outlineId", http.StatusBadRequest)
+                return
+        }
+
+        // Split into single-rune key sequence entries.
+        keys := make([]string, 0, len([]rune(keyPath)))
+        for _, r := range []rune(keyPath) {
+                keys = append(keys, string(r))
+        }
+        if _, err := store.NormalizeCaptureTemplateKeys(keys); err != nil {
+                http.Error(w, "invalid keys: "+err.Error(), http.StatusBadRequest)
+                return
+        }
+
+        cfg, _ := store.LoadConfig()
+        if cfg == nil {
+                cfg = &store.GlobalConfig{}
+        }
+
+        // Upsert by keyPath (globally unique).
+        next := make([]store.CaptureTemplate, 0, len(cfg.CaptureTemplates)+1)
+        replaced := false
+        for _, t := range cfg.CaptureTemplates {
+                ks, err := store.NormalizeCaptureTemplateKeys(t.Keys)
+                if err != nil {
+                        next = append(next, t)
+                        continue
+                }
+                if strings.Join(ks, "") == keyPath {
+                        next = append(next, store.CaptureTemplate{
+                                Name: name,
+                                Keys: keys,
+                                Target: store.CaptureTemplateTarget{
+                                        Workspace: wsName,
+                                        OutlineID: outlineID,
+                                },
+                        })
+                        replaced = true
+                        continue
+                }
+                next = append(next, t)
+        }
+        if !replaced {
+                next = append(next, store.CaptureTemplate{
+                        Name: name,
+                        Keys: keys,
+                        Target: store.CaptureTemplateTarget{
+                                Workspace: wsName,
+                                OutlineID: outlineID,
+                        },
+                })
+        }
+        cfg.CaptureTemplates = next
+        if err := store.ValidateCaptureTemplates(cfg); err != nil {
+                http.Error(w, err.Error(), http.StatusBadRequest)
+                return
+        }
+        if err := store.SaveConfig(cfg); err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        _ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+func (s *Server) handleCaptureTemplateDelete(w http.ResponseWriter, r *http.Request) {
+        if s.readOnly() {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+        keyPath := strings.TrimSpace(r.PathValue("keyPath"))
+        if keyPath == "" {
+                http.Error(w, "missing keyPath", http.StatusBadRequest)
+                return
+        }
+        cfg, _ := store.LoadConfig()
+        if cfg == nil {
+                cfg = &store.GlobalConfig{}
+        }
+        next := make([]store.CaptureTemplate, 0, len(cfg.CaptureTemplates))
+        for _, t := range cfg.CaptureTemplates {
+                ks, err := store.NormalizeCaptureTemplateKeys(t.Keys)
+                if err != nil {
+                        next = append(next, t)
+                        continue
+                }
+                if strings.Join(ks, "") == keyPath {
+                        continue
+                }
+                next = append(next, t)
+        }
+        cfg.CaptureTemplates = next
+        if err := store.ValidateCaptureTemplates(cfg); err != nil {
+                http.Error(w, err.Error(), http.StatusBadRequest)
+                return
+        }
+        if err := store.SaveConfig(cfg); err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        _ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
 type syncVM struct {
