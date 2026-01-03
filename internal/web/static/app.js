@@ -1040,6 +1040,35 @@
     return fromItem;
   };
 
+  const currentView = () => {
+    const v = (document.getElementById('clarity-main')?.dataset?.view || '').trim();
+    return v || '';
+  };
+
+  const focusedKbEl = () => {
+    const el = document.activeElement;
+    if (!el) return null;
+    try {
+      if (el.getAttribute && el.getAttribute('data-kb-item') !== null) return el;
+      if (el.closest) return el.closest('[data-kb-item]');
+    } catch (_) {}
+    return null;
+  };
+
+  const focusedProject = () => {
+    const el = focusedKbEl();
+    const pid = (el?.dataset?.projectId || '').trim();
+    const name = (el?.dataset?.projectName || '').trim();
+    return { id: pid, name };
+  };
+
+  const focusedOutline = () => {
+    const el = focusedKbEl();
+    const oid = (el?.dataset?.outlineId || '').trim();
+    const name = (el?.dataset?.outlineName || '').trim();
+    return { id: oid, name };
+  };
+
   const openJumpToItemPrompt = () => {
     openPrompt({
       title: 'Jump to item by id…',
@@ -1070,10 +1099,26 @@
     opts.push({ key: 'c', label: 'Capture…', kind: 'exec', run: () => openCaptureModal() });
 
     // Context actions (best-effort parity; grows over time).
+    const view = currentView();
+    if (view === 'projects') {
+      opts.push({ key: 'n', label: 'New project', kind: 'exec', run: () => openNewProjectPrompt() });
+      opts.push({ key: 'e', label: 'Rename project', kind: 'exec', run: () => openRenameProjectPrompt() });
+      opts.push({ key: 'r', label: 'Archive project', kind: 'exec', run: () => archiveFocusedProject() });
+    }
+    if (view === 'outlines') {
+      opts.push({ key: 'n', label: 'New outline', kind: 'exec', run: () => openNewOutlinePrompt() });
+      opts.push({ key: 'e', label: 'Rename outline', kind: 'exec', run: () => openRenameOutlinePrompt() });
+      opts.push({ key: 'D', label: 'Edit outline description', kind: 'exec', run: () => openEditOutlineDescriptionPrompt() });
+      opts.push({ key: 'O', label: 'Outline…', kind: 'nav', next: 'outline' });
+      opts.push({ key: 'S', label: 'Edit outline statuses…', kind: 'exec', run: () => openOutlineStatusesEditor({ preferCurrentOutline: false }) });
+      opts.push({ key: 'r', label: 'Archive outline', kind: 'exec', run: () => archiveFocusedOutline() });
+    }
+
     const outlineRoot = nativeOutlineRoot();
     if (outlineRoot) {
       opts.push({ key: 'v', label: 'Cycle view mode', kind: 'exec', run: () => cycleOutlineViewMode(outlineRoot) });
       opts.push({ key: 'O', label: 'Outline…', kind: 'nav', next: 'outline' });
+      opts.push({ key: 'S', label: 'Edit outline statuses…', kind: 'exec', run: () => openOutlineStatusesEditor({ preferCurrentOutline: true }) });
     }
     return opts;
   };
@@ -1147,12 +1192,12 @@
   ]);
 
   const actionsForOutline = () => {
-    const oid = currentOutlineId();
+    const view = currentView();
+    const oid = (view === 'outlines' ? focusedOutline().id : currentOutlineId());
     if (!oid) return [];
     return [
-      { key: 'e', label: 'Rename outline', kind: 'exec', run: () => { window.location.href = '/outlines/' + encodeURIComponent(oid); } },
-      { key: 'D', label: 'Edit outline description', kind: 'exec', run: () => { window.location.href = '/outlines/' + encodeURIComponent(oid); } },
-      { key: 'S', label: 'Edit outline statuses…', kind: 'exec', run: () => { window.location.href = '/outlines/' + encodeURIComponent(oid); } },
+      { key: 'e', label: 'Rename outline', kind: 'exec', run: () => openRenameOutlinePrompt({ preferCurrentOutline: view !== 'outlines' }) },
+      { key: 'D', label: 'Edit outline description', kind: 'exec', run: () => openEditOutlineDescriptionPrompt({ preferCurrentOutline: view !== 'outlines' }) },
     ];
   };
 
@@ -1170,6 +1215,384 @@
     }
     document.body.appendChild(form);
     form.submit();
+  };
+
+  const openNotImplemented = (label) => {
+    openPrompt({
+      title: label || 'Not implemented',
+      hint: 'Esc to close',
+      bodyHTML: `<div class="dim">Not implemented in the web UI yet. Use the TUI for now.</div>`,
+      onSubmit: () => {},
+    });
+  };
+
+  const openNewProjectPrompt = () => {
+    openPrompt({
+      title: 'New project',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `
+        <div>
+          <label class="dim" for="new-project-name">Project name</label>
+          <input id="new-project-name" type="text" placeholder="Name" style="width:100%;" />
+        </div>
+      `,
+      onSubmit: () => {
+        const name = String(document.getElementById('new-project-name')?.value || '').trim();
+        if (!name) return;
+        closePrompt();
+        submitPost('/projects', { name });
+      },
+      focusSelector: '#new-project-name',
+    });
+  };
+
+  const openRenameProjectPrompt = () => {
+    const fp = focusedProject();
+    if (!fp.id) return;
+    openPrompt({
+      title: 'Rename project',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `
+        <div>
+          <label class="dim" for="rename-project-name">Project name</label>
+          <input id="rename-project-name" type="text" value="${escapeHTML(fp.name)}" style="width:100%;" />
+        </div>
+      `,
+      onSubmit: () => {
+        const name = String(document.getElementById('rename-project-name')?.value || '').trim();
+        if (!name) return;
+        closePrompt();
+        submitPost('/projects/' + encodeURIComponent(fp.id) + '/rename', { name });
+      },
+      focusSelector: '#rename-project-name',
+    });
+  };
+
+  const archiveFocusedProject = () => {
+    const fp = focusedProject();
+    if (!fp.id) return;
+    submitPost('/projects/' + encodeURIComponent(fp.id) + '/archive', {});
+  };
+
+  const openNewOutlinePrompt = () => {
+    const pid = currentProjectId();
+    if (!pid) return;
+    openPrompt({
+      title: 'New outline',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `
+        <div>
+          <label class="dim" for="new-outline-name">Outline name (optional)</label>
+          <input id="new-outline-name" type="text" placeholder="Name" style="width:100%;" />
+        </div>
+      `,
+      onSubmit: () => {
+        const name = String(document.getElementById('new-outline-name')?.value || '').trim();
+        closePrompt();
+        submitPost('/projects/' + encodeURIComponent(pid) + '/outlines', { name });
+      },
+      focusSelector: '#new-outline-name',
+    });
+  };
+
+  const openRenameOutlinePrompt = (opts) => {
+    const preferCurrent = !!(opts && opts.preferCurrentOutline);
+    const o = preferCurrent ? { id: currentOutlineId(), name: String(nativeOutlineRoot()?.dataset?.outlineName || '').trim() } : focusedOutline();
+    if (!o.id) return;
+    openPrompt({
+      title: 'Rename outline',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `
+        <div>
+          <label class="dim" for="rename-outline-name">Outline name (optional)</label>
+          <input id="rename-outline-name" type="text" value="${escapeHTML(o.name)}" style="width:100%;" />
+        </div>
+      `,
+      onSubmit: () => {
+        const name = String(document.getElementById('rename-outline-name')?.value || '').trim();
+        closePrompt();
+        submitPost('/outlines/' + encodeURIComponent(o.id) + '/rename', { name });
+      },
+      focusSelector: '#rename-outline-name',
+    });
+  };
+
+  const openEditOutlineDescriptionPrompt = (opts) => {
+    const preferCurrent = !!(opts && opts.preferCurrentOutline);
+    const oid = preferCurrent ? currentOutlineId() : focusedOutline().id;
+    if (!oid) return;
+    let curDesc = '';
+    if (preferCurrent) {
+      curDesc = String(nativeOutlineRoot()?.dataset?.outlineDescription || '').trim();
+    } else {
+      const el = focusedKbEl();
+      curDesc = String(el?.dataset?.outlineDescription || '').trim();
+    }
+    openPrompt({
+      title: 'Edit outline description',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `
+        <div>
+          <label class="dim" for="outline-desc">Markdown outline description…</label>
+          <textarea id="outline-desc" rows="10" style="width:100%;">${escapeHTML(curDesc)}</textarea>
+        </div>
+      `,
+      onSubmit: () => {
+        const description = String(document.getElementById('outline-desc')?.value || '').trim();
+        closePrompt();
+        submitPost('/outlines/' + encodeURIComponent(oid) + '/description', { description });
+      },
+      focusSelector: '#outline-desc',
+    });
+  };
+
+  const archiveFocusedOutline = () => {
+    const fo = focusedOutline();
+    if (!fo.id) return;
+    submitPost('/outlines/' + encodeURIComponent(fo.id) + '/archive', {});
+  };
+
+  const outlineStatuses = {
+    open: false,
+    outlineId: '',
+    options: [],
+    idx: 0,
+    restoreEl: null,
+  };
+
+  const ensureOutlineStatusesModal = () => {
+    let el = document.getElementById('native-outline-statuses-modal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'native-outline-statuses-modal';
+    el.style.position = 'fixed';
+    el.style.left = '0';
+    el.style.top = '0';
+    el.style.right = '0';
+    el.style.bottom = '0';
+    el.style.background = 'rgba(0,0,0,.25)';
+    el.style.display = 'none';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+    el.style.zIndex = '9999';
+    el.innerHTML = `
+      <div style="max-width:760px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+          <strong>Outline statuses</strong>
+          <span class="dim" style="font-size:12px;">a:add r:rename e:end n:note d:delete ctrl+j/k:move esc:close</span>
+        </div>
+        <div id="native-outline-statuses-msg" class="dim" style="margin-top:8px;"></div>
+        <div id="native-outline-statuses-list" style="margin-top:10px;max-height:55vh;overflow:auto;"></div>
+      </div>
+    `;
+    document.body.appendChild(el);
+    el.addEventListener('click', (ev) => {
+      if (ev.target === el) closeOutlineStatusesEditor();
+    });
+    return el;
+  };
+
+  const renderOutlineStatusesEditor = () => {
+    const modal = ensureOutlineStatusesModal();
+    const list = modal.querySelector('#native-outline-statuses-list');
+    const msg = modal.querySelector('#native-outline-statuses-msg');
+    if (msg) msg.textContent = '';
+    const opts = Array.isArray(outlineStatuses.options) ? outlineStatuses.options : [];
+    if (!list) return;
+    if (opts.length === 0) {
+      list.innerHTML = `<div class="dim">(none)</div>`;
+      return;
+    }
+    const idx = Math.max(0, Math.min(opts.length - 1, outlineStatuses.idx || 0));
+    outlineStatuses.idx = idx;
+    list.innerHTML = opts.map((o, i) => {
+      const label = String(o?.label || o?.id || '').trim();
+      const id = String(o?.id || '').trim();
+      const end = !!o?.isEndState;
+      const note = !!o?.requiresNote;
+      const active = i === idx;
+      const flags = (end ? ' end' : '') + (note ? ' note' : '');
+      return `
+        <div style="display:flex;gap:10px;align-items:baseline;padding:6px 8px;border-radius:8px;${active ? 'background:rgba(127,127,127,.18);' : ''}">
+          <span style="flex:0 0 auto;"><code>${escapeHTML(id)}</code></span>
+          <span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHTML(label)}</span>
+          <span class="dim" style="flex:0 0 auto;">${escapeHTML(flags.trim())}</span>
+        </div>
+      `;
+    }).join('');
+  };
+
+  const closeOutlineStatusesEditor = () => {
+    outlineStatuses.open = false;
+    outlineStatuses.outlineId = '';
+    outlineStatuses.options = [];
+    outlineStatuses.idx = 0;
+    const restore = outlineStatuses.restoreEl;
+    outlineStatuses.restoreEl = null;
+    const modal = document.getElementById('native-outline-statuses-modal');
+    if (modal) modal.style.display = 'none';
+    setTimeout(() => {
+      try { restore?.focus?.(); } catch (_) {}
+    }, 0);
+  };
+
+  const loadOutlineMeta = async (outlineId) => {
+    const res = await fetch('/outlines/' + encodeURIComponent(outlineId) + '/meta', { method: 'GET', headers: { 'Accept': 'application/json' } });
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  };
+
+  const postJSON = async (path, payload) => {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json().catch(() => ({}));
+  };
+
+  const openOutlineStatusesEditor = (opts) => {
+    if (outlineStatuses.open) return;
+    const preferCurrent = !!(opts && opts.preferCurrentOutline);
+    const outlineId = preferCurrent ? currentOutlineId() : focusedOutline().id;
+    if (!outlineId) return;
+    outlineStatuses.open = true;
+    outlineStatuses.outlineId = outlineId;
+    outlineStatuses.restoreEl = document.activeElement;
+    outlineStatuses.options = [];
+    outlineStatuses.idx = 0;
+    const modal = ensureOutlineStatusesModal();
+    modal.style.display = 'flex';
+    renderOutlineStatusesEditor();
+
+    loadOutlineMeta(outlineId).then((m) => {
+      outlineStatuses.options = Array.isArray(m?.statusOptions) ? m.statusOptions : [];
+      outlineStatuses.idx = 0;
+      renderOutlineStatusesEditor();
+    }).catch((err) => {
+      const msg = modal.querySelector('#native-outline-statuses-msg');
+      if (msg) msg.textContent = 'Error: ' + (err && err.message ? err.message : 'load failed');
+    });
+  };
+
+  const outlineStatusesSelected = () => {
+    const opts = Array.isArray(outlineStatuses.options) ? outlineStatuses.options : [];
+    if (opts.length === 0) return null;
+    const idx = Math.max(0, Math.min(opts.length - 1, outlineStatuses.idx || 0));
+    return opts[idx] || null;
+  };
+
+  const outlineStatusesRefresh = () => {
+    const outlineId = String(outlineStatuses.outlineId || '').trim();
+    if (!outlineId) return Promise.resolve();
+    return loadOutlineMeta(outlineId).then((m) => {
+      outlineStatuses.options = Array.isArray(m?.statusOptions) ? m.statusOptions : [];
+      outlineStatuses.idx = Math.max(0, Math.min((outlineStatuses.options.length || 1) - 1, outlineStatuses.idx || 0));
+      renderOutlineStatusesEditor();
+    });
+  };
+
+  const outlineStatusesSetMsg = (text) => {
+    const modal = document.getElementById('native-outline-statuses-modal');
+    const msg = modal ? modal.querySelector('#native-outline-statuses-msg') : null;
+    if (msg) msg.textContent = String(text || '');
+  };
+
+  const outlineStatusesAdd = () => {
+    openPrompt({
+      title: 'Add status',
+      hint: 'Esc to close · Ctrl+Enter to add',
+      bodyHTML: `
+        <div>
+          <label class="dim" for="add-status-label">Status label</label>
+          <input id="add-status-label" type="text" placeholder="Label" style="width:100%;" />
+        </div>
+      `,
+      onSubmit: () => {
+        const label = String(document.getElementById('add-status-label')?.value || '').trim();
+        if (!label) return;
+        closePrompt();
+        const outlineId = String(outlineStatuses.outlineId || '').trim();
+        postJSON('/outlines/' + encodeURIComponent(outlineId) + '/statuses/add', { label }).then(() => outlineStatusesRefresh()).catch((err) => {
+          outlineStatusesSetMsg('Error: ' + (err && err.message ? err.message : 'add failed'));
+        });
+      },
+      focusSelector: '#add-status-label',
+    });
+  };
+
+  const outlineStatusesRename = () => {
+    const cur = outlineStatusesSelected();
+    if (!cur) return;
+    const curLabel = String(cur.label || '').trim();
+    openPrompt({
+      title: 'Rename status',
+      hint: 'Esc to close · Ctrl+Enter to save',
+      bodyHTML: `
+        <div>
+          <label class="dim" for="rename-status-label">Status label</label>
+          <input id="rename-status-label" type="text" value="${escapeHTML(curLabel)}" style="width:100%;" />
+        </div>
+      `,
+      onSubmit: () => {
+        const label = String(document.getElementById('rename-status-label')?.value || '').trim();
+        if (!label) return;
+        closePrompt();
+        const outlineId = String(outlineStatuses.outlineId || '').trim();
+        postJSON('/outlines/' + encodeURIComponent(outlineId) + '/statuses/update', { id: cur.id, label }).then(() => outlineStatusesRefresh()).catch((err) => {
+          outlineStatusesSetMsg('Error: ' + (err && err.message ? err.message : 'rename failed'));
+        });
+      },
+      focusSelector: '#rename-status-label',
+    });
+  };
+
+  const outlineStatusesToggleEnd = () => {
+    const cur = outlineStatusesSelected();
+    if (!cur) return;
+    const outlineId = String(outlineStatuses.outlineId || '').trim();
+    postJSON('/outlines/' + encodeURIComponent(outlineId) + '/statuses/update', { id: cur.id, isEndState: !cur.isEndState }).then(() => outlineStatusesRefresh()).catch((err) => {
+      outlineStatusesSetMsg('Error: ' + (err && err.message ? err.message : 'update failed'));
+    });
+  };
+
+  const outlineStatusesToggleNote = () => {
+    const cur = outlineStatusesSelected();
+    if (!cur) return;
+    const outlineId = String(outlineStatuses.outlineId || '').trim();
+    postJSON('/outlines/' + encodeURIComponent(outlineId) + '/statuses/update', { id: cur.id, requiresNote: !cur.requiresNote }).then(() => outlineStatusesRefresh()).catch((err) => {
+      outlineStatusesSetMsg('Error: ' + (err && err.message ? err.message : 'update failed'));
+    });
+  };
+
+  const outlineStatusesDelete = () => {
+    const cur = outlineStatusesSelected();
+    if (!cur) return;
+    const outlineId = String(outlineStatuses.outlineId || '').trim();
+    postJSON('/outlines/' + encodeURIComponent(outlineId) + '/statuses/remove', { id: cur.id }).then(() => outlineStatusesRefresh()).catch((err) => {
+      outlineStatusesSetMsg('Error: ' + (err && err.message ? err.message : 'delete failed'));
+    });
+  };
+
+  const outlineStatusesMove = (delta) => {
+    const opts = Array.isArray(outlineStatuses.options) ? outlineStatuses.options : [];
+    const idx = outlineStatuses.idx || 0;
+    const j = idx + delta;
+    if (idx < 0 || j < 0 || idx >= opts.length || j >= opts.length) return;
+    const swapped = opts.slice();
+    const tmp = swapped[idx];
+    swapped[idx] = swapped[j];
+    swapped[j] = tmp;
+    outlineStatuses.options = swapped;
+    outlineStatuses.idx = j;
+    renderOutlineStatusesEditor();
+
+    const labels = swapped.map((x) => String(x?.label || '').trim()).filter((x) => x);
+    const outlineId = String(outlineStatuses.outlineId || '').trim();
+    postJSON('/outlines/' + encodeURIComponent(outlineId) + '/statuses/reorder', { labels }).catch((err) => {
+      outlineStatusesSetMsg('Error: ' + (err && err.message ? err.message : 'reorder failed'));
+    });
   };
 
   const openSyncSetupGitPrompt = () => {
@@ -3463,6 +3886,66 @@
     return true;
   };
 
+  const handleOutlineStatusesKeydown = (ev) => {
+    if (!outlineStatuses.open) return false;
+    const k = (ev.key || '').toLowerCase();
+    if (k === 'escape') {
+      ev.preventDefault();
+      closeOutlineStatusesEditor();
+      return true;
+    }
+    if (k === 'arrowdown' || k === 'down' || k === 'j' || (ev.ctrlKey && k === 'n')) {
+      ev.preventDefault();
+      outlineStatuses.idx = Math.min((outlineStatuses.options.length || 1) - 1, (outlineStatuses.idx || 0) + 1);
+      renderOutlineStatusesEditor();
+      return true;
+    }
+    if (k === 'arrowup' || k === 'up' || k === 'k' || (ev.ctrlKey && k === 'p')) {
+      ev.preventDefault();
+      outlineStatuses.idx = Math.max(0, (outlineStatuses.idx || 0) - 1);
+      renderOutlineStatusesEditor();
+      return true;
+    }
+    if (!ev.ctrlKey && !ev.altKey && !ev.metaKey) {
+      if (k === 'a') {
+        ev.preventDefault();
+        outlineStatusesAdd();
+        return true;
+      }
+      if (k === 'r') {
+        ev.preventDefault();
+        outlineStatusesRename();
+        return true;
+      }
+      if (k === 'e') {
+        ev.preventDefault();
+        outlineStatusesToggleEnd();
+        return true;
+      }
+      if (k === 'n') {
+        ev.preventDefault();
+        outlineStatusesToggleNote();
+        return true;
+      }
+      if (k === 'd') {
+        ev.preventDefault();
+        outlineStatusesDelete();
+        return true;
+      }
+    }
+    if (ev.ctrlKey && (k === 'j' || k === 'down')) {
+      ev.preventDefault();
+      outlineStatusesMove(+1);
+      return true;
+    }
+    if (ev.ctrlKey && (k === 'k' || k === 'up')) {
+      ev.preventDefault();
+      outlineStatusesMove(-1);
+      return true;
+    }
+    return true;
+  };
+
   const handleAssigneePickerKeydown = (ev) => {
     if (!assigneePicker.open) return false;
     const k = (ev.key || '').toLowerCase();
@@ -3892,6 +4375,52 @@
     return false;
   };
 
+  const handleProjectsAndOutlinesListKeydown = (ev, key) => {
+    const view = currentView();
+    if (view === 'projects') {
+      if (key === 'n' && !ev.shiftKey) {
+        ev.preventDefault();
+        openNewProjectPrompt();
+        return true;
+      }
+      if (key === 'e') {
+        ev.preventDefault();
+        openRenameProjectPrompt();
+        return true;
+      }
+      if (key === 'r') {
+        ev.preventDefault();
+        archiveFocusedProject();
+        return true;
+      }
+      return false;
+    }
+    if (view === 'outlines') {
+      if (key === 'n' && !ev.shiftKey) {
+        ev.preventDefault();
+        openNewOutlinePrompt();
+        return true;
+      }
+      if (key === 'e') {
+        ev.preventDefault();
+        openRenameOutlinePrompt();
+        return true;
+      }
+      if (key === 'd' && ev.shiftKey) {
+        ev.preventDefault();
+        openEditOutlineDescriptionPrompt();
+        return true;
+      }
+      if (key === 'r') {
+        ev.preventDefault();
+        archiveFocusedOutline();
+        return true;
+      }
+      return false;
+    }
+    return false;
+  };
+
   const initAgendaFilter = () => {
     const input = document.getElementById('agenda-filter');
     if (!input) return;
@@ -4280,6 +4809,7 @@
     if (handlePromptKeydown(ev)) return;
     if (handleAssigneePickerKeydown(ev)) return;
     if (handleStatusPickerKeydown(ev)) return;
+    if (handleOutlineStatusesKeydown(ev)) return;
     if (isTypingTarget(ev.target)) return;
 
     const rawKey = String(ev.key || '');
@@ -4340,6 +4870,7 @@
     const agendaRow = agendaRowFromEvent(ev);
     if (handleAgendaKeydown(ev, key, agendaRow)) return;
 
+    if (handleProjectsAndOutlinesListKeydown(ev, key)) return;
     handleGlobalListKeydown(ev, key);
   };
 

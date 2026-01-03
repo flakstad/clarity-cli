@@ -1,10 +1,11 @@
 {{define "outline_main"}}
-<main id="clarity-main">
+<main id="clarity-main" data-view="outline">
   <h1>{{.Outline.Name}}</h1>
 
   <div class="card">
     <div><strong>Outline</strong>: <code>{{.Outline.ID}}</code></div>
     <div><strong>Project</strong>: <code>{{.Outline.ProjectID}}</code></div>
+    {{if .Outline.Description}}<div style="margin-top:8px;" class="dim">{{.Outline.Description}}</div>{{end}}
   </div>
 
   <div class="card">
@@ -120,6 +121,8 @@
 <div
   id="outline-native"
   data-outline-id="{{.Outline.ID}}"
+  data-outline-name="{{.Outline.Name}}"
+  data-outline-description="{{.Outline.Description}}"
   data-project-id="{{.Outline.ProjectID}}"
   data-toggle-open="{{.ToggleOpenTo}}"
   data-toggle-end="{{.ToggleEndTo}}"

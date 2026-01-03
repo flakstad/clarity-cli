@@ -165,6 +165,49 @@ ul {
   margin: 8px 0 0 18px;
 }
 
+.kb-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 8px 0 0;
+}
+
+.kb-list li {
+  margin: 2px 0;
+}
+
+.list-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  cursor: pointer;
+  line-height: 1.5;
+  padding: 0.3rem 0.5rem;
+  border-radius: 0;
+  outline: none;
+  text-decoration: none;
+}
+
+.list-row:hover {
+  background: var(--clarity-outline-hover);
+}
+
+.list-row:focus {
+  background: var(--clarity-outline-focus);
+}
+
+.list-id {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.list-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .agenda-list {
   list-style: none;
   padding-left: 0;

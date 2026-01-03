@@ -40,10 +40,21 @@ All key handling is routed through a single `document.addEventListener('keydown'
 - `A` open **Agenda Commands** (always available; useful when `a` is assignment)
 - `c` open **Capture** (modal; TUI parity is action-panel capture, but web currently uses a modal)
 
+## Projects/outlines lists
+
+- List navigation: `j/k`, `↑/↓`, `Ctrl+N/P` move focus; `Enter` opens focused row
+- Projects (`/projects`): `n` new project, `e` rename focused, `r` archive focused
+- Outlines (`/projects/:id`): `n` new outline, `e` rename focused, `D` edit description, `r` archive focused
+
 ## Outline view (native)
 
 - `v` cycle view mode: `list` → `list+preview` → `columns`
 - `h/l` or `←/→` or `Ctrl+B/F` navigate parent/child
+
+## Outline statuses (web)
+
+- Open from action panel: `x` then `S` (or `x` then `S` from outlines list)
+- Modal keys: `a` add, `r` rename, `e` toggle end-state, `n` toggle requires-note, `d` delete, `Ctrl+J/K` reorder, `Esc` close
 
 ## Agenda view
 

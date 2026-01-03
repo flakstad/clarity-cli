@@ -44,6 +44,24 @@ This document is the running “source of truth” for keyboard parity between t
 | `Ctrl+N/P` | Move selection | Move focus | ✅ |
 | `Enter` | Open | Open | ✅ |
 
+### Projects list (web: `/projects`)
+
+| Key | TUI | Web | Status |
+|---|---|---|---|
+| `n` | New project | New project prompt | ✅ |
+| `e` | Rename project | Rename focused project prompt | ✅ |
+| `r` | Archive project | Archive focused project | ✅ |
+
+### Outlines list (web: `/projects/:id`)
+
+| Key | TUI | Web | Status |
+|---|---|---|---|
+| `n` | New outline | New outline prompt | ✅ |
+| `e` | Rename outline | Rename focused outline prompt | ✅ |
+| `D` | Edit outline description | Edit focused outline description prompt | ✅ |
+| `r` | Archive outline | Archive focused outline | ✅ |
+| `S` | Edit outline statuses | Outline statuses modal | ✅ |
+
 ## Native outline view
 
 The native outline web mode aims to match the TUI’s outline bindings (move/reorder, indent/outdent, status cycling, collapse, etc.).

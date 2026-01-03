@@ -250,9 +250,20 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("POST /workspaces/use", s.handleWorkspacesUse)
         mux.HandleFunc("GET /archived", s.handleArchived)
         mux.HandleFunc("GET /projects", s.handleProjects)
+        mux.HandleFunc("POST /projects", s.handleProjectCreate)
+        mux.HandleFunc("POST /projects/{projectId}/rename", s.handleProjectRename)
+        mux.HandleFunc("POST /projects/{projectId}/archive", s.handleProjectArchive)
+        mux.HandleFunc("POST /projects/{projectId}/outlines", s.handleOutlineCreate)
         mux.HandleFunc("GET /projects/{projectId}", s.handleProject)
         mux.HandleFunc("GET /outlines/{outlineId}", s.handleOutline)
         mux.HandleFunc("GET /outlines/{outlineId}/meta", s.handleOutlineMeta)
+        mux.HandleFunc("POST /outlines/{outlineId}/rename", s.handleOutlineRename)
+        mux.HandleFunc("POST /outlines/{outlineId}/archive", s.handleOutlineArchive)
+        mux.HandleFunc("POST /outlines/{outlineId}/description", s.handleOutlineSetDescription)
+        mux.HandleFunc("POST /outlines/{outlineId}/statuses/add", s.handleOutlineStatusAdd)
+        mux.HandleFunc("POST /outlines/{outlineId}/statuses/update", s.handleOutlineStatusUpdate)
+        mux.HandleFunc("POST /outlines/{outlineId}/statuses/remove", s.handleOutlineStatusRemove)
+        mux.HandleFunc("POST /outlines/{outlineId}/statuses/reorder", s.handleOutlineStatusReorder)
         mux.HandleFunc("POST /outlines/{outlineId}/items", s.handleOutlineItemCreate)
         mux.HandleFunc("POST /outlines/{outlineId}/apply", s.handleOutlineApply)
         mux.HandleFunc("GET /items/{itemId}", s.handleItem)
@@ -262,6 +273,15 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("POST /items/{itemId}/comments", s.handleItemCommentAdd)
         mux.HandleFunc("POST /items/{itemId}/worklog", s.handleItemWorklogAdd)
         return mux
+}
+
+func redirectBack(w http.ResponseWriter, r *http.Request, fallback string) {
+        ref := strings.TrimSpace(r.Header.Get("Referer"))
+        if ref != "" {
+                http.Redirect(w, r, ref, http.StatusSeeOther)
+                return
+        }
+        http.Redirect(w, r, fallback, http.StatusSeeOther)
 }
 
 func (s *Server) handleOutlineJS(w http.ResponseWriter, r *http.Request) {
@@ -2091,6 +2111,251 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
         s.writeHTMLTemplate(w, "projects.html", vm)
 }
 
+func (s *Server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
+        if s.readOnly() {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        if actorID == "" {
+                http.Error(w, "missing actor (start server with --actor, set currentActorId, or /login in dev auth mode)", http.StatusUnauthorized)
+                return
+        }
+        _ = r.ParseForm()
+        name := strings.TrimSpace(r.Form.Get("name"))
+        if name == "" {
+                http.Error(w, "missing name", http.StatusBadRequest)
+                return
+        }
+
+        st := store.Store{Dir: s.dir()}
+        db, err := st.Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if _, ok := db.FindActor(actorID); !ok {
+                http.Error(w, "unknown actor", http.StatusForbidden)
+                return
+        }
+
+        p := model.Project{
+                ID:        st.NextID(db, "proj"),
+                Name:      name,
+                CreatedBy: actorID,
+                CreatedAt: time.Now().UTC(),
+        }
+        db.Projects = append(db.Projects, p)
+        db.CurrentProjectID = p.ID
+        if err := st.AppendEvent(actorID, "project.create", p.ID, p); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if err := st.Save(db); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if c := s.committer(); c != nil {
+                actorLabel := strings.TrimSpace(actorID)
+                if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                        actorLabel = strings.TrimSpace(a.Name)
+                }
+                c.Notify(actorLabel)
+        }
+        http.Redirect(w, r, "/projects/"+p.ID, http.StatusSeeOther)
+}
+
+func (s *Server) handleProjectRename(w http.ResponseWriter, r *http.Request) {
+        if s.readOnly() {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        if actorID == "" {
+                http.Error(w, "missing actor (start server with --actor, set currentActorId, or /login in dev auth mode)", http.StatusUnauthorized)
+                return
+        }
+        projectID := strings.TrimSpace(r.PathValue("projectId"))
+        if projectID == "" {
+                http.Error(w, "missing project id", http.StatusBadRequest)
+                return
+        }
+        _ = r.ParseForm()
+        name := strings.TrimSpace(r.Form.Get("name"))
+        if name == "" {
+                http.Error(w, "missing name", http.StatusBadRequest)
+                return
+        }
+
+        st := store.Store{Dir: s.dir()}
+        db, err := st.Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if _, ok := db.FindActor(actorID); !ok {
+                http.Error(w, "unknown actor", http.StatusForbidden)
+                return
+        }
+        p, ok := db.FindProject(projectID)
+        if !ok || p == nil || p.Archived {
+                http.NotFound(w, r)
+                return
+        }
+
+        if strings.TrimSpace(p.Name) != name {
+                p.Name = name
+                if err := st.AppendEvent(actorID, "project.rename", p.ID, map[string]any{"name": p.Name}); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                if err := st.Save(db); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                if c := s.committer(); c != nil {
+                        actorLabel := strings.TrimSpace(actorID)
+                        if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                                actorLabel = strings.TrimSpace(a.Name)
+                        }
+                        c.Notify(actorLabel)
+                }
+        }
+        redirectBack(w, r, "/projects/"+projectID)
+}
+
+func (s *Server) handleProjectArchive(w http.ResponseWriter, r *http.Request) {
+        if s.readOnly() {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        if actorID == "" {
+                http.Error(w, "missing actor (start server with --actor, set currentActorId, or /login in dev auth mode)", http.StatusUnauthorized)
+                return
+        }
+        projectID := strings.TrimSpace(r.PathValue("projectId"))
+        if projectID == "" {
+                http.Error(w, "missing project id", http.StatusBadRequest)
+                return
+        }
+        _ = r.ParseForm()
+        archived := true
+        if strings.TrimSpace(r.Form.Get("unarchive")) != "" {
+                archived = false
+        }
+
+        st := store.Store{Dir: s.dir()}
+        db, err := st.Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if _, ok := db.FindActor(actorID); !ok {
+                http.Error(w, "unknown actor", http.StatusForbidden)
+                return
+        }
+        p, ok := db.FindProject(projectID)
+        if !ok || p == nil {
+                http.NotFound(w, r)
+                return
+        }
+
+        if p.Archived != archived {
+                p.Archived = archived
+                if db.CurrentProjectID == projectID && p.Archived {
+                        db.CurrentProjectID = ""
+                }
+                if err := st.AppendEvent(actorID, "project.archive", p.ID, map[string]any{"archived": p.Archived}); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                if err := st.Save(db); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                if c := s.committer(); c != nil {
+                        actorLabel := strings.TrimSpace(actorID)
+                        if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                                actorLabel = strings.TrimSpace(a.Name)
+                        }
+                        c.Notify(actorLabel)
+                }
+        }
+
+        http.Redirect(w, r, "/projects", http.StatusSeeOther)
+}
+
+func (s *Server) handleOutlineCreate(w http.ResponseWriter, r *http.Request) {
+        if s.readOnly() {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        if actorID == "" {
+                http.Error(w, "missing actor (start server with --actor, set currentActorId, or /login in dev auth mode)", http.StatusUnauthorized)
+                return
+        }
+        projectID := strings.TrimSpace(r.PathValue("projectId"))
+        if projectID == "" {
+                http.Error(w, "missing project id", http.StatusBadRequest)
+                return
+        }
+        _ = r.ParseForm()
+        name := strings.TrimSpace(r.Form.Get("name"))
+        var namePtr *string
+        if name != "" {
+                tmp := name
+                namePtr = &tmp
+        }
+
+        st := store.Store{Dir: s.dir()}
+        db, err := st.Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if _, ok := db.FindActor(actorID); !ok {
+                http.Error(w, "unknown actor", http.StatusForbidden)
+                return
+        }
+        p, ok := db.FindProject(projectID)
+        if !ok || p == nil || p.Archived {
+                http.NotFound(w, r)
+                return
+        }
+
+        o := model.Outline{
+                ID:         st.NextID(db, "out"),
+                ProjectID:  projectID,
+                Name:       namePtr,
+                StatusDefs: store.DefaultOutlineStatusDefs(),
+                CreatedBy:  actorID,
+                CreatedAt:  time.Now().UTC(),
+        }
+        db.Outlines = append(db.Outlines, o)
+        if err := st.AppendEvent(actorID, "outline.create", o.ID, o); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if err := st.Save(db); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if c := s.committer(); c != nil {
+                actorLabel := strings.TrimSpace(actorID)
+                if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                        actorLabel = strings.TrimSpace(a.Name)
+                }
+                c.Notify(actorLabel)
+        }
+        http.Redirect(w, r, "/outlines/"+o.ID, http.StatusSeeOther)
+}
+
 type projectVM struct {
         baseVM
         Project  model.Project
@@ -2499,6 +2764,541 @@ func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
         }
         vm.ActorID = actorID
         s.writeHTMLTemplate(w, "outline.html", vm)
+}
+
+func (s *Server) handleOutlineRename(w http.ResponseWriter, r *http.Request) {
+        if s.readOnly() {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+
+        outlineID := strings.TrimSpace(r.PathValue("outlineId"))
+        if outlineID == "" {
+                http.Error(w, "missing outline id", http.StatusBadRequest)
+                return
+        }
+
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        if actorID == "" {
+                http.Error(w, "missing actor (start server with --actor, set currentActorId, or /login in dev auth mode)", http.StatusUnauthorized)
+                return
+        }
+        _ = r.ParseForm()
+        name := strings.TrimSpace(r.Form.Get("name"))
+        var namePtr *string
+        if name != "" {
+                tmp := name
+                namePtr = &tmp
+        }
+
+        st := store.Store{Dir: s.dir()}
+        db, err := st.Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if _, ok := db.FindActor(actorID); !ok {
+                http.Error(w, "unknown actor", http.StatusForbidden)
+                return
+        }
+        o, ok := db.FindOutline(outlineID)
+        if !ok || o == nil || o.Archived {
+                http.NotFound(w, r)
+                return
+        }
+
+        prev := ""
+        if o.Name != nil {
+                prev = strings.TrimSpace(*o.Name)
+        }
+        next := ""
+        if namePtr != nil {
+                next = strings.TrimSpace(*namePtr)
+        }
+        if prev != next {
+                o.Name = namePtr
+                if err := st.AppendEvent(actorID, "outline.rename", o.ID, map[string]any{"name": o.Name}); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                if err := st.Save(db); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                if c := s.committer(); c != nil {
+                        actorLabel := strings.TrimSpace(actorID)
+                        if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                                actorLabel = strings.TrimSpace(a.Name)
+                        }
+                        c.Notify(actorLabel)
+                }
+        }
+
+        redirectBack(w, r, "/outlines/"+outlineID)
+}
+
+func (s *Server) handleOutlineArchive(w http.ResponseWriter, r *http.Request) {
+        if s.readOnly() {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+
+        outlineID := strings.TrimSpace(r.PathValue("outlineId"))
+        if outlineID == "" {
+                http.Error(w, "missing outline id", http.StatusBadRequest)
+                return
+        }
+
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        if actorID == "" {
+                http.Error(w, "missing actor (start server with --actor, set currentActorId, or /login in dev auth mode)", http.StatusUnauthorized)
+                return
+        }
+        _ = r.ParseForm()
+        archived := true
+        if strings.TrimSpace(r.Form.Get("unarchive")) != "" {
+                archived = false
+        }
+
+        st := store.Store{Dir: s.dir()}
+        db, err := st.Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if _, ok := db.FindActor(actorID); !ok {
+                http.Error(w, "unknown actor", http.StatusForbidden)
+                return
+        }
+        o, ok := db.FindOutline(outlineID)
+        if !ok || o == nil {
+                http.NotFound(w, r)
+                return
+        }
+
+        if o.Archived != archived {
+                o.Archived = archived
+                if err := st.AppendEvent(actorID, "outline.archive", o.ID, map[string]any{"archived": o.Archived}); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                if err := st.Save(db); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                if c := s.committer(); c != nil {
+                        actorLabel := strings.TrimSpace(actorID)
+                        if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                                actorLabel = strings.TrimSpace(a.Name)
+                        }
+                        c.Notify(actorLabel)
+                }
+        }
+
+        http.Redirect(w, r, "/projects/"+o.ProjectID, http.StatusSeeOther)
+}
+
+func (s *Server) handleOutlineSetDescription(w http.ResponseWriter, r *http.Request) {
+        if s.readOnly() {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+
+        outlineID := strings.TrimSpace(r.PathValue("outlineId"))
+        if outlineID == "" {
+                http.Error(w, "missing outline id", http.StatusBadRequest)
+                return
+        }
+
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        if actorID == "" {
+                http.Error(w, "missing actor (start server with --actor, set currentActorId, or /login in dev auth mode)", http.StatusUnauthorized)
+                return
+        }
+        _ = r.ParseForm()
+        desc := strings.TrimSpace(r.Form.Get("description"))
+
+        st := store.Store{Dir: s.dir()}
+        db, err := st.Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if _, ok := db.FindActor(actorID); !ok {
+                http.Error(w, "unknown actor", http.StatusForbidden)
+                return
+        }
+        o, ok := db.FindOutline(outlineID)
+        if !ok || o == nil || o.Archived {
+                http.NotFound(w, r)
+                return
+        }
+
+        if strings.TrimSpace(o.Description) != desc {
+                o.Description = desc
+                if err := st.AppendEvent(actorID, "outline.set_description", o.ID, map[string]any{"description": o.Description}); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                if err := st.Save(db); err != nil {
+                        http.Error(w, err.Error(), http.StatusConflict)
+                        return
+                }
+                if c := s.committer(); c != nil {
+                        actorLabel := strings.TrimSpace(actorID)
+                        if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                                actorLabel = strings.TrimSpace(a.Name)
+                        }
+                        c.Notify(actorLabel)
+                }
+        }
+
+        redirectBack(w, r, "/outlines/"+outlineID)
+}
+
+type outlineStatusAddReq struct {
+        Label        string `json:"label"`
+        IsEndState   bool   `json:"isEndState"`
+        RequiresNote bool   `json:"requiresNote"`
+}
+
+func (s *Server) handleOutlineStatusAdd(w http.ResponseWriter, r *http.Request) {
+        if s.readOnly() {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+        outlineID := strings.TrimSpace(r.PathValue("outlineId"))
+        if outlineID == "" {
+                http.Error(w, "missing outline id", http.StatusBadRequest)
+                return
+        }
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        if actorID == "" {
+                http.Error(w, "missing actor (start server with --actor, set currentActorId, or /login in dev auth mode)", http.StatusUnauthorized)
+                return
+        }
+        var req outlineStatusAddReq
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+                http.Error(w, "invalid json", http.StatusBadRequest)
+                return
+        }
+        label := strings.TrimSpace(req.Label)
+        if label == "" {
+                http.Error(w, "missing label", http.StatusBadRequest)
+                return
+        }
+
+        st := store.Store{Dir: s.dir()}
+        db, err := st.Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if _, ok := db.FindActor(actorID); !ok {
+                http.Error(w, "unknown actor", http.StatusForbidden)
+                return
+        }
+        o, ok := db.FindOutline(outlineID)
+        if !ok || o == nil || o.Archived {
+                http.NotFound(w, r)
+                return
+        }
+
+        id := store.NewStatusIDFromLabel(o, label)
+        o.StatusDefs = append(o.StatusDefs, model.OutlineStatusDef{
+                ID:           id,
+                Label:        label,
+                IsEndState:   req.IsEndState,
+                RequiresNote: req.RequiresNote,
+        })
+        if err := st.AppendEvent(actorID, "outline.status.add", o.ID, map[string]any{
+                "id":           id,
+                "label":        label,
+                "isEndState":   req.IsEndState,
+                "requiresNote": req.RequiresNote,
+        }); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if err := st.Save(db); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if c := s.committer(); c != nil {
+                actorLabel := strings.TrimSpace(actorID)
+                if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                        actorLabel = strings.TrimSpace(a.Name)
+                }
+                c.Notify(actorLabel)
+        }
+
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        _ = json.NewEncoder(w).Encode(map[string]any{"id": id})
+}
+
+type outlineStatusUpdateReq struct {
+        ID           string `json:"id"`
+        Label        string `json:"label,omitempty"`
+        IsEndState   *bool  `json:"isEndState,omitempty"`
+        RequiresNote *bool  `json:"requiresNote,omitempty"`
+}
+
+func (s *Server) handleOutlineStatusUpdate(w http.ResponseWriter, r *http.Request) {
+        if s.readOnly() {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+        outlineID := strings.TrimSpace(r.PathValue("outlineId"))
+        if outlineID == "" {
+                http.Error(w, "missing outline id", http.StatusBadRequest)
+                return
+        }
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        if actorID == "" {
+                http.Error(w, "missing actor (start server with --actor, set currentActorId, or /login in dev auth mode)", http.StatusUnauthorized)
+                return
+        }
+        var req outlineStatusUpdateReq
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+                http.Error(w, "invalid json", http.StatusBadRequest)
+                return
+        }
+        id := strings.TrimSpace(req.ID)
+        if id == "" {
+                http.Error(w, "missing id", http.StatusBadRequest)
+                return
+        }
+
+        st := store.Store{Dir: s.dir()}
+        db, err := st.Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if _, ok := db.FindActor(actorID); !ok {
+                http.Error(w, "unknown actor", http.StatusForbidden)
+                return
+        }
+        o, ok := db.FindOutline(outlineID)
+        if !ok || o == nil || o.Archived {
+                http.NotFound(w, r)
+                return
+        }
+
+        idx := -1
+        for i := range o.StatusDefs {
+                if strings.TrimSpace(o.StatusDefs[i].ID) == id {
+                        idx = i
+                        break
+                }
+        }
+        if idx < 0 {
+                http.Error(w, "unknown status id", http.StatusBadRequest)
+                return
+        }
+        if strings.TrimSpace(req.Label) != "" {
+                o.StatusDefs[idx].Label = strings.TrimSpace(req.Label)
+        }
+        if req.IsEndState != nil {
+                o.StatusDefs[idx].IsEndState = *req.IsEndState
+        }
+        if req.RequiresNote != nil {
+                o.StatusDefs[idx].RequiresNote = *req.RequiresNote
+        }
+
+        payload := map[string]any{"id": id}
+        if strings.TrimSpace(req.Label) != "" {
+                payload["label"] = strings.TrimSpace(req.Label)
+        }
+        if req.IsEndState != nil {
+                payload["isEndState"] = *req.IsEndState
+        }
+        if req.RequiresNote != nil {
+                payload["requiresNote"] = *req.RequiresNote
+        }
+        if err := st.AppendEvent(actorID, "outline.status.update", o.ID, payload); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if err := st.Save(db); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if c := s.committer(); c != nil {
+                actorLabel := strings.TrimSpace(actorID)
+                if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                        actorLabel = strings.TrimSpace(a.Name)
+                }
+                c.Notify(actorLabel)
+        }
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        _ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+type outlineStatusRemoveReq struct {
+        ID string `json:"id"`
+}
+
+func (s *Server) handleOutlineStatusRemove(w http.ResponseWriter, r *http.Request) {
+        if s.readOnly() {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+        outlineID := strings.TrimSpace(r.PathValue("outlineId"))
+        if outlineID == "" {
+                http.Error(w, "missing outline id", http.StatusBadRequest)
+                return
+        }
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        if actorID == "" {
+                http.Error(w, "missing actor (start server with --actor, set currentActorId, or /login in dev auth mode)", http.StatusUnauthorized)
+                return
+        }
+        var req outlineStatusRemoveReq
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+                http.Error(w, "invalid json", http.StatusBadRequest)
+                return
+        }
+        id := strings.TrimSpace(req.ID)
+        if id == "" {
+                http.Error(w, "missing id", http.StatusBadRequest)
+                return
+        }
+
+        st := store.Store{Dir: s.dir()}
+        db, err := st.Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if _, ok := db.FindActor(actorID); !ok {
+                http.Error(w, "unknown actor", http.StatusForbidden)
+                return
+        }
+        o, ok := db.FindOutline(outlineID)
+        if !ok || o == nil || o.Archived {
+                http.NotFound(w, r)
+                return
+        }
+
+        next := make([]model.OutlineStatusDef, 0, len(o.StatusDefs))
+        for _, d := range o.StatusDefs {
+                if strings.TrimSpace(d.ID) == id {
+                        continue
+                }
+                next = append(next, d)
+        }
+        o.StatusDefs = next
+
+        if err := st.AppendEvent(actorID, "outline.status.remove", o.ID, map[string]any{"id": id}); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if err := st.Save(db); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if c := s.committer(); c != nil {
+                actorLabel := strings.TrimSpace(actorID)
+                if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                        actorLabel = strings.TrimSpace(a.Name)
+                }
+                c.Notify(actorLabel)
+        }
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        _ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+type outlineStatusReorderReq struct {
+        Labels []string `json:"labels"`
+}
+
+func (s *Server) handleOutlineStatusReorder(w http.ResponseWriter, r *http.Request) {
+        if s.readOnly() {
+                http.Error(w, "read-only", http.StatusForbidden)
+                return
+        }
+        outlineID := strings.TrimSpace(r.PathValue("outlineId"))
+        if outlineID == "" {
+                http.Error(w, "missing outline id", http.StatusBadRequest)
+                return
+        }
+        actorID := strings.TrimSpace(s.actorForRequest(r))
+        if actorID == "" {
+                http.Error(w, "missing actor (start server with --actor, set currentActorId, or /login in dev auth mode)", http.StatusUnauthorized)
+                return
+        }
+        var req outlineStatusReorderReq
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+                http.Error(w, "invalid json", http.StatusBadRequest)
+                return
+        }
+
+        st := store.Store{Dir: s.dir()}
+        db, err := st.Load()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+        }
+        if _, ok := db.FindActor(actorID); !ok {
+                http.Error(w, "unknown actor", http.StatusForbidden)
+                return
+        }
+        o, ok := db.FindOutline(outlineID)
+        if !ok || o == nil || o.Archived {
+                http.NotFound(w, r)
+                return
+        }
+
+        labels := make([]string, 0, len(req.Labels))
+        seen := map[string]bool{}
+        for _, l := range req.Labels {
+                l = strings.TrimSpace(l)
+                if l == "" || seen[l] {
+                        continue
+                }
+                labels = append(labels, l)
+                seen[l] = true
+        }
+        if err := st.AppendEvent(actorID, "outline.status.reorder", o.ID, map[string]any{"labels": labels}); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+
+        byLabel := map[string]model.OutlineStatusDef{}
+        for _, d := range o.StatusDefs {
+                byLabel[strings.TrimSpace(d.Label)] = d
+        }
+        out := make([]model.OutlineStatusDef, 0, len(o.StatusDefs))
+        seen2 := map[string]bool{}
+        for _, l := range labels {
+                if d, ok := byLabel[l]; ok {
+                        out = append(out, d)
+                        seen2[l] = true
+                }
+        }
+        for _, d := range o.StatusDefs {
+                l := strings.TrimSpace(d.Label)
+                if l == "" || seen2[l] {
+                        continue
+                }
+                out = append(out, d)
+        }
+        o.StatusDefs = out
+
+        if err := st.Save(db); err != nil {
+                http.Error(w, err.Error(), http.StatusConflict)
+                return
+        }
+        if c := s.committer(); c != nil {
+                actorLabel := strings.TrimSpace(actorID)
+                if a, ok := db.FindActor(actorID); ok && a != nil && strings.TrimSpace(a.Name) != "" {
+                        actorLabel = strings.TrimSpace(a.Name)
+                }
+                c.Notify(actorLabel)
+        }
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        _ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
 func (s *Server) handleOutlineItemCreate(w http.ResponseWriter, r *http.Request) {

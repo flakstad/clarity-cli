@@ -1,5 +1,5 @@
 {{define "project_main"}}
-<main id="clarity-main" data-project-id="{{.Project.ID}}">
+<main id="clarity-main" data-view="outlines" data-project-id="{{.Project.ID}}" data-project-name="{{.Project.Name}}">
   <h1>{{.Project.Name}}</h1>
 
   <div class="card">
@@ -10,9 +10,14 @@
   <div class="card">
     <div><strong>Outlines</strong> ({{len .Outlines}})</div>
     {{if .Outlines}}
-      <ul>
+      <ul class="kb-list">
         {{range .Outlines}}
-          <li><a data-kb-item data-focus-id="{{.ID}}" href="/outlines/{{.ID}}"><code>{{.ID}}</code></a> — {{.Name}}</li>
+          <li>
+            <a class="list-row" data-kb-item data-focus-id="{{.ID}}" data-outline-id="{{.ID}}" data-outline-name="{{.Name}}" data-outline-description="{{.Description}}" href="/outlines/{{.ID}}">
+              <span class="list-id"><code>{{.ID}}</code></span>
+              <span class="list-title">{{.Name}}</span>
+            </a>
+          </li>
         {{end}}
       </ul>
     {{else}}
