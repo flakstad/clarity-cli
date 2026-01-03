@@ -153,6 +153,7 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("GET /outlines/{outlineId}/events", s.handleOutlineEvents)
         mux.HandleFunc("GET /items/{itemId}/events", s.handleItemEvents)
         mux.HandleFunc("GET /static/app.css", s.handleAppCSS)
+        mux.HandleFunc("GET /static/themes.css", s.handleThemesCSS)
         mux.HandleFunc("GET /static/app.js", s.handleAppJS)
         mux.HandleFunc("GET /static/datastar.js", s.handleDatastarJS)
         mux.HandleFunc("GET /static/outline.js", s.handleOutlineJS)
@@ -225,6 +226,17 @@ func (s *Server) handleAppJS(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAppCSS(w http.ResponseWriter, r *http.Request) {
         b, err := assetsFS.ReadFile("static/app.css")
+        if err != nil || len(b) == 0 {
+                http.NotFound(w, r)
+                return
+        }
+        w.Header().Set("Content-Type", "text/css; charset=utf-8")
+        w.WriteHeader(http.StatusOK)
+        _, _ = w.Write(b)
+}
+
+func (s *Server) handleThemesCSS(w http.ResponseWriter, r *http.Request) {
+        b, err := assetsFS.ReadFile("static/themes.css")
         if err != nil || len(b) == 0 {
                 http.NotFound(w, r)
                 return
@@ -2117,6 +2129,12 @@ type outlineApplyResp struct {
         StatusLabels json.RawMessage `json:"statusLabels"`
         Assignees    json.RawMessage `json:"assignees"`
         Tags         json.RawMessage `json:"tags"`
+        Created      []createdItem   `json:"created,omitempty"`
+}
+
+type createdItem struct {
+        TempID string `json:"tempId,omitempty"`
+        ID     string `json:"id"`
 }
 
 func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
@@ -2177,6 +2195,7 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
         }
 
         changed := false
+        created := make([]createdItem, 0)
         now := time.Now().UTC()
         for _, op := range ops {
                 if op.Type == "" {
@@ -2189,6 +2208,7 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                         var d struct {
                                 Title   string `json:"title"`
                                 AfterID string `json:"afterId"`
+                                TempID  string `json:"tempId"`
                                 // Compatibility aliases.
                                 Text  string `json:"text"`
                                 ForID string `json:"forId"`
@@ -2260,12 +2280,18 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                                 http.Error(w, err.Error(), http.StatusConflict)
                                 return
                         }
+                        if strings.TrimSpace(d.TempID) != "" {
+                                created = append(created, createdItem{TempID: strings.TrimSpace(d.TempID), ID: itemID})
+                        } else {
+                                created = append(created, createdItem{ID: itemID})
+                        }
                         changed = true
 
                 case "outline:new_child":
                         var d struct {
                                 Title    string `json:"title"`
                                 ParentID string `json:"parentId"`
+                                TempID   string `json:"tempId"`
                                 // Compatibility aliases.
                                 Text  string `json:"text"`
                                 ForID string `json:"forId"`
@@ -2332,6 +2358,11 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                         if err := st.AppendEvent(actorID, "item.create", it.ID, it); err != nil {
                                 http.Error(w, err.Error(), http.StatusConflict)
                                 return
+                        }
+                        if strings.TrimSpace(d.TempID) != "" {
+                                created = append(created, createdItem{TempID: strings.TrimSpace(d.TempID), ID: itemID})
+                        } else {
+                                created = append(created, createdItem{ID: itemID})
                         }
                         changed = true
 
@@ -2844,6 +2875,7 @@ func (s *Server) handleOutlineApply(w http.ResponseWriter, r *http.Request) {
                 StatusLabels: json.RawMessage([]byte(statusJSON)),
                 Assignees:    json.RawMessage([]byte(assigneesJSON)),
                 Tags:         json.RawMessage([]byte(tagsJSON)),
+                Created:      created,
         })
 }
 

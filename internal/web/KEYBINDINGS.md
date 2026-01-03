@@ -33,3 +33,14 @@ All key handling is routed through a single `document.addEventListener('keydown'
    - optimistic + async persist (good for move/reorder)
    - synchronous persist (good for destructive actions)
 5. Add/adjust the on-page hint text and/or `?` help overlay.
+
+## Global bindings (today)
+
+- `?` toggle help overlay
+- `x` action menu (command palette)
+- `v` view switcher (Home / Projects / Agenda / Sync)
+- `g` then:
+  - `h` Home
+  - `p` Projects
+  - `a` Agenda
+  - `s` Sync

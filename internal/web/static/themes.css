@@ -1,0 +1,78 @@
+:root {
+  color-scheme: light dark;
+
+  --radius: 10px;
+  --pad: 16px;
+  --gap: 12px;
+  --maxw: 980px;
+
+  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+
+  /* Outline semantic colors. */
+  --clarity-outline-color-todo: #d16d7a;
+  --clarity-outline-color-done: #6c757d;
+  --clarity-outline-color-priority: #5f9fb0;
+  --clarity-outline-color-on-hold: #f39c12;
+
+  /* Default theme: `default` (dark). */
+  --clarity-outline-bg-primary: #1e1e1e;
+  --clarity-outline-bg-secondary: #2d2d2d;
+  --clarity-outline-bg-tertiary: #333333;
+  --clarity-outline-text-primary: #f8f8f2;
+  --clarity-outline-text-secondary: #ddd;
+  --clarity-outline-text-muted: #888;
+  --clarity-outline-border: #555;
+  --clarity-outline-border-focus: #b8c5d1;
+  --clarity-outline-hover: rgba(255, 255, 255, 0.08);
+  --clarity-outline-focus: rgba(255, 255, 255, 0.15);
+  --clarity-outline-focus-shadow: rgba(184, 197, 209, 0.4);
+  --clarity-outline-focus-highlight: rgba(184, 197, 209, 0.35);
+  --clarity-outline-input-bg: #2d2d2d;
+  --clarity-outline-input-border: #999;
+  --clarity-outline-popup-bg: #2d2d2d;
+  --clarity-outline-popup-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+
+  /* App mappings. */
+  --bg: var(--clarity-outline-bg-primary);
+  --fg: var(--clarity-outline-text-primary);
+  --muted: var(--clarity-outline-text-muted);
+  --border: var(--clarity-outline-border);
+  --card-bg: var(--clarity-outline-bg-secondary);
+  --shadow: var(--clarity-outline-popup-shadow);
+}
+
+:root[data-theme="default"] {
+  /* Explicit alias for the default theme (useful for reset). */
+}
+
+:root[data-theme="alternative"] {
+  --clarity-outline-bg-primary: #111827;      /* slate-900 */
+  --clarity-outline-bg-secondary: #0f172a;    /* slate-950-ish */
+  --clarity-outline-bg-tertiary: #1f2937;     /* slate-800 */
+  --clarity-outline-text-primary: #e5e7eb;    /* slate-200 */
+  --clarity-outline-text-secondary: #93c5fd;  /* blue-300 */
+  --clarity-outline-text-muted: #9ca3af;      /* slate-400 */
+  --clarity-outline-border: #334155;          /* slate-700 */
+  --clarity-outline-border-focus: #60a5fa;    /* blue-400 */
+  --clarity-outline-hover: rgba(229, 231, 235, 0.06);
+  --clarity-outline-focus: rgba(229, 231, 235, 0.12);
+  --clarity-outline-focus-shadow: rgba(96, 165, 250, 0.25);
+  --clarity-outline-focus-highlight: rgba(96, 165, 250, 0.18);
+  --clarity-outline-input-bg: #0f172a;
+  --clarity-outline-input-border: #475569;
+  --clarity-outline-popup-bg: #0f172a;
+  --clarity-outline-popup-shadow: 0 10px 22px rgba(0, 0, 0, 0.55);
+
+  --clarity-outline-color-todo: #fb7185;      /* rose-400 */
+  --clarity-outline-color-done: #94a3b8;      /* slate-400 */
+  --clarity-outline-color-priority: #22d3ee;  /* cyan-400 */
+  --clarity-outline-color-on-hold: #fbbf24;   /* amber-400 */
+
+  --bg: var(--clarity-outline-bg-primary);
+  --fg: var(--clarity-outline-text-primary);
+  --muted: var(--clarity-outline-text-muted);
+  --border: var(--clarity-outline-border);
+  --card-bg: var(--clarity-outline-bg-secondary);
+  --shadow: var(--clarity-outline-popup-shadow);
+}

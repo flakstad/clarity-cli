@@ -5,8 +5,77 @@
     restoreTimer: null,
   };
 
+  const themeKey = 'clarity:theme';
+  const themeDefault = 'default';
+
+  const themeNormalize = (id) => {
+    id = (id || '').trim();
+    if (!id) return themeDefault;
+    if (id === 'default' || id === 'alternative') return id;
+    return themeDefault;
+  };
+
+  const themeCurrent = () => {
+    const id = (document.documentElement?.dataset?.theme || '').trim();
+    if (id) return themeNormalize(id);
+    let stored = '';
+    try {
+      stored = localStorage.getItem(themeKey) || '';
+    } catch (_) {}
+    return themeNormalize(stored);
+  };
+
+  const themeSyncUI = () => {
+    const sel = document.getElementById('theme-select');
+    if (!sel) return;
+    const cur = themeCurrent();
+    if (sel.value !== cur) sel.value = cur;
+  };
+
+  const themeApply = (id) => {
+    id = themeNormalize(id);
+    if (document.documentElement) document.documentElement.dataset.theme = id;
+    try {
+      localStorage.setItem(themeKey, id);
+    } catch (_) {}
+    themeSyncUI();
+  };
+
+  const initTheme = () => {
+    themeApply(themeCurrent());
+
+    document.addEventListener(
+      'change',
+      (ev) => {
+        const t = ev && ev.target;
+        if (!t || t.id !== 'theme-select') return;
+        themeApply(t.value);
+      },
+      { capture: true }
+    );
+
+    try {
+      const obs = new MutationObserver(() => themeSyncUI());
+      obs.observe(document.documentElement, { subtree: true, childList: true });
+    } catch (_) {}
+  };
+
   const outlinePendingByEl = new WeakMap();
   const outlineMoveBufferByEl = new WeakMap();
+
+  const viewPicker = {
+    open: false,
+    options: [],
+    idx: 0,
+    restoreEl: null,
+  };
+
+  const actionPalette = {
+    open: false,
+    options: [],
+    idx: 0,
+    restoreEl: null,
+  };
 
   const isTypingTarget = (el) => {
     if (!el) return false;
@@ -175,9 +244,96 @@
     let ul = li.querySelector(':scope > ul.outline-children');
     if (ul) return ul;
     ul = document.createElement('ul');
-    ul.className = 'outline-children';
+    ul.className = 'outline-children outline-list';
+    ul.setAttribute('data-preserve-attr', 'style');
     li.appendChild(ul);
     return ul;
+  };
+
+  const randomTempID = () => {
+    try {
+      if (crypto && typeof crypto.randomUUID === 'function') return 'tmp-' + crypto.randomUUID();
+    } catch (_) {}
+    return 'tmp-' + Math.random().toString(16).slice(2) + '-' + Date.now().toString(16);
+  };
+
+  const insertOptimisticNativeItem = ({ root, mode, refRow, tempId, title }) => {
+    if (!root) return null;
+    const statusOpts = parseStatusOptions(root);
+    const first = statusOpts && statusOpts.length ? statusOpts[0] : { id: 'todo', label: 'TODO', isEndState: false };
+
+    const li = document.createElement('li');
+    li.id = 'outline-node-' + tempId;
+    li.dataset.nodeId = tempId;
+
+    const row = document.createElement('div');
+    row.className = 'outline-row';
+    row.tabIndex = 0;
+    row.id = 'outline-row-' + tempId;
+    row.dataset.outlineRow = '';
+    row.dataset.kbItem = '';
+    row.dataset.focusId = tempId;
+    row.dataset.id = tempId;
+    row.dataset.status = (first.id || '').trim();
+    row.dataset.end = first.isEndState ? 'true' : 'false';
+    row.dataset.canEdit = 'true';
+    row.dataset.priority = 'false';
+    row.dataset.onHold = 'false';
+    row.dataset.dueDate = '';
+    row.dataset.dueTime = '';
+    row.dataset.schDate = '';
+    row.dataset.schTime = '';
+    row.dataset.openHref = '';
+    row.title = tempId;
+
+    const caret = document.createElement('span');
+    caret.className = 'outline-caret outline-chevron outline-caret--none';
+    caret.setAttribute('aria-hidden', 'true');
+    caret.textContent = '';
+
+    const badge = document.createElement('span');
+    badge.className = 'outline-status outline-label ' + (first.isEndState ? 'outline-status--end' : 'outline-status--open');
+    badge.textContent = (first.label || first.id || '(none)').trim();
+
+    const text = document.createElement('span');
+    text.className = 'outline-title outline-text';
+    text.textContent = title;
+
+    const right = document.createElement('span');
+    right.className = 'outline-right';
+
+    row.appendChild(caret);
+    row.appendChild(badge);
+    row.appendChild(text);
+    row.appendChild(right);
+    li.appendChild(row);
+
+    if (mode === 'child') {
+      const refLi = refRow ? nativeLiFromRow(refRow) : null;
+      if (!refLi) return null;
+      const ul = ensureChildList(refLi);
+      if (!ul) return null;
+
+      // If the parent is collapsed, expand so the new child is visible immediately.
+      const set = loadCollapsedSet(root);
+      const parentId = (refLi.dataset.nodeId || '').trim();
+      if (parentId && set.has(parentId)) {
+        set.delete(parentId);
+        saveCollapsedSet(root, set);
+        applyCollapsed(root, set);
+      }
+
+      ul.style.display = '';
+      ul.appendChild(li);
+    } else {
+      const refLi = refRow ? nativeLiFromRow(refRow) : null;
+      if (!refLi || !refLi.parentElement) return null;
+      refLi.parentElement.insertBefore(li, refLi.nextSibling);
+    }
+
+    row.focus();
+    rememberOutlineFocus(root, tempId);
+    return row;
   };
 
   const startInlineEdit = (row) => {
@@ -197,6 +353,7 @@
     const input = document.createElement('input');
     input.type = 'text';
     input.value = before;
+    input.className = 'outline-edit-input';
     input.setAttribute('aria-label', 'Edit title');
     titleSpan.textContent = '';
     titleSpan.appendChild(input);
@@ -548,6 +705,227 @@
     options: [],
     idx: 0,
     restoreFocusId: '',
+  };
+
+  const ensureViewModal = () => {
+    let el = document.getElementById('native-view-modal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'native-view-modal';
+    el.style.position = 'fixed';
+    el.style.left = '0';
+    el.style.top = '0';
+    el.style.right = '0';
+    el.style.bottom = '0';
+    el.style.background = 'rgba(0,0,0,.25)';
+    el.style.display = 'none';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+    el.style.zIndex = '9998';
+    el.innerHTML = `
+      <div style="max-width:520px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+          <strong>Views</strong>
+          <span class="dim" style="font-size:12px;">Esc to cancel</span>
+        </div>
+        <div id="native-view-list" style="margin-top:10px;max-height:46vh;overflow:auto;"></div>
+        <div class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Enter to select</div>
+      </div>
+    `;
+    document.body.appendChild(el);
+    el.addEventListener('click', (ev) => {
+      if (ev.target === el) closeViewPicker();
+    });
+    return el;
+  };
+
+  const viewOptions = () => {
+    const opts = [
+      { id: 'home', label: 'Home', href: '/' },
+      { id: 'projects', label: 'Projects', href: '/projects' },
+      { id: 'agenda', label: 'Agenda', href: '/agenda' },
+      { id: 'sync', label: 'Sync', href: '/sync' },
+    ];
+    return opts;
+  };
+
+  const renderViewPicker = () => {
+    const modal = ensureViewModal();
+    const list = modal.querySelector('#native-view-list');
+    if (!list) return;
+    const opts = viewPicker.options || [];
+    list.innerHTML = '';
+    const ul = document.createElement('ul');
+    ul.style.listStyle = 'none';
+    ul.style.padding = '0';
+    ul.style.margin = '0';
+    opts.forEach((o, i) => {
+      const li = document.createElement('li');
+      li.style.padding = '6px 8px';
+      li.style.borderRadius = '8px';
+      li.style.cursor = 'pointer';
+      if (i === viewPicker.idx) {
+        li.style.background = 'color-mix(in oklab, Canvas, CanvasText 10%)';
+      }
+      li.textContent = (o && o.label) ? String(o.label) : '';
+      li.addEventListener('click', () => {
+        viewPicker.idx = i;
+        pickSelectedView();
+      });
+      ul.appendChild(li);
+    });
+    list.appendChild(ul);
+  };
+
+  const closeViewPicker = () => {
+    viewPicker.open = false;
+    viewPicker.options = [];
+    viewPicker.idx = 0;
+    const restore = viewPicker.restoreEl;
+    viewPicker.restoreEl = null;
+    const modal = document.getElementById('native-view-modal');
+    if (modal) modal.style.display = 'none';
+    setTimeout(() => {
+      try {
+        if (restore && typeof restore.focus === 'function') restore.focus();
+      } catch (_) {}
+    }, 0);
+  };
+
+  const pickSelectedView = () => {
+    if (!viewPicker.open) return;
+    const sel = (viewPicker.options || [])[viewPicker.idx];
+    if (!sel || !sel.href) return;
+    const href = String(sel.href || '');
+    closeViewPicker();
+    if (href) window.location.href = href;
+  };
+
+  const openViewPicker = () => {
+    if (viewPicker.open) return;
+    viewPicker.open = true;
+    viewPicker.options = viewOptions();
+    viewPicker.restoreEl = document.activeElement;
+    const path = (window.location && window.location.pathname) ? window.location.pathname : '';
+    let idx = 0;
+    if (path.startsWith('/projects')) idx = viewPicker.options.findIndex((o) => o.id === 'projects');
+    else if (path.startsWith('/agenda')) idx = viewPicker.options.findIndex((o) => o.id === 'agenda');
+    else if (path.startsWith('/sync')) idx = viewPicker.options.findIndex((o) => o.id === 'sync');
+    else idx = viewPicker.options.findIndex((o) => o.id === 'home');
+    if (idx < 0) idx = 0;
+    viewPicker.idx = idx;
+    const modal = ensureViewModal();
+    modal.style.display = 'flex';
+    renderViewPicker();
+  };
+
+  const ensureActionModal = () => {
+    let el = document.getElementById('native-action-modal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'native-action-modal';
+    el.style.position = 'fixed';
+    el.style.left = '0';
+    el.style.top = '0';
+    el.style.right = '0';
+    el.style.bottom = '0';
+    el.style.background = 'rgba(0,0,0,.25)';
+    el.style.display = 'none';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+    el.style.zIndex = '9998';
+    el.innerHTML = `
+      <div style="max-width:620px;width:92vw;background:Canvas;color:CanvasText;border:1px solid rgba(127,127,127,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
+          <strong>Actions</strong>
+          <span class="dim" style="font-size:12px;">Esc to cancel</span>
+        </div>
+        <div id="native-action-list" style="margin-top:10px;max-height:46vh;overflow:auto;"></div>
+        <div class="dim" style="margin-top:10px;font-size:12px;">Up/Down or Ctrl+P/N to move · Enter to run</div>
+      </div>
+    `;
+    document.body.appendChild(el);
+    el.addEventListener('click', (ev) => {
+      if (ev.target === el) closeActionPalette();
+    });
+    return el;
+  };
+
+  const renderActionPalette = () => {
+    const modal = ensureActionModal();
+    const list = modal.querySelector('#native-action-list');
+    if (!list) return;
+    const opts = actionPalette.options || [];
+    list.innerHTML = '';
+    const ul = document.createElement('ul');
+    ul.style.listStyle = 'none';
+    ul.style.padding = '0';
+    ul.style.margin = '0';
+    opts.forEach((o, i) => {
+      const li = document.createElement('li');
+      li.style.padding = '6px 8px';
+      li.style.borderRadius = '8px';
+      li.style.cursor = 'pointer';
+      if (i === actionPalette.idx) {
+        li.style.background = 'color-mix(in oklab, Canvas, CanvasText 10%)';
+      }
+      const label = (o && o.label) ? String(o.label) : '';
+      li.textContent = label;
+      li.addEventListener('click', () => {
+        actionPalette.idx = i;
+        runSelectedAction();
+      });
+      ul.appendChild(li);
+    });
+    list.appendChild(ul);
+  };
+
+  const closeActionPalette = () => {
+    actionPalette.open = false;
+    actionPalette.options = [];
+    actionPalette.idx = 0;
+    const restore = actionPalette.restoreEl;
+    actionPalette.restoreEl = null;
+    const modal = document.getElementById('native-action-modal');
+    if (modal) modal.style.display = 'none';
+    setTimeout(() => {
+      try {
+        if (restore && typeof restore.focus === 'function') restore.focus();
+      } catch (_) {}
+    }, 0);
+  };
+
+  const actionsForContext = () => {
+    const opts = [];
+    opts.push({ label: 'Views… (v)', run: () => openViewPicker() });
+    opts.push({ label: 'Toggle theme', run: () => themeApply(themeCurrent() === 'default' ? 'alternative' : 'default') });
+    opts.push({ label: 'Help (?)', run: () => toggleHelp() });
+    opts.push({ label: 'Go: Home', run: () => { window.location.href = '/'; } });
+    opts.push({ label: 'Go: Projects', run: () => { window.location.href = '/projects'; } });
+    opts.push({ label: 'Go: Agenda', run: () => { window.location.href = '/agenda'; } });
+    opts.push({ label: 'Go: Sync', run: () => { window.location.href = '/sync'; } });
+    return opts;
+  };
+
+  const runSelectedAction = () => {
+    if (!actionPalette.open) return;
+    const sel = (actionPalette.options || [])[actionPalette.idx];
+    if (!sel || typeof sel.run !== 'function') return;
+    closeActionPalette();
+    try {
+      sel.run();
+    } catch (_) {}
+  };
+
+  const openActionPalette = () => {
+    if (actionPalette.open) return;
+    actionPalette.open = true;
+    actionPalette.options = actionsForContext();
+    actionPalette.restoreEl = document.activeElement;
+    actionPalette.idx = 0;
+    const modal = ensureActionModal();
+    modal.style.display = 'flex';
+    renderActionPalette();
   };
 
   const ensureMoveOutlineModal = () => {
@@ -1205,6 +1583,7 @@
     rowId: '',
     outlineId: '',
     submit: null,
+    restoreFocusId: '',
   };
 
   const ensurePromptModal = () => {
@@ -1246,26 +1625,30 @@
     return el;
   };
 
-  const openPrompt = ({ title, hint, bodyHTML, onSubmit, focusSelector }) => {
+  const openPrompt = ({ title, hint, bodyHTML, onSubmit, focusSelector, restoreFocusId }) => {
     const modal = ensurePromptModal();
     modal.querySelector('#native-prompt-title').textContent = title || '';
     modal.querySelector('#native-prompt-hint').textContent = hint || 'Esc to close · Ctrl+Enter to save';
     modal.querySelector('#native-prompt-body').innerHTML = bodyHTML || '';
     prompt.open = true;
     prompt.submit = onSubmit || null;
+    prompt.restoreFocusId = (restoreFocusId || '').trim();
     modal.style.display = 'flex';
     const focus = focusSelector ? modal.querySelector(focusSelector) : null;
     focus && focus.focus();
   };
 
   const closePrompt = () => {
+    const restoreId = (prompt.restoreFocusId || '').trim();
     prompt.open = false;
     prompt.kind = '';
     prompt.rowId = '';
     prompt.outlineId = '';
     prompt.submit = null;
+    prompt.restoreFocusId = '';
     const modal = document.getElementById('native-prompt-modal');
     if (modal) modal.style.display = 'none';
+    restoreNativeFocusAfterModal(restoreId);
   };
 
   const submitPrompt = () => {
@@ -1589,16 +1972,51 @@
       hint: 'Esc to close · Enter to create',
       bodyHTML: `<input id="native-prompt-input" placeholder="Title" style="width:100%;">`,
       focusSelector: '#native-prompt-input',
+      restoreFocusId: refId,
       onSubmit: () => {
         const modal = document.getElementById('native-prompt-modal');
         const input = modal ? modal.querySelector('#native-prompt-input') : null;
         const title = input ? (input.value || '').trim() : '';
         if (!title) return;
         closePrompt();
+        const tempId = randomTempID();
+        const optimisticRow = insertOptimisticNativeItem({ root, mode, refRow: row, tempId, title });
         const typ = mode === 'child' ? 'outline:new_child' : 'outline:new_sibling';
-        const detail = mode === 'child' ? { title, parentId: refId } : { title, afterId: refId };
-        outlineApply(root, typ, detail).catch((err) => {
-          setOutlineStatus('Error: ' + (err && err.message ? err.message : 'save failed'));
+        const detail = mode === 'child' ? { title, parentId: refId, tempId } : { title, afterId: refId, tempId };
+        outlineApply(root, typ, detail).then((resp) => {
+          const created = resp && Array.isArray(resp.created) ? resp.created : [];
+          const match = created.find((c) => c && String(c.tempId || '').trim() === tempId) || null;
+          const realId = match && match.id ? String(match.id).trim() : '';
+          if (!realId) return;
+          const root2 = nativeOutlineRoot() || root;
+          const row2 = root2 ? root2.querySelector('[data-outline-row][data-id="' + CSS.escape(tempId) + '"]') : null;
+          const li = row2 ? nativeLiFromRow(row2) : null;
+          if (li) {
+            li.dataset.nodeId = realId;
+            li.id = 'outline-node-' + realId;
+          }
+          if (row2) {
+            row2.dataset.id = realId;
+            row2.dataset.focusId = realId;
+            row2.dataset.openHref = '/items/' + realId;
+            row2.id = 'outline-row-' + realId;
+            row2.title = realId;
+            try { sessionStorage.setItem('clarity:lastFocus', realId); } catch (_) {}
+            row2.focus();
+          } else if (optimisticRow) {
+            // Fallback: keep focus stable.
+            try { sessionStorage.setItem('clarity:lastFocus', realId); } catch (_) {}
+          }
+        }).catch((err) => {
+          const msg = err && err.message ? err.message : 'save failed';
+          setOutlineStatus('Error: ' + msg);
+          setTimeout(() => setOutlineStatus(''), 2000);
+          // Remove optimistic placeholder if it still exists.
+          const root2 = nativeOutlineRoot() || root;
+          const row2 = root2 ? root2.querySelector('[data-outline-row][data-id="' + CSS.escape(tempId) + '"]') : null;
+          const li = row2 ? nativeLiFromRow(row2) : null;
+          li && li.remove();
+          refId && focusNativeRowById(refId);
         });
       },
     });
@@ -1627,6 +2045,7 @@
       hint: 'Esc to close · Ctrl+Enter to save',
       bodyHTML: `<textarea id="native-prompt-textarea" rows="10" style="width:100%;font-family:var(--mono);">${escapeHTML(initial)}</textarea>`,
       focusSelector: '#native-prompt-textarea',
+      restoreFocusId: id,
       onSubmit: () => {
         const modal = document.getElementById('native-prompt-modal');
         const ta = modal ? modal.querySelector('#native-prompt-textarea') : null;
@@ -1663,6 +2082,7 @@
       hint: 'Esc to close · Ctrl+Enter to save',
       bodyHTML: `<input id="native-prompt-tags" placeholder="#tag1 #tag2" style="width:100%;" value="${escapeAttr(initial)}">`,
       focusSelector: '#native-prompt-tags',
+      restoreFocusId: id,
       onSubmit: () => {
         const modal = document.getElementById('native-prompt-modal');
         const input = modal ? modal.querySelector('#native-prompt-tags') : null;
@@ -1702,6 +2122,7 @@
         </div>
       `,
       focusSelector: '#native-prompt-date',
+      restoreFocusId: id,
       onSubmit: () => {
         const modal = document.getElementById('native-prompt-modal');
         const di = modal ? modal.querySelector('#native-prompt-date') : null;
@@ -1737,6 +2158,7 @@
       hint: 'Esc to close · Ctrl+Enter to post',
       bodyHTML: `<textarea id="native-prompt-textarea" rows="8" style="width:100%;font-family:var(--mono);" placeholder="${kind === 'comment' ? 'Write a comment…' : 'Log work…'}"></textarea>`,
       focusSelector: '#native-prompt-textarea',
+      restoreFocusId: id,
       onSubmit: () => {
         const modal = document.getElementById('native-prompt-modal');
         const ta = modal ? modal.querySelector('#native-prompt-textarea') : null;
@@ -1770,6 +2192,7 @@
       hint: 'Esc to cancel · Enter to archive',
       bodyHTML: `<div>Archive <code>${escapeHTML(id)}</code>?</div>`,
       focusSelector: '#native-prompt-save',
+      restoreFocusId: id,
       onSubmit: () => {
         closePrompt();
         outlineApply(root, 'outline:archive', { id }).then(() => {
@@ -2023,9 +2446,15 @@
         const txt = await res.text();
         throw new Error(txt || ('HTTP ' + res.status));
       }
-      // Do not update the component directly here. When using Datastar, the outline page is
-      // kept in sync by signals pushed over SSE, which then drive `data-attr:*` bindings.
-      // This avoids fighting Datastar and keeps component state stable.
+      const ct = (res.headers.get('Content-Type') || '').toLowerCase();
+      if (ct.includes('application/json')) {
+        try {
+          return await res.json();
+        } catch (_) {
+          return null;
+        }
+      }
+      return null;
     });
 
     outlinePendingByEl.set(outlineEl, pending);
@@ -2811,11 +3240,73 @@
     return false;
   };
 
+  const handleViewPickerKeydown = (ev) => {
+    if (!viewPicker.open) return false;
+    const key = (ev.key || '').toLowerCase();
+    if (key === 'escape') {
+      ev.preventDefault();
+      closeViewPicker();
+      return true;
+    }
+    if (key === 'enter') {
+      ev.preventDefault();
+      pickSelectedView();
+      return true;
+    }
+    if (key === 'arrowdown' || key === 'down' || key === 'j' || (ev.ctrlKey && key === 'n')) {
+      ev.preventDefault();
+      const n = viewPicker.options.length || 0;
+      if (n > 0) viewPicker.idx = (viewPicker.idx + 1) % n;
+      renderViewPicker();
+      return true;
+    }
+    if (key === 'arrowup' || key === 'up' || key === 'k' || (ev.ctrlKey && key === 'p')) {
+      ev.preventDefault();
+      const n = viewPicker.options.length || 0;
+      if (n > 0) viewPicker.idx = (viewPicker.idx - 1 + n) % n;
+      renderViewPicker();
+      return true;
+    }
+    return true;
+  };
+
+  const handleActionPaletteKeydown = (ev) => {
+    if (!actionPalette.open) return false;
+    const key = (ev.key || '').toLowerCase();
+    if (key === 'escape') {
+      ev.preventDefault();
+      closeActionPalette();
+      return true;
+    }
+    if (key === 'enter') {
+      ev.preventDefault();
+      runSelectedAction();
+      return true;
+    }
+    if (key === 'arrowdown' || key === 'down' || key === 'j' || (ev.ctrlKey && key === 'n')) {
+      ev.preventDefault();
+      const n = actionPalette.options.length || 0;
+      if (n > 0) actionPalette.idx = (actionPalette.idx + 1) % n;
+      renderActionPalette();
+      return true;
+    }
+    if (key === 'arrowup' || key === 'up' || key === 'k' || (ev.ctrlKey && key === 'p')) {
+      ev.preventDefault();
+      const n = actionPalette.options.length || 0;
+      if (n > 0) actionPalette.idx = (actionPalette.idx - 1 + n) % n;
+      renderActionPalette();
+      return true;
+    }
+    return true;
+  };
+
   const handleKeydown = (ev) => {
     if (ev.defaultPrevented) return;
     if (ev.metaKey) return;
     if (handleTagsPickerKeydown(ev)) return;
     if (handleMoveOutlinePickerKeydown(ev)) return;
+    if (handleActionPaletteKeydown(ev)) return;
+    if (handleViewPickerKeydown(ev)) return;
     if (handlePromptKeydown(ev)) return;
     if (handleAssigneePickerKeydown(ev)) return;
     if (handleStatusPickerKeydown(ev)) return;
@@ -2828,6 +3319,18 @@
     if (key === '?') {
       ev.preventDefault();
       toggleHelp();
+      return;
+    }
+
+    if (key === 'x') {
+      ev.preventDefault();
+      openActionPalette();
+      return;
+    }
+
+    if (key === 'v') {
+      ev.preventDefault();
+      openViewPicker();
       return;
     }
 
@@ -2861,5 +3364,6 @@
     handleGlobalListKeydown(ev, key);
   };
 
+  initTheme();
   document.addEventListener('keydown', handleKeydown, { capture: true });
 })();

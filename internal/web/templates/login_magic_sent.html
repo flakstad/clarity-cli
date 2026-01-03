@@ -5,30 +5,26 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Clarity Web – Login link sent</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin: 24px; max-width: 980px; }
-    h1 { margin: 0 0 8px; }
-    .meta { opacity: 0.75; font-size: 14px; margin: 0 0 16px; }
-    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
-    code { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 0.95em; }
-    a { color: inherit; }
-    .dim { opacity: 0.75; }
-  </style>
+  <link rel="stylesheet" href="/static/themes.css">
+  <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <h1>Login link sent</h1>
-  <p class="meta"><a href="/">Home</a> · now={{.Now}} {{if .Workspace}} · workspace={{.Workspace}}{{end}}</p>
+  {{template "web_header" .}}
+  <main id="clarity-main">
+    <h1>Login link sent</h1>
+    <p class="meta">now={{.Now}}{{if .Workspace}} · workspace={{.Workspace}}{{end}}</p>
 
-  <div class="card">
-    <div>Sent to: <code>{{.Email}}</code></div>
-    <div class="dim">V1 delivery writes to the local outbox directory: <code>.clarity/web/outbox/</code></div>
-  </div>
+    <div class="card">
+      <div>Sent to: <code>{{.Email}}</code></div>
+      <div class="dim">V1 delivery writes to the local outbox directory: <code>.clarity/web/outbox/</code></div>
+    </div>
 
-  <div class="card">
-    <div><strong>Dev convenience</strong>: click the link here:</div>
-    <div style="margin-top: 8px;"><a href="{{.Link}}"><code>{{.Link}}</code></a></div>
-  </div>
+    <div class="card">
+      <div><strong>Dev convenience</strong>: click the link here:</div>
+      <div style="margin-top: 8px;"><a href="{{.Link}}"><code>{{.Link}}</code></a></div>
+    </div>
+  </main>
+  {{template "web_scripts" .}}
 </body>
 </html>
 {{end}}

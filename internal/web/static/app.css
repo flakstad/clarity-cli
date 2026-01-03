@@ -1,26 +1,12 @@
-:root {
-  color-scheme: light dark;
-
-  --bg: Canvas;
-  --fg: CanvasText;
-  --muted: color-mix(in oklab, var(--fg), transparent 30%);
-  --border: color-mix(in oklab, var(--fg), transparent 75%);
-  --card-bg: color-mix(in oklab, var(--bg), var(--fg) 3%);
-  --shadow: 0 6px 18px color-mix(in oklab, #000, transparent 85%);
-
-  --radius: 10px;
-  --pad: 16px;
-  --gap: 12px;
-  --maxw: 980px;
-
-  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-}
+/* Base app + component styles.
+ * Theme variables live in `themes.css` and are switched by `data-theme` on `:root`.
+ */
 
 body {
-  margin: 24px;
-  max-width: var(--maxw);
-  font-family: var(--sans);
+  margin: 0;
+  padding: 20px;
+  max-width: none;
+  font-family: var(--mono);
   color: var(--fg);
   background: var(--bg);
 }
@@ -31,8 +17,8 @@ body {
   align-items: center;
   justify-content: space-between;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card-bg);
+  border-radius: 0;
+  background: var(--clarity-outline-bg-secondary);
   padding: 10px 12px;
   margin: 0 0 16px;
 }
@@ -44,6 +30,16 @@ body {
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.topbar-theme {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.topbar-theme select {
+  padding: 4px 8px;
 }
 
 .topbar-brand {
@@ -93,8 +89,8 @@ pre {
 
 .card {
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card-bg);
+  border-radius: 0;
+  background: var(--clarity-outline-bg-secondary);
   padding: 14px var(--pad);
   margin: var(--gap) 0;
   box-shadow: none;
@@ -105,6 +101,14 @@ pre {
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--card-bg);
+  margin: 12px 0;
+}
+
+.err {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid color-mix(in oklab, #d16d7a, var(--border) 35%);
+  background: color-mix(in oklab, #d16d7a, var(--bg) 88%);
   margin: 12px 0;
 }
 
@@ -140,87 +144,113 @@ input, select, textarea {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px 10px;
-  background: color-mix(in oklab, var(--bg), var(--fg) 2%);
-  color: var(--fg);
+  background: var(--clarity-outline-input-bg);
+  color: var(--clarity-outline-text-primary);
 }
 
 button {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px 12px;
-  background: color-mix(in oklab, var(--bg), var(--fg) 6%);
-  color: var(--fg);
+  background: var(--clarity-outline-bg-tertiary);
+  color: var(--clarity-outline-text-primary);
   cursor: pointer;
 }
 
 button:hover {
-  background: color-mix(in oklab, var(--bg), var(--fg) 10%);
+  background: var(--clarity-outline-hover);
 }
 
 ul {
   margin: 8px 0 0 18px;
 }
 
-.outline-tree,
-.outline-children {
+.outline-list {
   list-style: none;
-  margin: 8px 0 0 0;
-  padding-left: 18px;
+  padding-left: 0;
+  margin: 0;
+  font-family: inherit;
+  font-size: inherit;
+  max-width: 100%;
+  overflow: visible;
 }
 
-.outline-tree {
-  padding-left: 0;
+.outline-list ul {
+  margin: 0;
+  padding-left: 0.75rem;
+  border-left: 1px dotted var(--border);
+  list-style: none;
+  width: 100%;
 }
 
 .outline-row {
   display: flex;
-  gap: 10px;
-  align-items: baseline;
-  padding: 6px 8px;
-  border-radius: 8px;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: center;
+  cursor: pointer;
+  line-height: 1.5;
+  padding: 0.3rem 0.5rem;
+  border-radius: 0;
   outline: none;
 }
 
+.outline-row:hover {
+  background: var(--clarity-outline-hover);
+}
+
 .outline-caret {
-  width: 14px;
-  display: inline-block;
-  font-family: var(--mono);
-  opacity: 0.75;
+  cursor: pointer;
   user-select: none;
+  margin-left: 0.3rem;
+  margin-right: 0.3rem;
+  color: var(--clarity-outline-text-primary);
+  font-size: 0.8em;
+  display: inline-block;
+  width: 1em;
+  text-align: center;
+  transition: transform 0.15s ease;
+  padding: 0.2em 0.4em;
 }
 
 .outline-caret--none {
-  opacity: 0.2;
+  opacity: 0.35;
 }
 
 .outline-row:focus {
-  background: color-mix(in oklab, var(--bg), var(--fg) 8%);
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--fg), transparent 70%);
+  background: var(--clarity-outline-focus);
+  box-shadow: none;
 }
 
 .outline-row--readonly {
   opacity: 0.8;
 }
 
+.outline-row[data-end="true"] .outline-status {
+  color: var(--clarity-outline-color-done);
+}
+
+.outline-row[data-end="true"] .outline-title {
+  color: var(--clarity-outline-color-done);
+  text-decoration: line-through;
+}
+
 .outline-status {
-  font-family: var(--mono);
-  font-size: 12px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  opacity: 0.9;
+  font-weight: bold;
+  color: var(--clarity-outline-color-todo);
+  user-select: none;
+  margin-right: 0.3rem;
   white-space: nowrap;
-  min-width: 8ch;
-  text-align: center;
 }
 
 .outline-status--end {
-  background: color-mix(in oklab, var(--bg), #2a7 18%);
+  color: var(--clarity-outline-color-done);
 }
 
 .outline-title {
   min-width: 0;
   flex: 1;
+  display: inline-block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -228,47 +258,54 @@ ul {
 
 .outline-right {
   display: flex;
-  gap: 10px;
-  align-items: baseline;
+  gap: 0.5rem;
+  align-items: center;
   white-space: nowrap;
 }
 
-.outline-title input {
+.outline-edit-input {
+  flex: 1;
   width: 100%;
+  max-width: 100%;
+  background: var(--clarity-outline-input-bg);
+  border: 1px solid var(--clarity-outline-input-border);
+  color: var(--clarity-outline-text-primary);
+  font-family: inherit;
+  font-size: inherit;
+  padding: 0.2rem 0.4rem;
+  border-radius: 2px;
+  outline: none;
+  min-width: 0;
 }
 
 .outline-assignee {
-  font-family: var(--mono);
-  font-size: 12px;
+  font-size: 0.85em;
+  color: var(--clarity-outline-text-secondary);
   white-space: nowrap;
 }
 
 .outline-flag {
-  font-family: var(--mono);
-  font-size: 12px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
+  font-size: 0.85em;
   white-space: nowrap;
 }
 
 .outline-flag--priority {
-  background: color-mix(in oklab, var(--bg), #e33 16%);
+  color: var(--clarity-outline-color-priority);
 }
 
 .outline-flag--hold {
-  background: color-mix(in oklab, var(--bg), #fa3 18%);
+  color: var(--clarity-outline-color-on-hold);
 }
 
 .outline-meta,
 .outline-tags {
-  font-family: var(--mono);
-  font-size: 12px;
+  font-size: 0.85em;
+  color: var(--clarity-outline-text-secondary);
   white-space: nowrap;
 }
 
 .outline-children {
-  border-left: 1px solid color-mix(in oklab, var(--fg), transparent 88%);
-  margin-left: 8px;
-  padding-left: 12px;
+  border-left: 1px dotted var(--border);
+  margin-left: 0;
+  padding-left: 0.75rem;
 }

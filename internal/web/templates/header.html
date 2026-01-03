@@ -19,6 +19,13 @@
   </nav>
 
   <div class="topbar-right">
+    <label class="topbar-theme">
+      <span class="dim">Theme</span>
+      <select id="theme-select" aria-label="Theme">
+        <option value="default">default</option>
+        <option value="alternative">alternative</option>
+      </select>
+    </label>
     <span class="dim"><code>?</code> help</span>
     {{if or (eq .AuthMode "dev") (eq .AuthMode "magic")}}
       {{if .ActorID}}
