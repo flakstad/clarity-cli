@@ -72,3 +72,58 @@ Implemented:
 - `Alt+H/L` indent/outdent (macOS option key parity)
 
 Known gaps are tracked in the Phase 7 epic items (web parity).
+
+## Action panel entries (context menus)
+
+The goal is: the web action panel should expose the same actions as the TUI for the current view/context, even if the view also has direct keyboard shortcuts.
+
+### Outline view action panel (`/outlines/:id`)
+
+| Key | TUI label | Web label | Status |
+|---|---|---|---|
+| `enter` | Open item | Open item | ✅ |
+| `v` | Cycle view mode | Cycle view mode | ✅ |
+| `O` | Outline… | Outline… | ✅ |
+| `S` | Edit outline statuses… | Edit outline statuses… | ✅ |
+| `z/Z` | Collapse | Toggle collapse / Collapse/expand all | ✅ |
+| `y/Y` | Copy ref / show cmd | Copy item ref / Copy show command | ✅ |
+| `C/w` | Add comment / worklog | Add comment / Add worklog | ✅ |
+| `p/o` | Priority / on hold | Toggle priority / Toggle on hold | ✅ |
+| `u` | Assign… | Assign… | ✅ |
+| `t` | Tags… | Tags… | ✅ |
+| `d/s` | Due / schedule | Set due / Set schedule | ✅ |
+| `D` | Edit description | Edit description | ✅ |
+| `r` | Archive item | Archive item | ✅ |
+| `m` | Move to outline… | Move to outline… | ✅ |
+
+### Item view action panel (`/items/:id`)
+
+| Key | TUI label | Web label | Status |
+|---|---|---|---|
+| `e` | Edit title | Edit title | ✅ |
+| `D` | Edit description | Edit description | ✅ |
+| `p/o` | Priority / on hold | Toggle priority / Toggle on hold | ✅ |
+| `u` | Assign… | Assign… | ✅ |
+| `t` | Tags… | Tags… | ✅ |
+| `d/s` | Due / schedule | Set due / Set schedule | ✅ |
+| `Space` | Change status | Change status | ✅ |
+| `C/w` | Add comment / worklog | Add comment / Add worklog | ✅ |
+| `y/Y` | Copy ref / show cmd | Copy item ref / Copy show command | ✅ |
+| `m` | Move to outline… | Move to outline… | ✅ |
+| `r` | Archive item | Archive item | ✅ |
+
+## Agenda commands panel
+
+The web currently exposes only a minimal subset of the TUI’s “Agenda Commands…”.
+
+| Key | TUI entry | Web entry | Status |
+|---|---|---|---|
+| `t` | List all TODO entries | List all TODO entries | ✅ |
+
+## Dialog parity
+
+| Behavior | TUI | Web | Status |
+|---|---|---|---|
+| Consistent buttons/labels | same across dialogs | varies | ⚠️ |
+| Consistent keys | Esc/ctrl+g cancel; ctrl+enter save | varies | ⚠️ |
+| Restore focus after close | always restore selection | some dialogs still lose focus | ⚠️ |

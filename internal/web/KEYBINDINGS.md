@@ -51,6 +51,14 @@ All key handling is routed through a single `document.addEventListener('keydown'
 - `v` cycle view mode: `list` → `list+preview` → `columns`
 - `h/l` or `←/→` or `Ctrl+B/F` navigate parent/child
 
+## Item view
+
+- `e` edit title, `D` edit description
+- `Space` change status, `a` assign, `t` tags
+- `d/s` due/schedule, `p/o` priority/on-hold
+- `C` comment, `w` worklog, `m` move outline, `r` archive
+- `y/Y` copy ref / copy show command
+
 ## Outline statuses (web)
 
 - Open from action panel: `x` then `S` (or `x` then `S` from outlines list)

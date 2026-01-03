@@ -109,6 +109,13 @@
     return out;
   };
 
+  const workspaceFlag = () => {
+    const el = document.getElementById('workspace-name');
+    const w = String(el?.dataset?.workspace || '').trim();
+    if (!w) return '';
+    return ' --workspace "' + w.replaceAll('"', '\\"') + '"';
+  };
+
   const eventTouchesOutlineComponent = (ev) => {
     if (!ev || typeof ev.composedPath !== 'function') return false;
     const path = ev.composedPath();
@@ -620,6 +627,12 @@
       if (ar) {
         const row = document.querySelector('[data-agenda-row][data-id="' + CSS.escape(focusId) + '"]');
         row?.focus?.();
+        return;
+      }
+      const ir = itemPageRoot();
+      if (ir && String(ir.dataset.itemId || '').trim() === focusId) {
+        const row = document.querySelector('[data-item-page]')?.querySelector?.('[data-outline-row]');
+        row?.focus?.();
       }
     }, 0);
   };
@@ -1116,9 +1129,103 @@
 
     const outlineRoot = nativeOutlineRoot();
     if (outlineRoot) {
+      const focusedRow = () => {
+        const a = document.activeElement;
+        const row = a && typeof a.closest === 'function' ? a.closest('[data-outline-row]') : null;
+        if (row) return row;
+        const rows = nativeRows();
+        return rows.length ? rows[0] : null;
+      };
+      const withRow = (fn) => () => {
+        const row = focusedRow();
+        if (!row) return;
+        fn(row);
+      };
+
+      // Mirror TUI outline-view action panel entries (even if there are direct keys).
+      opts.push({ key: 'enter', label: 'Open item', kind: 'exec', run: withRow((row) => { const href = (row.dataset.openHref || '').trim(); if (href) window.location.href = href; }) });
       opts.push({ key: 'v', label: 'Cycle view mode', kind: 'exec', run: () => cycleOutlineViewMode(outlineRoot) });
       opts.push({ key: 'O', label: 'Outline…', kind: 'nav', next: 'outline' });
       opts.push({ key: 'S', label: 'Edit outline statuses…', kind: 'exec', run: () => openOutlineStatusesEditor({ preferCurrentOutline: true }) });
+
+      // Item mutations (TUI parity; discoverable from action panel).
+      opts.push({ key: 'e', label: 'Edit title', kind: 'exec', run: withRow((row) => startInlineEdit(row)) });
+      opts.push({ key: 'n', label: 'New sibling', kind: 'exec', run: withRow((row) => openNewItemPrompt('sibling', row)) });
+      opts.push({ key: 'N', label: 'New child', kind: 'exec', run: withRow((row) => openNewItemPrompt('child', row)) });
+      opts.push({ key: ' ', label: 'Change status', kind: 'exec', run: withRow((row) => openStatusPicker(row)) });
+      opts.push({ key: 'm', label: 'Move to outline…', kind: 'exec', run: withRow((row) => openMoveOutlinePicker(row)) });
+
+      opts.push({ key: 'z', label: 'Toggle collapse', kind: 'exec', run: withRow((row) => toggleCollapseRow(row)) });
+      opts.push({ key: 'Z', label: 'Collapse/expand all', kind: 'exec', run: () => toggleCollapseAll(outlineRoot) });
+
+      opts.push({ key: 'y', label: 'Copy item ref (includes --workspace)', kind: 'exec', run: withRow((row) => {
+        const id = String(row.dataset.id || '').trim();
+        if (!id) return;
+        copyTextToClipboard(id + workspaceFlag()).then(() => {
+          setOutlineStatus('Copied item ref');
+          setTimeout(() => setOutlineStatus(''), 1200);
+        }).catch((err) => setOutlineStatus('Error: ' + (err && err.message ? err.message : 'copy failed')));
+      }) });
+      opts.push({ key: 'Y', label: 'Copy CLI show command (includes --workspace)', kind: 'exec', run: withRow((row) => {
+        const id = String(row.dataset.id || '').trim();
+        if (!id) return;
+        copyTextToClipboard('clarity items show ' + id + workspaceFlag()).then(() => {
+          setOutlineStatus('Copied command');
+          setTimeout(() => setOutlineStatus(''), 1200);
+        }).catch((err) => setOutlineStatus('Error: ' + (err && err.message ? err.message : 'copy failed')));
+      }) });
+
+      opts.push({ key: 'C', label: 'Add comment', kind: 'exec', run: withRow((row) => openTextPostPrompt(row, 'comment')) });
+      opts.push({ key: 'w', label: 'Add worklog', kind: 'exec', run: withRow((row) => openTextPostPrompt(row, 'worklog')) });
+      opts.push({ key: 'p', label: 'Toggle priority', kind: 'exec', run: withRow((row) => {
+        // Reuse the same codepath as the direct keybinding (optimistic + async persist).
+        const e = new KeyboardEvent('keydown', { key: 'p' });
+        // If the direct handler changes behavior, keep action panel consistent by reusing it.
+        handleNativeOutlineKeydown(e, 'p', row);
+      }) });
+      opts.push({ key: 'o', label: 'Toggle on hold', kind: 'exec', run: withRow((row) => {
+        const e = new KeyboardEvent('keydown', { key: 'o' });
+        handleNativeOutlineKeydown(e, 'o', row);
+      }) });
+      // In action panel, use `u` like the TUI (avoid shadowing global `a: agenda`).
+      opts.push({ key: 'u', label: 'Assign…', kind: 'exec', run: withRow((row) => openAssigneePicker(row)) });
+      opts.push({ key: 't', label: 'Tags…', kind: 'exec', run: withRow((row) => openTagsPicker(row)) });
+      opts.push({ key: 'd', label: 'Set due', kind: 'exec', run: withRow((row) => openDatePrompt(row, 'due')) });
+      opts.push({ key: 's', label: 'Set schedule', kind: 'exec', run: withRow((row) => openDatePrompt(row, 'schedule')) });
+      opts.push({ key: 'D', label: 'Edit description', kind: 'exec', run: withRow((row) => openEditDescriptionPrompt(row)) });
+      opts.push({ key: 'r', label: 'Archive item', kind: 'exec', run: withRow((row) => openArchivePrompt(row)) });
+    }
+
+    const itemRoot = itemPageRoot();
+    if (itemRoot) {
+      const itemId = String(itemRoot.dataset.itemId || '').trim();
+      if (itemId) {
+        opts.push({ key: 'e', label: 'Edit title', kind: 'exec', run: () => openItemTitlePrompt(itemRoot) });
+        opts.push({ key: 'D', label: 'Edit description', kind: 'exec', run: () => openItemDescriptionPrompt(itemRoot) });
+        opts.push({ key: 'p', label: 'Toggle priority', kind: 'exec', run: () => handleItemPageKeydown(new KeyboardEvent('keydown', { key: 'p' }), 'p') });
+        opts.push({ key: 'o', label: 'Toggle on hold', kind: 'exec', run: () => handleItemPageKeydown(new KeyboardEvent('keydown', { key: 'o' }), 'o') });
+        opts.push({ key: 'u', label: 'Assign…', kind: 'exec', run: () => openAssigneePickerForItemPage(itemRoot) });
+        opts.push({ key: 't', label: 'Tags…', kind: 'exec', run: () => openItemTagsPrompt(itemRoot) });
+        opts.push({ key: 'd', label: 'Set due', kind: 'exec', run: () => openItemDatePrompt(itemRoot, 'due') });
+        opts.push({ key: 's', label: 'Set schedule', kind: 'exec', run: () => openItemDatePrompt(itemRoot, 'schedule') });
+        opts.push({ key: ' ', label: 'Change status', kind: 'exec', run: () => openStatusPickerForItemPage(itemRoot) });
+        opts.push({ key: 'C', label: 'Add comment', kind: 'exec', run: () => openItemTextPostPrompt(itemRoot, 'comment') });
+        opts.push({ key: 'w', label: 'Add worklog', kind: 'exec', run: () => openItemTextPostPrompt(itemRoot, 'worklog') });
+        opts.push({ key: 'y', label: 'Copy item ref (includes --workspace)', kind: 'exec', run: () => {
+          copyTextToClipboard(itemId + workspaceFlag()).then(() => {
+            setOutlineStatus('Copied item ref');
+            setTimeout(() => setOutlineStatus(''), 1200);
+          }).catch((err) => setOutlineStatus('Error: ' + (err && err.message ? err.message : 'copy failed')));
+        } });
+        opts.push({ key: 'Y', label: 'Copy CLI show command (includes --workspace)', kind: 'exec', run: () => {
+          copyTextToClipboard('clarity items show ' + itemId + workspaceFlag()).then(() => {
+            setOutlineStatus('Copied command');
+            setTimeout(() => setOutlineStatus(''), 1200);
+          }).catch((err) => setOutlineStatus('Error: ' + (err && err.message ? err.message : 'copy failed')));
+        } });
+        opts.push({ key: 'm', label: 'Move to outline…', kind: 'exec', run: () => openMoveOutlinePickerForItemPage(itemRoot) });
+        opts.push({ key: 'r', label: 'Archive item', kind: 'exec', run: () => handleItemPageKeydown(new KeyboardEvent('keydown', { key: 'r' }), 'r') });
+      }
     }
     return opts;
   };
@@ -2101,6 +2208,9 @@
         if (row) removeRowFromNativeOutline(root, row);
         setOutlineStatus('Moved to ' + (toLabel || toOutlineId));
         setTimeout(() => setOutlineStatus(''), 1800);
+        if (root && root.id === 'item-native') {
+          window.location.href = '/items/' + encodeURIComponent(itemId);
+        }
       });
     };
     const modal = ensureStatusModal();
@@ -2126,6 +2236,9 @@
       if (row) removeRowFromNativeOutline(root, row);
       setOutlineStatus('Moved to ' + (label || toOutlineId));
       setTimeout(() => setOutlineStatus(''), 1800);
+      if (root && root.id === 'item-native') {
+        window.location.href = '/items/' + encodeURIComponent(id);
+      }
     }).catch((err) => {
       const msg = (err && err.message) ? String(err.message) : 'move failed';
       if (msg.includes('pick a compatible status')) {
@@ -2662,13 +2775,37 @@
   };
 
   const openPrompt = ({ title, hint, bodyHTML, onSubmit, focusSelector, restoreFocusId }) => {
+    const inferRestoreFocusId = () => {
+      const explicit = (restoreFocusId || '').trim();
+      if (explicit) return explicit;
+      const a = document.activeElement;
+      if (a && typeof a.closest === 'function') {
+        const row = a.closest('[data-outline-row]');
+        if (row && row.dataset) {
+          const id = String(row.dataset.id || '').trim();
+          if (id) return id;
+        }
+        const ar = a.closest('[data-agenda-row]');
+        if (ar && ar.dataset) {
+          const id = String(ar.dataset.id || '').trim();
+          if (id) return id;
+        }
+      }
+      const ir = itemPageRoot();
+      if (ir) {
+        const id = String(ir.dataset.itemId || '').trim();
+        if (id) return id;
+      }
+      return '';
+    };
+
     const modal = ensurePromptModal();
     modal.querySelector('#native-prompt-title').textContent = title || '';
     modal.querySelector('#native-prompt-hint').textContent = hint || 'Esc to close · Ctrl+Enter to save';
     modal.querySelector('#native-prompt-body').innerHTML = bodyHTML || '';
     prompt.open = true;
     prompt.submit = onSubmit || null;
-    prompt.restoreFocusId = (restoreFocusId || '').trim();
+    prompt.restoreFocusId = inferRestoreFocusId();
     modal.style.display = 'flex';
     const focus = focusSelector ? modal.querySelector(focusSelector) : null;
     focus && focus.focus();
@@ -2833,6 +2970,31 @@
     const modal = ensureAssigneeModal();
     modal.style.display = 'flex';
     renderAssigneePicker();
+  };
+
+  const openMoveOutlinePickerForItemPage = (root) => {
+    if (!root) return;
+    const id = (root.dataset.itemId || '').trim();
+    if (!id) return;
+    if ((root.dataset.canEdit || '') !== 'true') return;
+    const opts = parseOutlineOptions(root);
+    if (!opts.length) {
+      setOutlineStatus('Error: no outlines');
+      setTimeout(() => setOutlineStatus(''), 1200);
+      return;
+    }
+    moveOutlinePicker.open = true;
+    moveOutlinePicker.rowId = id;
+    moveOutlinePicker.outlineId = (root.dataset.outlineId || '').trim();
+    moveOutlinePicker.rootEl = root;
+    moveOutlinePicker.options = opts;
+    moveOutlinePicker.restoreFocusId = id;
+    let idx = opts.findIndex((o) => String(o && o.id || '').trim() === moveOutlinePicker.outlineId);
+    if (idx < 0) idx = 0;
+    moveOutlinePicker.idx = idx;
+    const modal = ensureMoveOutlineModal();
+    modal.style.display = 'flex';
+    renderMoveOutlinePicker();
   };
 
   const openItemTitlePrompt = (root) => {
@@ -3719,7 +3881,7 @@
         ensureAgendaDefaultCollapse(ar);
         applyAgendaCollapsed(ar, loadAgendaCollapsedSet(ar));
       }
-    }, 50);
+    }, 0);
   };
 
   document.addEventListener('focusin', () => {
@@ -3845,6 +4007,11 @@
   const handleStatusPickerKeydown = (ev) => {
     if (!statusPicker.open) return false;
     const k = (ev.key || '').toLowerCase();
+    if (ev.ctrlKey && k === 'g') {
+      ev.preventDefault();
+      closeStatusPicker();
+      return true;
+    }
     if (k === 'escape') {
       ev.preventDefault();
       if (statusPicker.mode === 'note') {
@@ -3889,6 +4056,11 @@
   const handleOutlineStatusesKeydown = (ev) => {
     if (!outlineStatuses.open) return false;
     const k = (ev.key || '').toLowerCase();
+    if (ev.ctrlKey && k === 'g') {
+      ev.preventDefault();
+      closeOutlineStatusesEditor();
+      return true;
+    }
     if (k === 'escape') {
       ev.preventDefault();
       closeOutlineStatusesEditor();
@@ -3949,6 +4121,11 @@
   const handleAssigneePickerKeydown = (ev) => {
     if (!assigneePicker.open) return false;
     const k = (ev.key || '').toLowerCase();
+    if (ev.ctrlKey && k === 'g') {
+      ev.preventDefault();
+      closeAssigneePicker();
+      return true;
+    }
     if (k === 'escape') {
       ev.preventDefault();
       closeAssigneePicker();
@@ -3994,6 +4171,11 @@
       return true;
     }
 
+    if (ev.ctrlKey && k === 'g') {
+      ev.preventDefault();
+      closeTagsPicker('cancel');
+      return true;
+    }
     if (k === 'escape') {
       ev.preventDefault();
       closeTagsPicker('cancel');
@@ -4038,6 +4220,11 @@
   const handleMoveOutlinePickerKeydown = (ev) => {
     if (!moveOutlinePicker.open) return false;
     const k = (ev.key || '').toLowerCase();
+    if (ev.ctrlKey && k === 'g') {
+      ev.preventDefault();
+      closeMoveOutlinePicker();
+      return true;
+    }
     if (k === 'escape') {
       ev.preventDefault();
       closeMoveOutlinePicker();
@@ -4072,6 +4259,11 @@
   const handlePromptKeydown = (ev) => {
     if (!prompt.open) return false;
     const k = (ev.key || '').toLowerCase();
+    if (ev.ctrlKey && k === 'g') {
+      ev.preventDefault();
+      closePrompt();
+      return true;
+    }
     if (k === 'escape') {
       ev.preventDefault();
       closePrompt();
@@ -4640,8 +4832,8 @@
 
     if (key === 'y' && !ev.shiftKey) {
       ev.preventDefault();
-      copyTextToClipboard(itemId).then(() => {
-        setOutlineStatus('Copied item id');
+      copyTextToClipboard(itemId + workspaceFlag()).then(() => {
+        setOutlineStatus('Copied item ref');
         setTimeout(() => setOutlineStatus(''), 1200);
       }).catch((err) => {
         setOutlineStatus('Error: ' + (err && err.message ? err.message : 'copy failed'));
@@ -4650,7 +4842,7 @@
     }
     if (key === 'y' && ev.shiftKey) {
       ev.preventDefault();
-      copyTextToClipboard('clarity items show ' + itemId).then(() => {
+      copyTextToClipboard('clarity items show ' + itemId + workspaceFlag()).then(() => {
         setOutlineStatus('Copied command');
         setTimeout(() => setOutlineStatus(''), 1200);
       }).catch((err) => {
@@ -4720,6 +4912,34 @@
       openItemTextPostPrompt(root, 'worklog');
       return true;
     }
+    if (key === 'm') {
+      ev.preventDefault();
+      openMoveOutlinePickerForItemPage(root);
+      return true;
+    }
+    if (key === 'r') {
+      ev.preventDefault();
+      if ((root.dataset.canEdit || '') !== 'true') return true;
+      const outlineId = String(root.dataset.outlineId || '').trim();
+      openPrompt({
+        title: 'Archive item',
+        hint: 'Esc to cancel · Enter to archive',
+        bodyHTML: `<div>Archive <code>${escapeHTML(itemId)}</code>?</div>`,
+        focusSelector: '#native-prompt-save',
+        restoreFocusId: itemId,
+        onSubmit: () => {
+          closePrompt();
+          outlineApply(root, 'outline:archive', { id: itemId }).then(() => {
+            if (outlineId) window.location.href = '/outlines/' + encodeURIComponent(outlineId) + '?ok=archived';
+            else window.location.href = '/projects';
+          }).catch((err) => {
+            setOutlineStatus('Error: ' + (err && err.message ? err.message : 'archive failed'));
+            setTimeout(() => setOutlineStatus(''), 2400);
+          });
+        },
+      });
+      return true;
+    }
     return false;
   };
 
@@ -4786,6 +5006,11 @@
   const handleCaptureKeydown = (ev) => {
     if (!captureState.open) return false;
     const key = String(ev.key || '').toLowerCase();
+    if (ev.ctrlKey && key === 'g') {
+      ev.preventDefault();
+      closeCaptureModal();
+      return true;
+    }
     if (key === 'escape') {
       ev.preventDefault();
       closeCaptureModal();

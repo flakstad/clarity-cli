@@ -2,7 +2,7 @@
 <header class="topbar">
   <div class="topbar-left">
     <a class="topbar-brand" href="/">Clarity</a>
-    <span class="dim">{{if .Workspace}}{{.Workspace}}{{else}}(auto){{end}}</span>
+    <span id="workspace-name" class="dim" data-workspace="{{.Workspace}}">{{if .Workspace}}{{.Workspace}}{{else}}(auto){{end}}</span>
     {{if .ActorID}}<span class="badge"><code>{{.ActorID}}</code></span>{{end}}
     {{if .ReadOnly}}<span class="badge">read-only</span>{{end}}
     {{if .Git.IsRepo}}

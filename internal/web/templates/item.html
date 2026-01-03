@@ -9,6 +9,7 @@
     data-can-edit="{{if .CanEdit}}true{{else}}false{{end}}"
     data-status-options='{{.StatusOptionsJSON}}'
     data-actor-options='{{.ActorOptionsJSON}}'
+    data-outline-options='{{.OutlineOptionsJSON}}'
   ></div>
 
   <!-- Hidden form controls used by the keyboard-first JS flows (status/tags/assignee/dates/etc). -->
@@ -74,6 +75,7 @@
     <div class="dim" style="margin-top: 10px;">
       Item <code>{{.Item.ID}}</code> · Outline <code>{{.Item.OutlineID}}</code> · Owner <code>{{.Item.OwnerActorID}}</code>{{if .Item.ParentID}} · Parent <code>{{.Item.ParentID}}</code>{{end}}
     </div>
+    <div id="outline-status" class="dim" style="margin-top: 10px;"></div>
   </div>
 
   {{if .SuccessMessage}}

@@ -4756,13 +4756,14 @@ type itemVM struct {
         ReplyTo       string
         Worklog       []model.WorklogEntry
 
-        TagsInput         string
-        DueDate           string
-        DueTime           string
-        SchDate           string
-        SchTime           string
-        StatusOptionsJSON template.HTMLAttr
-        ActorOptionsJSON  template.HTMLAttr
+        TagsInput          string
+        DueDate            string
+        DueTime            string
+        SchDate            string
+        SchTime            string
+        StatusOptionsJSON  template.HTMLAttr
+        ActorOptionsJSON   template.HTMLAttr
+        OutlineOptionsJSON template.HTMLAttr
 
         CanEdit        bool
         StatusDefs     []model.OutlineStatusDef
@@ -4884,25 +4885,26 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
                 }
         }
         vm := itemVM{
-                baseVM:            s.baseVMForRequest(r, "/items/"+it.ID+"/events?view=item"),
-                Item:              *it,
-                AssignedID:        assignedID,
-                AssignedLabel:     assignedLabel,
-                StatusLabel:       statusLabel,
-                Comments:          comments,
-                ReplyTo:           replyTo,
-                Worklog:           worklog,
-                TagsInput:         tagsInput,
-                DueDate:           dueDate,
-                DueTime:           dueTime,
-                SchDate:           schDate,
-                SchTime:           schTime,
-                StatusOptionsJSON: statusOptionsJSON,
-                ActorOptionsJSON:  actorOptionsJSON(db),
-                CanEdit:           canEdit,
-                StatusDefs:        statusDefs,
-                ErrorMessage:      errMsg,
-                SuccessMessage:    okMsg,
+                baseVM:             s.baseVMForRequest(r, "/items/"+it.ID+"/events?view=item"),
+                Item:               *it,
+                AssignedID:         assignedID,
+                AssignedLabel:      assignedLabel,
+                StatusLabel:        statusLabel,
+                Comments:           comments,
+                ReplyTo:            replyTo,
+                Worklog:            worklog,
+                TagsInput:          tagsInput,
+                DueDate:            dueDate,
+                DueTime:            dueTime,
+                SchDate:            schDate,
+                SchTime:            schTime,
+                StatusOptionsJSON:  statusOptionsJSON,
+                ActorOptionsJSON:   actorOptionsJSON(db),
+                OutlineOptionsJSON: outlineOptionsJSON(db),
+                CanEdit:            canEdit,
+                StatusDefs:         statusDefs,
+                ErrorMessage:       errMsg,
+                SuccessMessage:     okMsg,
         }
         vm.ActorID = actorID
         if itemReadOnly {
