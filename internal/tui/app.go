@@ -3932,6 +3932,9 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
                 if m.modal == modalActionPanel {
                         if km, ok := msg.(tea.KeyMsg); ok {
+                                actions := m.actionPanelActions()
+                                panelKind := m.curActionPanelKind()
+
                                 switch km.String() {
                                 case "ctrl+g":
                                         (&m).closeActionPanel()
@@ -3954,15 +3957,31 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 case "shift+tab", "backtab":
                                         (&m).moveActionPanelSelection(-1)
                                         return m, nil
-                                case "up", "k", "ctrl+p":
+                                case "up", "ctrl+p":
                                         (&m).moveActionPanelSelection(-1)
                                         return m, nil
-                                case "down", "j", "ctrl+n":
+                                case "down", "ctrl+n":
                                         (&m).moveActionPanelSelection(+1)
                                         return m, nil
+                                case "k":
+                                        // Preserve vi-style movement in the action panel, but don't steal
+                                        // keys that are valid action keys (or typed capture keys).
+                                        if panelKind != actionPanelCapture {
+                                                if _, ok := actions["k"]; !ok {
+                                                        (&m).moveActionPanelSelection(-1)
+                                                        return m, nil
+                                                }
+                                        }
+                                case "j":
+                                        // Preserve vi-style movement in the action panel, but don't steal
+                                        // keys that are valid action keys (or typed capture keys).
+                                        if panelKind != actionPanelCapture {
+                                                if _, ok := actions["j"]; !ok {
+                                                        (&m).moveActionPanelSelection(+1)
+                                                        return m, nil
+                                                }
+                                        }
                                 }
-
-                                actions := m.actionPanelActions()
                                 // Capture panel: org-capture style typed selection.
                                 if m.curActionPanelKind() == actionPanelCapture {
                                         if km.String() == "ctrl+t" {

@@ -192,6 +192,38 @@ func TestActionPanel_GlobalKeys_OpenPanels(t *testing.T) {
         }
 }
 
+func TestActionPanel_GoTo_JumpToItemID_UsesJKey(t *testing.T) {
+        t.Setenv("CLARITY_CONFIG_DIR", t.TempDir())
+
+        dir := t.TempDir()
+        s := store.Store{Dir: dir}
+
+        actorID := "act-human"
+        db := &store.DB{
+                CurrentActorID: actorID,
+                Actors:         []model.Actor{{ID: actorID, Kind: model.ActorKindHuman, Name: "human"}},
+        }
+        if err := s.Save(db); err != nil {
+                t.Fatalf("save db: %v", err)
+        }
+
+        m := newAppModel(dir, db)
+
+        // Global g opens Go to.
+        mAny, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+        m2 := mAny.(appModel)
+        if m2.modal != modalActionPanel {
+                t.Fatalf("expected modalActionPanel, got %v", m2.modal)
+        }
+
+        // 'j' is an action key in Go to, not "cursor down".
+        mAny, _ = m2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+        m3 := mAny.(appModel)
+        if m3.modal != modalJumpToItem {
+                t.Fatalf("expected modalJumpToItem, got %v", m3.modal)
+        }
+}
+
 func TestActionPanel_Context_CtrlT_OpensCaptureTemplatesModal(t *testing.T) {
         t.Setenv("CLARITY_CONFIG_DIR", t.TempDir())
 
