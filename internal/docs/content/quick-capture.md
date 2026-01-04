@@ -39,7 +39,7 @@ Hotkey-friendly flags:
 
 Capture templates are configured globally in `~/.clarity/config.json` so you can capture into other workspaces (e.g. personal workspace while working in a day job workspace).
 
-You can manage templates in the TUI (recommended): open the Action Panel (`x`), go to Capture (`c`), then open “Capture templates…” (`ctrl+t`).
+You can manage templates in the TUI (recommended): open the Action Panel (`x`), go to Capture (`c`), then open “Capture templates…” (`ctrl+t`) (includes prompts + defaults).
 
 Templates are selected via a multi-key sequence (org-capture style). Each key in `keys` must be exactly one character.
 
@@ -79,11 +79,41 @@ Templates can optionally seed the capture draft with defaults:
 - `{{time}}` → `HH:MM`
 - `{{now}}` → RFC3339 timestamp
 - `{{clipboard}}` → clipboard text (best-effort; can be overridden with `CLARITY_CAPTURE_CLIPBOARD`)
-- `{{url}}` → `CLARITY_CAPTURE_URL` (set this in your hotkey wrapper if you can fetch the active URL)
-- `{{selection}}` → `CLARITY_CAPTURE_SELECTION` (set this in your hotkey wrapper if you can fetch selected text)
+- `{{url}}` → `CLARITY_CAPTURE_URL` or `clarity capture --url ...`
+- `{{selection}}` → `CLARITY_CAPTURE_SELECTION` or `clarity capture --selection ...`
 
 Notes:
 - Clarity does not (yet) auto-detect URL/selection from your OS/app; those values are currently provided via env vars by your launcher script/window manager.
+- During capture, `{{...}}` expansions are also applied when saving the title/description fields (so you can type e.g. `{{clipboard}}` directly).
+
+### Template prompts (v3)
+
+Templates can optionally ask questions before capture starts. Each prompt answer becomes a variable you can use as `{{name}}` inside `defaults.title` / `defaults.description` (and later in the title/description fields during capture).
+
+Prompt types:
+- `string` (enter/ctrl+s: next)
+- `multiline` (ctrl+s: next)
+- `choice` (enter: select)
+- `confirm` (enter: select yes/no; value is `true`/`false`)
+
+Example:
+
+```json
+{
+  "captureTemplates": [
+    {
+      "name": "Work task",
+      "keys": ["w", "t"],
+      "target": { "workspace": "Flakstad Software", "outlineId": "out-y2v74pgi" },
+      "prompts": [
+        { "name": "project", "label": "Project", "type": "choice", "options": ["Clarity", "Client", "Internal"], "required": true },
+        { "name": "note", "label": "Note (optional)", "type": "multiline" }
+      ],
+      "defaults": { "title": "{{project}}: {{date}}", "description": "{{note}}\n\nSource: {{url}}" }
+    }
+  ]
+}
+```
 
 ### Cross-workspace capture + Git sync (v1)
 Capture writes directly into the target workspace directory (which may be a Git-backed workspace repo).

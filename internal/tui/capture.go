@@ -75,6 +75,10 @@ const (
         captureModalNone captureModalKind = iota
         captureModalEditTitle
         captureModalEditDescription
+        captureModalPromptInput
+        captureModalPromptTextarea
+        captureModalPromptChoice
+        captureModalPromptConfirm
         captureModalPickOutline
         captureModalPickStatus
         captureModalPickAssignee
@@ -103,6 +107,11 @@ type captureModel struct {
         templateHint      string
         outlineLabelByRef map[string]string
 
+        promptTemplate *store.CaptureTemplate
+        promptIndex    int
+        promptValues   map[string]string
+        promptList     list.Model
+
         workspace string
         dir       string
         st        store.Store
@@ -118,6 +127,8 @@ type captureModel struct {
         draftList list.Model
         // draftSeq is used to generate stable temporary ids (draft-1, draft-2, ...).
         draftSeq int
+        // draftVars are prompt answers available for {{var}} expansion during capture.
+        draftVars map[string]string
 
         modal                captureModalKind
         modalForDraftID      string
@@ -197,6 +208,20 @@ func (i captureStatusItem) Title() string {
 }
 func (i captureStatusItem) Description() string { return "" }
 
+type capturePromptChoiceItem struct {
+        value string
+        label string
+}
+
+func (i capturePromptChoiceItem) FilterValue() string { return strings.TrimSpace(i.label) }
+func (i capturePromptChoiceItem) Title() string {
+        if strings.TrimSpace(i.label) != "" {
+                return strings.TrimSpace(i.label)
+        }
+        return strings.TrimSpace(i.value)
+}
+func (i capturePromptChoiceItem) Description() string { return "" }
+
 func newCaptureModel(cfg *store.GlobalConfig, actorOverride string) (captureModel, error) {
         if cfg == nil {
                 cfg = &store.GlobalConfig{}
@@ -218,6 +243,10 @@ func newCaptureModel(cfg *store.GlobalConfig, actorOverride string) (captureMode
         m.templateList = newList("Capture Templates", "Select a template", []list.Item{})
         m.templateList.SetFilteringEnabled(false)
         m.templateList.SetShowFilter(false)
+
+        m.promptList = newList("", "", []list.Item{})
+        m.promptList.SetFilteringEnabled(false)
+        m.promptList.SetShowFilter(false)
         m.templateList.SetDelegate(newCompactItemDelegate())
 
         m.outlinePickList = newList("Outlines", "Select an outline", []list.Item{})
@@ -466,7 +495,10 @@ func (m captureModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 switch msg.String() {
                 case "ctrl+g", "esc":
                         if m.modal != captureModalNone {
-                                // Cancel modal only.
+                                // Cancel modal only (but prompt modals cancel the whole prompt flow).
+                                if isCapturePromptModal(m.modal) {
+                                        (&m).cancelPromptFlow()
+                                }
                                 (&m).closeModal()
                                 return m, nil
                         }
@@ -506,6 +538,10 @@ func (m *captureModel) closeModal() {
         case captureModalEditTitle:
                 m.titleInput.Blur()
         case captureModalEditDescription:
+                m.textarea.Blur()
+        case captureModalPromptInput:
+                m.input.Blur()
+        case captureModalPromptTextarea:
                 m.textarea.Blur()
         case captureModalEditTags:
                 m.tagsFocus = tagsFocusInput
@@ -565,7 +601,7 @@ func (m captureModel) updateTemplateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
                         if strings.TrimSpace(sel.kind) == "select" {
                                 cur := m.currentTemplateNode()
                                 if cur != nil && cur.template != nil {
-                                        if err := m.startDraftFromTemplate(*cur.template); err != nil {
+                                        if err := m.beginTemplateCapture(*cur.template); err != nil {
                                                 m.minibuffer = err.Error()
                                                 return m, nil
                                         }
@@ -587,7 +623,7 @@ func (m captureModel) updateTemplateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
                                 // prefixes, start the draft immediately.
                                 next := m.currentTemplateNode()
                                 if next != nil && next.template != nil && len(next.children) == 0 {
-                                        if err := m.startDraftFromTemplate(*next.template); err != nil {
+                                        if err := m.beginTemplateCapture(*next.template); err != nil {
                                                 m.minibuffer = err.Error()
                                                 return m, nil
                                         }
@@ -618,7 +654,10 @@ func (m captureModel) updateTemplateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 
                 next := m.currentTemplateNode()
                 if next != nil && next.template != nil && len(next.children) == 0 {
-                        _ = m.startDraftFromTemplate(*next.template)
+                        if err := m.beginTemplateCapture(*next.template); err != nil {
+                                m.minibuffer = err.Error()
+                                return m, nil
+                        }
                 }
                 return m, nil
         }
@@ -626,7 +665,229 @@ func (m captureModel) updateTemplateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
         return m, nil
 }
 
+func isCapturePromptModal(k captureModalKind) bool {
+        switch k {
+        case captureModalPromptInput, captureModalPromptTextarea, captureModalPromptChoice, captureModalPromptConfirm:
+                return true
+        default:
+                return false
+        }
+}
+
+func (m *captureModel) cancelPromptFlow() {
+        if m == nil {
+                return
+        }
+        m.promptTemplate = nil
+        m.promptIndex = 0
+        m.promptValues = nil
+}
+
+func (m captureModel) currentPrompt() (store.CaptureTemplatePrompt, bool) {
+        if m.promptTemplate == nil {
+                return store.CaptureTemplatePrompt{}, false
+        }
+        if m.promptIndex < 0 || m.promptIndex >= len(m.promptTemplate.Prompts) {
+                return store.CaptureTemplatePrompt{}, false
+        }
+        return m.promptTemplate.Prompts[m.promptIndex], true
+}
+
+func capturePromptLabel(p store.CaptureTemplatePrompt) string {
+        if s := strings.TrimSpace(p.Label); s != "" {
+                return s
+        }
+        return strings.TrimSpace(p.Name)
+}
+
+func (m *captureModel) beginTemplateCapture(t store.CaptureTemplate) error {
+        if m == nil {
+                return nil
+        }
+        // Reset any previous prompt state.
+        m.cancelPromptFlow()
+
+        if len(t.Prompts) == 0 {
+                return m.startDraftFromTemplateWithVars(t, nil)
+        }
+        m.promptTemplate = &t
+        m.promptIndex = 0
+        m.promptValues = map[string]string{}
+        return m.openPromptModal(t.Prompts[0])
+}
+
+func (m *captureModel) openPromptModal(p store.CaptureTemplatePrompt) error {
+        if m == nil || m.promptTemplate == nil {
+                return errors.New("internal: prompt without template")
+        }
+
+        ws := strings.TrimSpace(m.promptTemplate.Target.Workspace)
+        outlineID := strings.TrimSpace(m.promptTemplate.Target.OutlineID)
+        ctx := newCaptureExpansionContext(ws, outlineID)
+        ctx.Vars = m.promptValues
+
+        label := capturePromptLabel(p)
+        typ := strings.TrimSpace(p.Type)
+        initial := expandCaptureTemplateString(p.Default, ctx)
+
+        switch typ {
+        case "string":
+                m.modal = captureModalPromptInput
+                m.input.Placeholder = label
+                m.input.SetValue(initial)
+                m.input.Focus()
+                return nil
+        case "multiline":
+                m.modal = captureModalPromptTextarea
+                m.textarea.Placeholder = label
+                m.textarea.SetValue(initial)
+                m.textarea.Focus()
+                return nil
+        case "choice":
+                m.modal = captureModalPromptChoice
+                opts := make([]list.Item, 0, len(p.Options))
+                selected := 0
+                for i, opt := range p.Options {
+                        opt = strings.TrimSpace(opt)
+                        opts = append(opts, capturePromptChoiceItem{value: opt, label: opt})
+                        if initial != "" && opt == initial {
+                                selected = i
+                        }
+                }
+                m.promptList.SetItems(opts)
+                if len(opts) > 0 {
+                        m.promptList.Select(selected)
+                }
+                bodyW := modalBodyWidth(m.width)
+                h := len(opts) + 2
+                if h > 14 {
+                        h = 14
+                }
+                if h < 6 {
+                        h = 6
+                }
+                m.promptList.SetSize(bodyW, h)
+                return nil
+        case "confirm":
+                m.modal = captureModalPromptConfirm
+                opts := []list.Item{
+                        capturePromptChoiceItem{value: "true", label: "Yes"},
+                        capturePromptChoiceItem{value: "false", label: "No"},
+                }
+                selected := 1
+                switch strings.ToLower(strings.TrimSpace(initial)) {
+                case "y", "yes", "true", "1":
+                        selected = 0
+                }
+                m.promptList.SetItems(opts)
+                m.promptList.Select(selected)
+                bodyW := modalBodyWidth(m.width)
+                m.promptList.SetSize(bodyW, 6)
+                return nil
+        default:
+                return fmt.Errorf("unknown prompt type: %q", p.Type)
+        }
+}
+
+func (m *captureModel) finishPromptAnswer(p store.CaptureTemplatePrompt, value string) error {
+        if m == nil || m.promptTemplate == nil {
+                return nil
+        }
+
+        trimmed := strings.TrimSpace(value)
+        if p.Required && trimmed == "" {
+                return fmt.Errorf("%s is required", capturePromptLabel(p))
+        }
+        if strings.TrimSpace(p.Type) != "multiline" {
+                value = trimmed
+        }
+        m.promptValues[strings.TrimSpace(p.Name)] = value
+
+        m.promptIndex++
+        if m.promptIndex < len(m.promptTemplate.Prompts) {
+                return m.openPromptModal(m.promptTemplate.Prompts[m.promptIndex])
+        }
+
+        // Done prompting; start the draft with the collected vars.
+        t := *m.promptTemplate
+        vars := m.promptValues
+        m.cancelPromptFlow()
+        return m.startDraftFromTemplateWithVars(t, vars)
+}
+
+func (m captureModel) updatePromptInputModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+        switch msg.String() {
+        case "enter", "ctrl+s":
+                p, ok := m.currentPrompt()
+                if !ok {
+                        (&m).cancelPromptFlow()
+                        (&m).closeModal()
+                        return m, nil
+                }
+                if err := (&m).finishPromptAnswer(p, m.input.Value()); err != nil {
+                        m.minibuffer = err.Error()
+                        return m, nil
+                }
+                m.minibuffer = ""
+                return m, nil
+        }
+        var cmd tea.Cmd
+        m.input, cmd = m.input.Update(msg)
+        return m, cmd
+}
+
+func (m captureModel) updatePromptTextareaModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+        switch msg.String() {
+        case "ctrl+s":
+                p, ok := m.currentPrompt()
+                if !ok {
+                        (&m).cancelPromptFlow()
+                        (&m).closeModal()
+                        return m, nil
+                }
+                if err := (&m).finishPromptAnswer(p, m.textarea.Value()); err != nil {
+                        m.minibuffer = err.Error()
+                        return m, nil
+                }
+                m.minibuffer = ""
+                return m, nil
+        }
+        var cmd tea.Cmd
+        m.textarea, cmd = m.textarea.Update(msg)
+        return m, cmd
+}
+
+func (m captureModel) updatePromptChoiceModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+        switch msg.String() {
+        case "enter":
+                p, ok := m.currentPrompt()
+                if !ok {
+                        (&m).cancelPromptFlow()
+                        (&m).closeModal()
+                        return m, nil
+                }
+                sel, ok := m.promptList.SelectedItem().(capturePromptChoiceItem)
+                if !ok {
+                        m.minibuffer = "No selection"
+                        return m, nil
+                }
+                if err := (&m).finishPromptAnswer(p, sel.value); err != nil {
+                        m.minibuffer = err.Error()
+                        return m, nil
+                }
+                m.minibuffer = ""
+                return m, nil
+        }
+        var cmd tea.Cmd
+        m.promptList, cmd = m.promptList.Update(msg)
+        return m, cmd
+}
+
 func (m *captureModel) startDraftFromTemplate(t store.CaptureTemplate) error {
+        return m.startDraftFromTemplateWithVars(t, nil)
+}
+
+func (m *captureModel) startDraftFromTemplateWithVars(t store.CaptureTemplate, vars map[string]string) error {
         ws := strings.TrimSpace(t.Target.Workspace)
         if ws == "" {
                 return errors.New("template target workspace is empty")
@@ -659,6 +920,7 @@ func (m *captureModel) startDraftFromTemplate(t store.CaptureTemplate) error {
         }
 
         exp := newCaptureExpansionContext(ws, o.ID)
+        exp.Vars = vars
         defaultTitle := expandCaptureTemplateString(t.Defaults.Title, exp)
         defaultTitle = strings.ReplaceAll(defaultTitle, "\n", " ")
         defaultTitle = strings.ReplaceAll(defaultTitle, "\r", " ")
@@ -682,6 +944,7 @@ func (m *captureModel) startDraftFromTemplate(t store.CaptureTemplate) error {
         m.draftItems = nil
         m.draftCollapsed = map[string]bool{}
         m.draftSeq = 0
+        m.draftVars = vars
         // Seed with a single root draft item.
         rootID := m.addDraftItem(nil, defaultTitle)
         if d := m.findDraftItem(rootID); d != nil {
@@ -1251,6 +1514,12 @@ func (m *captureModel) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
                 return m.updateTitleModal(msg)
         case captureModalEditDescription:
                 return m.updateDescriptionModal(msg)
+        case captureModalPromptInput:
+                return m.updatePromptInputModal(msg)
+        case captureModalPromptTextarea:
+                return m.updatePromptTextareaModal(msg)
+        case captureModalPromptChoice, captureModalPromptConfirm:
+                return m.updatePromptChoiceModal(msg)
         case captureModalPickOutline:
                 return m.updateOutlinePicker(msg)
         case captureModalPickStatus:
@@ -1286,7 +1555,15 @@ func (m captureModel) updateTitleModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
                         (&m).closeModal()
                         return m, nil
                 }
-                it.Title = strings.TrimSpace(m.titleInput.Value())
+                title := m.titleInput.Value()
+                if strings.Contains(title, "{{") {
+                        ctx := newCaptureExpansionContext(m.workspace, m.draftOutlineID)
+                        ctx.Vars = m.draftVars
+                        title = expandCaptureTemplateString(title, ctx)
+                }
+                title = strings.ReplaceAll(title, "\n", " ")
+                title = strings.ReplaceAll(title, "\r", " ")
+                it.Title = strings.TrimSpace(title)
                 (&m).setDraftItem(*it)
                 (&m).refreshDraftList()
                 (&m).closeModal()
@@ -1309,7 +1586,13 @@ func (m captureModel) updateDescriptionModal(msg tea.KeyMsg) (tea.Model, tea.Cmd
                 id := strings.TrimSpace(m.modalForDraftID)
                 if id != "" {
                         if it := m.findDraftItem(id); it != nil {
-                                it.Description = m.textarea.Value()
+                                desc := m.textarea.Value()
+                                if strings.Contains(desc, "{{") {
+                                        ctx := newCaptureExpansionContext(m.workspace, m.draftOutlineID)
+                                        ctx.Vars = m.draftVars
+                                        desc = expandCaptureTemplateString(desc, ctx)
+                                }
+                                it.Description = desc
                                 (&m).setDraftItem(*it)
                                 (&m).refreshDraftList()
                         }
@@ -1516,6 +1799,7 @@ func (m *captureModel) resizeLists() {
                 h = 6
         }
         m.templateList.SetSize(w, h)
+        m.promptList.SetSize(w, h)
         m.outlinePickList.SetSize(w, h)
         m.statusPickList.SetSize(w, h)
         m.assigneeList.SetSize(w, h)
@@ -1595,9 +1879,38 @@ func (m captureModel) renderDraftSummary() string {
 func (m captureModel) renderModal() string {
         switch m.modal {
         case captureModalEditTitle:
-                return renderModalBox(m.width, "Capture: title", m.titleInput.View()+"\n\nenter/ctrl+s: save   esc/ctrl+g: cancel")
+                bodyW := modalBodyWidth(m.width)
+                expHelp := styleMuted().Width(bodyW).Render("Expansions: {{date}} {{time}} {{now}} {{clipboard}} {{url}} {{selection}} (+ prompt vars like {{project}})")
+                return renderModalBox(m.width, "Capture: title", m.titleInput.View()+"\n\n"+expHelp+"\n\nenter/ctrl+s: save   esc/ctrl+g: cancel")
         case captureModalEditDescription:
-                return renderModalBox(m.width, "Capture: description", m.textarea.View()+"\n\nctrl+s: save   esc/ctrl+g: cancel")
+                bodyW := modalBodyWidth(m.width)
+                expHelp := styleMuted().Width(bodyW).Render("Expansions: {{date}} {{time}} {{now}} {{clipboard}} {{url}} {{selection}} (+ prompt vars like {{project}})")
+                srcHelp := styleMuted().Width(bodyW).Render("{{url}}: --url or $CLARITY_CAPTURE_URL    {{selection}}: --selection or $CLARITY_CAPTURE_SELECTION")
+                return renderModalBox(m.width, "Capture: description", m.textarea.View()+"\n\n"+expHelp+"\n"+srcHelp+"\n\nctrl+s: save   esc/ctrl+g: cancel")
+        case captureModalPromptInput:
+                p, ok := m.currentPrompt()
+                if !ok {
+                        return renderModalBox(m.width, "Capture: prompt", "")
+                }
+                return renderModalBox(m.width, "Capture: "+capturePromptLabel(p), m.input.View()+"\n\nenter/ctrl+s: next   esc/ctrl+g: cancel")
+        case captureModalPromptTextarea:
+                p, ok := m.currentPrompt()
+                if !ok {
+                        return renderModalBox(m.width, "Capture: prompt", "")
+                }
+                return renderModalBox(m.width, "Capture: "+capturePromptLabel(p), m.textarea.View()+"\n\nctrl+s: next   esc/ctrl+g: cancel")
+        case captureModalPromptChoice:
+                p, ok := m.currentPrompt()
+                if !ok {
+                        return renderModalBox(m.width, "Capture: prompt", "")
+                }
+                return renderModalBox(m.width, "Capture: "+capturePromptLabel(p), m.promptList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
+        case captureModalPromptConfirm:
+                p, ok := m.currentPrompt()
+                if !ok {
+                        return renderModalBox(m.width, "Capture: prompt", "")
+                }
+                return renderModalBox(m.width, "Capture: "+capturePromptLabel(p), m.promptList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
         case captureModalPickOutline:
                 return renderModalBox(m.width, "Capture: move to outline", m.outlinePickList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
         case captureModalPickStatus:

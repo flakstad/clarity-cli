@@ -46,11 +46,16 @@ type appModel struct {
         // outlineStatusDefsList is used in the outline statuses editor modal.
         outlineStatusDefsList list.Model
 
-        captureTemplatesList         list.Model
-        captureTemplateWorkspaceList list.Model
-        captureTemplateOutlineList   list.Model
-        captureTemplateEdit          *captureTemplateEditState
-        captureTemplateDeleteIdx     int
+        captureTemplatesList              list.Model
+        captureTemplateWorkspaceList      list.Model
+        captureTemplateOutlineList        list.Model
+        captureTemplateEdit               *captureTemplateEditState
+        captureTemplateDeleteIdx          int
+        captureTemplatePromptsList        list.Model
+        captureTemplatePromptTypeList     list.Model
+        captureTemplatePromptRequiredList list.Model
+        captureTemplatePromptEdit         *captureTemplatePromptEditState
+        captureTemplatePromptDeleteIdx    int
 
         selectedProjectID string
         selectedOutlineID string
@@ -318,6 +323,31 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
         m.captureTemplateOutlineList.SetShowPagination(false)
 
         m.captureTemplateDeleteIdx = -1
+        m.captureTemplatePromptsList = newList("Prompts", "Edit template prompts", []list.Item{})
+        m.captureTemplatePromptsList.SetDelegate(newCompactItemDelegate())
+        m.captureTemplatePromptsList.SetFilteringEnabled(true)
+        m.captureTemplatePromptsList.SetShowFilter(true)
+        m.captureTemplatePromptsList.SetShowHelp(false)
+        m.captureTemplatePromptsList.SetShowStatusBar(false)
+        m.captureTemplatePromptsList.SetShowPagination(false)
+
+        m.captureTemplatePromptTypeList = newList("Prompt type", "Pick a type", []list.Item{})
+        m.captureTemplatePromptTypeList.SetDelegate(newCompactItemDelegate())
+        m.captureTemplatePromptTypeList.SetFilteringEnabled(false)
+        m.captureTemplatePromptTypeList.SetShowFilter(false)
+        m.captureTemplatePromptTypeList.SetShowHelp(false)
+        m.captureTemplatePromptTypeList.SetShowStatusBar(false)
+        m.captureTemplatePromptTypeList.SetShowPagination(false)
+
+        m.captureTemplatePromptRequiredList = newList("Required?", "Pick required", []list.Item{})
+        m.captureTemplatePromptRequiredList.SetDelegate(newCompactItemDelegate())
+        m.captureTemplatePromptRequiredList.SetFilteringEnabled(false)
+        m.captureTemplatePromptRequiredList.SetShowFilter(false)
+        m.captureTemplatePromptRequiredList.SetShowHelp(false)
+        m.captureTemplatePromptRequiredList.SetShowStatusBar(false)
+        m.captureTemplatePromptRequiredList.SetShowPagination(false)
+
+        m.captureTemplatePromptDeleteIdx = -1
 
         m.input = textinput.New()
         m.input.Placeholder = "Title"

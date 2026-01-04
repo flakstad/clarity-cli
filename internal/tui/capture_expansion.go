@@ -18,6 +18,8 @@ type captureExpansionContext struct {
         Clipboard string
         Selection string
         URL       string
+
+        Vars map[string]string
 }
 
 func newCaptureExpansionContext(workspace, outlineID string) captureExpansionContext {
@@ -80,7 +82,6 @@ func runSmallCommand(ctx context.Context, name string, args ...string) string {
 }
 
 func expandCaptureTemplateString(in string, ctx captureExpansionContext) string {
-        in = strings.TrimSpace(in)
         if in == "" {
                 return ""
         }
@@ -125,6 +126,12 @@ func expandCaptureTemplateString(in string, ctx captureExpansionContext) string 
                 case "url":
                         out.WriteString(ctx.URL)
                 default:
+                        if ctx.Vars != nil {
+                                if v, ok := ctx.Vars[token]; ok {
+                                        out.WriteString(v)
+                                        continue
+                                }
+                        }
                         out.WriteString("{{")
                         out.WriteString(token)
                         out.WriteString("}}")

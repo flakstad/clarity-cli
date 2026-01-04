@@ -13,10 +13,11 @@ func TestExpandCaptureTemplateString(t *testing.T) {
                 Clipboard: "clip",
                 Selection: "sel",
                 URL:       "https://example.com",
+                Vars:      map[string]string{"project": "Clarity"},
         }
 
-        got := expandCaptureTemplateString("{{date}} {{time}} {{now}} {{workspace}} {{outline}} {{clipboard}} {{selection}} {{url}}", ctx)
-        if want := "2026-01-04 12:34 2026-01-04T12:34:56Z Flakstad Software out-123 clip sel https://example.com"; got != want {
+        got := expandCaptureTemplateString("{{date}} {{time}} {{now}} {{workspace}} {{outline}} {{clipboard}} {{selection}} {{url}} {{project}}", ctx)
+        if want := "2026-01-04 12:34 2026-01-04T12:34:56Z Flakstad Software out-123 clip sel https://example.com Clarity"; got != want {
                 t.Fatalf("unexpected expansion:\nwant: %q\ngot:  %q", want, got)
         }
 }

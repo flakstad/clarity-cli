@@ -58,3 +58,56 @@ func TestNormalizeCaptureTemplateTags(t *testing.T) {
                 t.Fatalf("unexpected tags: %#v", got)
         }
 }
+
+func TestValidateCaptureTemplates_Prompts(t *testing.T) {
+        base := CaptureTemplate{
+                Name: "Work",
+                Keys: []string{"w"},
+                Target: CaptureTemplateTarget{
+                        Workspace: "Flakstad Software",
+                        OutlineID: "out-123",
+                },
+        }
+
+        t.Run("rejects_reserved_name", func(t *testing.T) {
+                cfg := &GlobalConfig{CaptureTemplates: []CaptureTemplate{
+                        func() CaptureTemplate {
+                                t := base
+                                t.Prompts = []CaptureTemplatePrompt{{Name: "url", Label: "URL", Type: "string"}}
+                                return t
+                        }(),
+                }}
+                if err := ValidateCaptureTemplates(cfg); err == nil {
+                        t.Fatalf("expected error")
+                }
+        })
+
+        t.Run("rejects_choice_without_options", func(t *testing.T) {
+                cfg := &GlobalConfig{CaptureTemplates: []CaptureTemplate{
+                        func() CaptureTemplate {
+                                t := base
+                                t.Prompts = []CaptureTemplatePrompt{{Name: "project", Label: "Project", Type: "choice"}}
+                                return t
+                        }(),
+                }}
+                if err := ValidateCaptureTemplates(cfg); err == nil {
+                        t.Fatalf("expected error")
+                }
+        })
+
+        t.Run("rejects_duplicate_prompt_name", func(t *testing.T) {
+                cfg := &GlobalConfig{CaptureTemplates: []CaptureTemplate{
+                        func() CaptureTemplate {
+                                t := base
+                                t.Prompts = []CaptureTemplatePrompt{
+                                        {Name: "project", Label: "Project", Type: "string"},
+                                        {Name: "project", Label: "Project again", Type: "string"},
+                                }
+                                return t
+                        }(),
+                }}
+                if err := ValidateCaptureTemplates(cfg); err == nil {
+                        t.Fatalf("expected error")
+                }
+        })
+}

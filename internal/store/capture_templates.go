@@ -18,6 +18,24 @@ type CaptureTemplateDefaults struct {
         Tags        []string `json:"tags,omitempty"`
 }
 
+type CaptureTemplatePrompt struct {
+        // Name is the variable name used for expansions (e.g. {{project}}).
+        Name string `json:"name"`
+        // Label is shown to the user.
+        Label string `json:"label"`
+        // Type is one of: string | multiline | choice | confirm
+        Type string `json:"type"`
+
+        // Default is an optional initial value. For choice prompts, it should match an entry in Options.
+        Default string `json:"default,omitempty"`
+
+        // Options are required for choice prompts.
+        Options []string `json:"options,omitempty"`
+
+        // Required controls whether an empty answer is allowed (default: false).
+        Required bool `json:"required,omitempty"`
+}
+
 type CaptureTemplate struct {
         // Name is a human label for selection UIs.
         Name string `json:"name"`
@@ -27,6 +45,8 @@ type CaptureTemplate struct {
         Target CaptureTemplateTarget `json:"target"`
         // Defaults are optional initial values used to seed the capture draft.
         Defaults CaptureTemplateDefaults `json:"defaults,omitempty"`
+        // Prompts are optional questions asked before capture starts; answers become template expansion variables.
+        Prompts []CaptureTemplatePrompt `json:"prompts,omitempty"`
 }
 
 func NormalizeCaptureTemplateKeys(keys []string) ([]string, error) {
@@ -102,6 +122,66 @@ func ValidateCaptureTemplates(cfg *GlobalConfig) error {
                 _ = strings.TrimSpace(t.Defaults.Title)
                 _ = strings.TrimSpace(t.Defaults.Description)
                 _ = NormalizeCaptureTemplateTags(t.Defaults.Tags)
+
+                if err := ValidateCaptureTemplatePrompts(t.Prompts); err != nil {
+                        return fmt.Errorf("captureTemplates[%d].prompts: %w", i, err)
+                }
+        }
+        return nil
+}
+
+func ValidateCaptureTemplatePrompts(prompts []CaptureTemplatePrompt) error {
+        if len(prompts) == 0 {
+                return nil
+        }
+        reserved := map[string]bool{
+                "now":       true,
+                "date":      true,
+                "time":      true,
+                "workspace": true,
+                "outline":   true,
+                "clipboard": true,
+                "selection": true,
+                "url":       true,
+        }
+        seen := map[string]bool{}
+        for i, p := range prompts {
+                name := strings.TrimSpace(p.Name)
+                if name == "" {
+                        return fmt.Errorf("[%d].name is empty", i)
+                }
+                if strings.ContainsAny(name, " \t\r\n") {
+                        return fmt.Errorf("[%d].name contains whitespace: %q", i, name)
+                }
+                if reserved[name] {
+                        return fmt.Errorf("[%d].name uses reserved token: %q", i, name)
+                }
+                if seen[name] {
+                        return fmt.Errorf("[%d].name is duplicated: %q", i, name)
+                }
+                seen[name] = true
+
+                label := strings.TrimSpace(p.Label)
+                if label == "" {
+                        label = name
+                }
+
+                switch strings.TrimSpace(p.Type) {
+                case "string", "multiline", "choice", "confirm":
+                default:
+                        return fmt.Errorf("[%d] %q: invalid type %q (expected string|multiline|choice|confirm)", i, label, p.Type)
+                }
+
+                if strings.TrimSpace(p.Type) == "choice" {
+                        if len(p.Options) == 0 {
+                                return fmt.Errorf("[%d] %q: choice prompt requires options", i, label)
+                        }
+                        for j, opt := range p.Options {
+                                if strings.TrimSpace(opt) == "" {
+                                        return fmt.Errorf("[%d] %q: options[%d] is empty", i, label, j)
+                                }
+                        }
+                }
         }
         return nil
 }

@@ -20,6 +20,7 @@ const (
         captureTemplateEditKeys
         captureTemplateEditWorkspace
         captureTemplateEditOutline
+        captureTemplateEditPrompts
         captureTemplateEditDefaultTitle
         captureTemplateEditDefaultDescription
         captureTemplateEditDefaultTags
@@ -29,6 +30,23 @@ type captureTemplateEditState struct {
         idx   int // -1 for new
         stage captureTemplateEditStage
         tmpl  store.CaptureTemplate
+}
+
+type captureTemplatePromptEditStage int
+
+const (
+        captureTemplatePromptEditName captureTemplatePromptEditStage = iota
+        captureTemplatePromptEditLabel
+        captureTemplatePromptEditType
+        captureTemplatePromptEditRequired
+        captureTemplatePromptEditDefault
+        captureTemplatePromptEditOptions
+)
+
+type captureTemplatePromptEditState struct {
+        idx   int // -1 for new
+        stage captureTemplatePromptEditStage
+        p     store.CaptureTemplatePrompt
 }
 
 type captureTemplateItem struct {
@@ -67,6 +85,53 @@ type captureTemplateOutlineItem struct {
 func (i captureTemplateOutlineItem) FilterValue() string { return strings.TrimSpace(i.label) }
 func (i captureTemplateOutlineItem) Title() string       { return i.label }
 func (i captureTemplateOutlineItem) Description() string { return "" }
+
+type captureTemplatePromptItem struct {
+        idx int
+        p   store.CaptureTemplatePrompt
+}
+
+func (i captureTemplatePromptItem) FilterValue() string {
+        return strings.TrimSpace(i.p.Name) + " " + strings.TrimSpace(i.p.Label) + " " + strings.TrimSpace(i.p.Type)
+}
+func (i captureTemplatePromptItem) Title() string {
+        name := strings.TrimSpace(i.p.Name)
+        if name == "" {
+                name = "(unnamed)"
+        }
+        label := strings.TrimSpace(i.p.Label)
+        if label == "" {
+                label = name
+        }
+        typ := strings.TrimSpace(i.p.Type)
+        if typ == "" {
+                typ = "string"
+        }
+        req := ""
+        if i.p.Required {
+                req = ", required"
+        }
+        def := ""
+        if strings.TrimSpace(i.p.Default) != "" {
+                def = " default=" + fmt.Sprintf("%q", strings.TrimSpace(i.p.Default))
+        }
+        return fmt.Sprintf("{{%s}} (%s%s)  %s%s", name, typ, req, label, def)
+}
+func (i captureTemplatePromptItem) Description() string { return "" }
+
+type captureTemplatePromptTypeItem struct {
+        value string
+        label string
+}
+
+func (i captureTemplatePromptTypeItem) FilterValue() string { return strings.TrimSpace(i.label) }
+func (i captureTemplatePromptTypeItem) Title() string {
+        if strings.TrimSpace(i.label) != "" {
+                return strings.TrimSpace(i.label)
+        }
+        return strings.TrimSpace(i.value)
+}
+func (i captureTemplatePromptTypeItem) Description() string { return "" }
 
 func (m *appModel) openCaptureTemplatesModal() {
         if m == nil {
@@ -112,6 +177,9 @@ func (m *appModel) sizeCaptureTemplatesModalLists() {
         m.captureTemplatesList.SetSize(w, h)
         m.captureTemplateWorkspaceList.SetSize(w, h)
         m.captureTemplateOutlineList.SetSize(w, h)
+        m.captureTemplatePromptsList.SetSize(w, h)
+        m.captureTemplatePromptTypeList.SetSize(w, h)
+        m.captureTemplatePromptRequiredList.SetSize(w, h)
 }
 
 func (m *appModel) refreshCaptureTemplatesList(preferKeys string) {
@@ -153,9 +221,248 @@ func (m *appModel) refreshCaptureTemplatesList(preferKeys string) {
 }
 
 func (m appModel) renderCaptureTemplatesModal() string {
-        desc := "Create, edit, and delete org-capture style templates (keys + target + optional defaults)."
+        desc := "Create, edit, and delete org-capture style templates (keys + target + prompts + optional defaults)."
         h := "\n\nenter/e: edit   n:new   d:delete   esc/ctrl+g: close"
         return renderModalBox(m.width, "Capture templates", desc+"\n\n"+m.captureTemplatesList.View()+h)
+}
+
+func (m appModel) renderCaptureTemplatePromptsModal() string {
+        desc := "Prompts are asked before capture starts. Answers become template variables like {{project}}."
+        h := "\n\nenter/e: edit   n:new   d:delete   ctrl+j/k: reorder   ctrl+s: next   esc/ctrl+g: cancel"
+        return renderModalBox(m.width, "Capture template: prompts", desc+"\n\n"+m.captureTemplatePromptsList.View()+h)
+}
+
+func (m *appModel) openCaptureTemplatePromptsModal(selectName string) {
+        if m == nil || m.captureTemplateEdit == nil {
+                return
+        }
+        m.captureTemplatePromptEdit = nil
+        m.captureTemplatePromptDeleteIdx = -1
+        m.modalForID = ""
+        m.modalForKey = ""
+        m.refreshCaptureTemplatePromptsList(selectName)
+        m.sizeCaptureTemplatesModalLists()
+        m.modal = modalCaptureTemplatePrompts
+}
+
+func (m *appModel) refreshCaptureTemplatePromptsList(selectName string) {
+        if m == nil || m.captureTemplateEdit == nil {
+                return
+        }
+        prompts := m.captureTemplateEdit.tmpl.Prompts
+        items := make([]list.Item, 0, len(prompts))
+        selected := 0
+        for i, p := range prompts {
+                items = append(items, captureTemplatePromptItem{idx: i, p: p})
+                if selectName != "" && strings.TrimSpace(p.Name) == strings.TrimSpace(selectName) {
+                        selected = i
+                }
+        }
+        m.captureTemplatePromptsList.SetItems(items)
+        m.sizeCaptureTemplatesModalLists()
+        if len(items) > 0 {
+                if selected < 0 {
+                        selected = 0
+                }
+                if selected >= len(items) {
+                        selected = len(items) - 1
+                }
+                m.captureTemplatePromptsList.Select(selected)
+        }
+}
+
+func (m *appModel) startCaptureTemplatePromptEditNew() {
+        if m == nil || m.captureTemplateEdit == nil {
+                return
+        }
+        m.captureTemplatePromptEdit = &captureTemplatePromptEditState{
+                idx:   -1,
+                stage: captureTemplatePromptEditName,
+                p: store.CaptureTemplatePrompt{
+                        Type: "string",
+                },
+        }
+        m.openInputModal(modalCaptureTemplatePromptName, "", "Prompt variable name", "")
+}
+
+func (m *appModel) startCaptureTemplatePromptEditSelected() {
+        if m == nil || m.captureTemplateEdit == nil {
+                return
+        }
+        it, ok := m.captureTemplatePromptsList.SelectedItem().(captureTemplatePromptItem)
+        if !ok {
+                return
+        }
+        m.captureTemplatePromptEdit = &captureTemplatePromptEditState{
+                idx:   it.idx,
+                stage: captureTemplatePromptEditName,
+                p:     it.p,
+        }
+        m.openInputModal(modalCaptureTemplatePromptName, "", "Prompt variable name", it.p.Name)
+}
+
+func (m *appModel) openCaptureTemplatePromptTypePicker(selected string) {
+        if m == nil {
+                return
+        }
+        opts := []list.Item{
+                captureTemplatePromptTypeItem{value: "string", label: "string (single-line)"},
+                captureTemplatePromptTypeItem{value: "multiline", label: "multiline (textarea)"},
+                captureTemplatePromptTypeItem{value: "choice", label: "choice (pick one)"},
+                captureTemplatePromptTypeItem{value: "confirm", label: "confirm (yes/no)"},
+        }
+        m.captureTemplatePromptTypeList.Title = ""
+        m.captureTemplatePromptTypeList.SetItems(opts)
+        m.sizeCaptureTemplatesModalLists()
+        sel := 0
+        selected = strings.TrimSpace(selected)
+        if selected != "" {
+                for i := 0; i < len(opts); i++ {
+                        if it, ok := opts[i].(captureTemplatePromptTypeItem); ok && strings.TrimSpace(it.value) == selected {
+                                sel = i
+                                break
+                        }
+                }
+        }
+        m.captureTemplatePromptTypeList.Select(sel)
+        m.modal = modalCaptureTemplatePromptPickType
+}
+
+func (m *appModel) openCaptureTemplatePromptRequiredPicker(required bool) {
+        if m == nil {
+                return
+        }
+        opts := []list.Item{
+                captureTemplatePromptTypeItem{value: "true", label: "Yes (required)"},
+                captureTemplatePromptTypeItem{value: "false", label: "No (optional)"},
+        }
+        m.captureTemplatePromptRequiredList.Title = ""
+        m.captureTemplatePromptRequiredList.SetItems(opts)
+        m.sizeCaptureTemplatesModalLists()
+        sel := 1
+        if required {
+                sel = 0
+        }
+        m.captureTemplatePromptRequiredList.Select(sel)
+        m.modal = modalCaptureTemplatePromptPickRequired
+}
+
+func (m *appModel) openCaptureTemplatePromptOptionsModal(initial []string) {
+        if m == nil {
+                return
+        }
+        m.modal = modalCaptureTemplatePromptOptions
+        m.modalForID = ""
+        m.modalForKey = ""
+        m.textFocus = textFocusBody
+
+        bodyW := modalBodyWidth(m.width)
+        h := m.height - 12
+        if h < 6 {
+                h = 6
+        }
+        if h > 16 {
+                h = 16
+        }
+
+        m.textarea.Placeholder = "Options (one per line)"
+        m.textarea.SetWidth(bodyW)
+        m.textarea.SetHeight(h)
+        m.textarea.SetValue(strings.Join(initial, "\n"))
+        m.textarea.Focus()
+}
+
+func (m *appModel) saveCaptureTemplatePromptEdit() error {
+        if m == nil || m.captureTemplateEdit == nil || m.captureTemplatePromptEdit == nil {
+                return nil
+        }
+        pe := *m.captureTemplatePromptEdit
+
+        prompts := append([]store.CaptureTemplatePrompt{}, m.captureTemplateEdit.tmpl.Prompts...)
+        if pe.idx < 0 {
+                prompts = append(prompts, pe.p)
+        } else if pe.idx < len(prompts) {
+                prompts[pe.idx] = pe.p
+        } else {
+                return fmt.Errorf("prompt edit index out of range: %d", pe.idx)
+        }
+        if err := store.ValidateCaptureTemplatePrompts(prompts); err != nil {
+                return err
+        }
+        m.captureTemplateEdit.tmpl.Prompts = prompts
+        return nil
+}
+
+func (m *appModel) deleteSelectedCaptureTemplatePrompt() {
+        if m == nil || m.captureTemplateEdit == nil {
+                return
+        }
+        it, ok := m.captureTemplatePromptsList.SelectedItem().(captureTemplatePromptItem)
+        if !ok {
+                return
+        }
+        m.captureTemplatePromptDeleteIdx = it.idx
+        m.modalForID = strings.TrimSpace(it.p.Name)
+        m.modalForKey = strings.TrimSpace(it.p.Type)
+        m.modal = modalConfirmDeleteCaptureTemplatePrompt
+}
+
+func (m *appModel) confirmDeleteCaptureTemplatePrompt() error {
+        if m == nil || m.captureTemplateEdit == nil {
+                return nil
+        }
+        idx := m.captureTemplatePromptDeleteIdx
+        m.captureTemplatePromptDeleteIdx = -1
+        if idx < 0 || idx >= len(m.captureTemplateEdit.tmpl.Prompts) {
+                return nil
+        }
+        prompts := append([]store.CaptureTemplatePrompt{}, m.captureTemplateEdit.tmpl.Prompts...)
+        prompts = append(prompts[:idx], prompts[idx+1:]...)
+        if err := store.ValidateCaptureTemplatePrompts(prompts); err != nil {
+                return err
+        }
+        m.captureTemplateEdit.tmpl.Prompts = prompts
+        return nil
+}
+
+func (m *appModel) moveCaptureTemplatePrompt(delta int) error {
+        if m == nil || m.captureTemplateEdit == nil || delta == 0 {
+                return nil
+        }
+        it, ok := m.captureTemplatePromptsList.SelectedItem().(captureTemplatePromptItem)
+        if !ok {
+                return nil
+        }
+        idx := it.idx
+        nextIdx := idx + delta
+        if idx < 0 || nextIdx < 0 || nextIdx >= len(m.captureTemplateEdit.tmpl.Prompts) {
+                return nil
+        }
+        prompts := m.captureTemplateEdit.tmpl.Prompts
+        prompts[idx], prompts[nextIdx] = prompts[nextIdx], prompts[idx]
+        m.captureTemplateEdit.tmpl.Prompts = prompts
+        return nil
+}
+
+func parseCaptureTemplatePromptOptionsInput(s string) []string {
+        s = strings.ReplaceAll(s, "\r\n", "\n")
+        s = strings.TrimSpace(s)
+        if s == "" {
+                return nil
+        }
+        lines := strings.Split(s, "\n")
+        out := make([]string, 0, len(lines))
+        for _, ln := range lines {
+                ln = strings.TrimSpace(ln)
+                if ln == "" {
+                        continue
+                }
+                out = append(out, ln)
+        }
+        if len(out) == 0 {
+                return nil
+        }
+        return out
 }
 
 func (m *appModel) startCaptureTemplateEditNew() {
@@ -389,6 +696,76 @@ func (m *appModel) saveCaptureTemplateEdit() error {
                 return err
         }
         return store.SaveConfig(cfg)
+}
+
+func (m appModel) renderConfirmDeleteCaptureTemplatePromptModal() string {
+        name := strings.TrimSpace(m.modalForID)
+        typ := strings.TrimSpace(m.modalForKey)
+        if name == "" {
+                name = "this prompt"
+        } else {
+                name = fmt.Sprintf("{{%s}}", name)
+        }
+        body := fmt.Sprintf("Delete %s?\n\nType: %s\n\nenter/y: delete   esc/n: cancel", name, typ)
+        return renderModalBox(m.width, "Confirm", body)
+}
+
+func (m *appModel) updateCaptureTemplatePromptsModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+        if m == nil {
+                return appModel{}, nil
+        }
+        switch km := msg.(type) {
+        case tea.KeyMsg:
+                switch km.String() {
+                case "esc", "ctrl+g":
+                        // Cancel template editing.
+                        m.captureTemplateEdit = nil
+                        m.captureTemplatePromptEdit = nil
+                        m.captureTemplatePromptDeleteIdx = -1
+                        m.modalForID = ""
+                        m.modalForKey = ""
+                        m.modal = modalCaptureTemplates
+                        return *m, nil
+                case "ctrl+s":
+                        if m.captureTemplateEdit == nil {
+                                m.modal = modalCaptureTemplates
+                                return *m, nil
+                        }
+                        m.captureTemplateEdit.stage = captureTemplateEditDefaultTitle
+                        m.openInputModal(modalCaptureTemplateDefaultTitle, "", "Default title (optional)", m.captureTemplateEdit.tmpl.Defaults.Title)
+                        return *m, nil
+                case "n":
+                        m.startCaptureTemplatePromptEditNew()
+                        return *m, nil
+                case "e", "enter":
+                        m.startCaptureTemplatePromptEditSelected()
+                        return *m, nil
+                case "d":
+                        m.deleteSelectedCaptureTemplatePrompt()
+                        return *m, nil
+                case "ctrl+k":
+                        if err := m.moveCaptureTemplatePrompt(-1); err != nil {
+                                m.showMinibuffer("Reorder failed: " + err.Error())
+                                return *m, nil
+                        }
+                        nm := *m
+                        nm.refreshCaptureTemplatePromptsList("")
+                        nm.captureTemplatePromptsList.CursorUp()
+                        return nm, nil
+                case "ctrl+j":
+                        if err := m.moveCaptureTemplatePrompt(+1); err != nil {
+                                m.showMinibuffer("Reorder failed: " + err.Error())
+                                return *m, nil
+                        }
+                        nm := *m
+                        nm.refreshCaptureTemplatePromptsList("")
+                        nm.captureTemplatePromptsList.CursorDown()
+                        return nm, nil
+                }
+        }
+        var cmd tea.Cmd
+        m.captureTemplatePromptsList, cmd = m.captureTemplatePromptsList.Update(msg)
+        return *m, cmd
 }
 
 func (m *appModel) deleteSelectedCaptureTemplate() {

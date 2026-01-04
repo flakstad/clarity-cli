@@ -493,7 +493,7 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
         // webtui: long-running server command; cover flags via --help (no server start).
         run(t, invocation{name: "webtui --help (--addr)", cmdPath: "webtui", args: []string{"--dir", dir, "webtui", "--addr", "127.0.0.1:0", "--help"}, expect: expectRawText})
         // capture: interactive TUI; cover flags via --help (no capture start).
-        run(t, invocation{name: "capture --help (--hotkey --no-output --exit-0-on-cancel)", cmdPath: "capture", args: []string{"--dir", dir, "capture", "--hotkey", "--no-output", "--exit-0-on-cancel", "--help"}, expect: expectRawText})
+        run(t, invocation{name: "capture --help (--hotkey --no-output --exit-0-on-cancel --url --selection)", cmdPath: "capture", args: []string{"--dir", dir, "capture", "--hotkey", "--no-output", "--exit-0-on-cancel", "--url", "https://example.com", "--selection", "hello", "--help"}, expect: expectRawText})
 
         // --- Coverage assertions ---
         leafCmds, rootPersistentFlags, localFlagsByCmd := buildCoverageIndex()
