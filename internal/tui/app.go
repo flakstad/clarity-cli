@@ -1430,7 +1430,12 @@ func (m *appModel) viewProjects() string {
         }
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-        body := m.listBodyWithOverflowHint(&m.projectsList, contentW, bodyHeight)
+        listH := bodyHeight - 2
+        if listH < 0 {
+                listH = 0
+        }
+        body := m.listBodyWithOverflowHint(&m.projectsList, contentW, listH)
+        body += "\n\n" + renderNewButtonLine(contentW, "New project", "n")
         main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
         main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
         if m.modal == modalNone {
@@ -1462,7 +1467,12 @@ func (m *appModel) viewOutlines() string {
         }
 
         crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-        body := m.listBodyWithOverflowHint(&m.outlinesList, contentW, bodyHeight)
+        listH := bodyHeight - 2
+        if listH < 0 {
+                listH = 0
+        }
+        body := m.listBodyWithOverflowHint(&m.outlinesList, contentW, listH)
+        body += "\n\n" + renderNewButtonLine(contentW, "New outline", "n")
         main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
         main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
         if m.modal == modalNone {
@@ -1471,6 +1481,35 @@ func (m *appModel) viewOutlines() string {
         bg := dimBackground(main)
         fg := m.renderModal()
         return overlayCenter(bg, fg, w, frameH)
+}
+
+func renderNewButtonLine(width int, label string, shortcut string) string {
+        if width <= 0 {
+                return ""
+        }
+        key := lipgloss.NewStyle().
+                Padding(0, 1).
+                Background(colorControlBg).
+                Foreground(colorSurfaceFg).
+                Bold(true).
+                Render(shortcut)
+        btn := lipgloss.NewStyle().
+                Padding(0, 1).
+                Background(colorControlBg).
+                Foreground(colorSurfaceFg).
+                Render(label)
+        out := lipgloss.JoinHorizontal(lipgloss.Left, key, " ", btn, " ", styleMuted().Render("(press "+shortcut+")"))
+        return cutToWidth(out, width)
+}
+
+func cutToWidth(s string, w int) string {
+        if w <= 0 {
+                return ""
+        }
+        if xansi.StringWidth(s) <= w {
+                return s
+        }
+        return xansi.Cut(s, 0, w) + "\x1b[0m"
 }
 
 func (m *appModel) viewAgenda() string {
@@ -2561,15 +2600,64 @@ func (m *appModel) refreshProjects() {
         if it, ok := m.projectsList.SelectedItem().(projectItem); ok {
                 curID = it.project.ID
         }
+
+        // Precompute per-project metadata for card rendering.
+        metas := map[string]projectCardMeta{}
+        outlineByID := map[string]model.Outline{}
+        for _, o := range m.db.Outlines {
+                outlineByID[o.ID] = o
+                pid := strings.TrimSpace(o.ProjectID)
+                if pid == "" {
+                        continue
+                }
+                meta := metas[pid]
+                if o.Archived {
+                        meta.outlinesArchived++
+                } else {
+                        meta.outlinesTotal++
+                }
+                metas[pid] = meta
+        }
+        for _, it := range m.db.Items {
+                if it.Archived {
+                        continue
+                }
+                pid := strings.TrimSpace(it.ProjectID)
+                if pid == "" {
+                        continue
+                }
+                meta := metas[pid]
+                meta.itemsTotal++
+
+                sid := strings.TrimSpace(it.StatusID)
+                if sid == "" {
+                        meta.itemsNoStatus++
+                }
+                done := false
+                if o, ok := outlineByID[strings.TrimSpace(it.OutlineID)]; ok && sid != "" {
+                        done = isEndState(o, sid)
+                }
+                if done {
+                        meta.itemsDone++
+                } else if it.OnHold {
+                        meta.itemsOnHold++
+                }
+
+                if !it.UpdatedAt.IsZero() && (!meta.hasUpdated || it.UpdatedAt.After(meta.updatedAt)) {
+                        meta.updatedAt = it.UpdatedAt
+                        meta.hasUpdated = true
+                }
+                metas[pid] = meta
+        }
+
         var items []list.Item
         for _, p := range m.db.Projects {
                 if p.Archived {
                         continue
                 }
-                items = append(items, projectItem{project: p, current: p.ID == m.db.CurrentProjectID})
+                meta := metas[strings.TrimSpace(p.ID)]
+                items = append(items, projectItem{project: p, current: p.ID == m.db.CurrentProjectID, meta: meta})
         }
-        // Always-present affordance for creating a project (same as pressing "n").
-        items = append(items, addProjectRow{})
         m.projectsList.SetItems(items)
         if curID != "" {
                 selectListItemByID(&m.projectsList, curID)
@@ -2584,17 +2672,66 @@ func (m *appModel) refreshOutlines(projectID string) {
         if it, ok := m.outlinesList.SelectedItem().(outlineItem); ok {
                 curID = it.outline.ID
         }
+
+        // Precompute per-outline metadata for card rendering.
+        outlineByID := map[string]model.Outline{}
+        for _, o := range m.db.Outlines {
+                if strings.TrimSpace(o.ProjectID) != strings.TrimSpace(projectID) {
+                        continue
+                }
+                outlineByID[o.ID] = o
+        }
+        metas := map[string]outlineCardMeta{}
+        for _, it := range m.db.Items {
+                if it.Archived {
+                        continue
+                }
+                if strings.TrimSpace(it.ProjectID) != strings.TrimSpace(projectID) {
+                        continue
+                }
+                oid := strings.TrimSpace(it.OutlineID)
+                if oid == "" {
+                        continue
+                }
+                meta := metas[oid]
+                meta.itemsTotal++
+                if it.ParentID == nil || strings.TrimSpace(*it.ParentID) == "" {
+                        meta.topLevel++
+                }
+
+                sid := strings.TrimSpace(it.StatusID)
+                if sid == "" {
+                        meta.itemsNoStatus++
+                } else {
+                        meta.itemsWithStatus++
+                }
+                done := false
+                if o, ok := outlineByID[oid]; ok && sid != "" {
+                        done = isEndState(o, sid)
+                }
+                if done {
+                        meta.itemsDone++
+                } else if it.OnHold {
+                        meta.itemsOnHold++
+                }
+
+                if !it.UpdatedAt.IsZero() && (!meta.hasUpdated || it.UpdatedAt.After(meta.updatedAt)) {
+                        meta.updatedAt = it.UpdatedAt
+                        meta.hasUpdated = true
+                }
+                metas[oid] = meta
+        }
+
         var items []list.Item
         for _, o := range m.db.Outlines {
                 if o.ProjectID == projectID {
                         if o.Archived {
                                 continue
                         }
-                        items = append(items, outlineItem{outline: o})
+                        meta := metas[strings.TrimSpace(o.ID)]
+                        items = append(items, outlineItem{outline: o, meta: meta})
                 }
         }
-        // Always-present affordance for creating an outline (same as pressing "n").
-        items = append(items, addOutlineRow{})
         m.outlinesList.SetItems(items)
         if curID != "" {
                 selectListItemByID(&m.outlinesList, curID)

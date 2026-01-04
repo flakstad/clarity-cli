@@ -37,8 +37,10 @@ func TestProjectsAndOutlinesHaveAddRow(t *testing.T) {
         if len(m.projectsList.Items()) == 0 {
                 t.Fatalf("expected projects list items")
         }
-        if _, ok := m.projectsList.Items()[len(m.projectsList.Items())-1].(addProjectRow); !ok {
-                t.Fatalf("expected last projects row to be addProjectRow")
+        for _, it := range m.projectsList.Items() {
+                if _, ok := it.(addProjectRow); ok {
+                        t.Fatalf("did not expect addProjectRow in projects list")
+                }
         }
 
         m.selectedProjectID = projectID
@@ -47,8 +49,10 @@ func TestProjectsAndOutlinesHaveAddRow(t *testing.T) {
         if len(m.outlinesList.Items()) == 0 {
                 t.Fatalf("expected outlines list items")
         }
-        if _, ok := m.outlinesList.Items()[len(m.outlinesList.Items())-1].(addOutlineRow); !ok {
-                t.Fatalf("expected last outlines row to be addOutlineRow")
+        for _, it := range m.outlinesList.Items() {
+                if _, ok := it.(addOutlineRow); ok {
+                        t.Fatalf("did not expect addOutlineRow in outlines list")
+                }
         }
 }
 
@@ -73,24 +77,22 @@ func TestAddRowEnterOpensSameModalAsN(t *testing.T) {
                 Worklog:          []model.WorklogEntry{},
         }
 
-        // Projects view: Enter on "+ Add" should open modalNewProject (same as "n").
+        // Projects view: "n" opens modalNewProject.
         mp := newAppModelWithWorkspace(t.TempDir(), db, "ws")
         mp.view = viewProjects
         mp.refreshProjects()
-        mp.projectsList.Select(len(mp.projectsList.Items()) - 1) // select addProjectRow
-        nm, _ := mp.Update(tea.KeyMsg{Type: tea.KeyEnter})
+        nm, _ := mp.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
         mp2 := nm.(appModel)
         if mp2.modal != modalNewProject {
                 t.Fatalf("expected modalNewProject; got %v", mp2.modal)
         }
 
-        // Outlines view: Enter on "+ Add" should open modalNewOutline (same as "n").
+        // Outlines view: "n" opens modalNewOutline.
         mo := newAppModelWithWorkspace(t.TempDir(), db, "ws")
         mo.view = viewOutlines
         mo.selectedProjectID = projectID
         mo.refreshOutlines(projectID)
-        mo.outlinesList.Select(len(mo.outlinesList.Items()) - 1) // select addOutlineRow
-        nm2, _ := mo.Update(tea.KeyMsg{Type: tea.KeyEnter})
+        nm2, _ := mo.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
         mo2 := nm2.(appModel)
         if mo2.modal != modalNewOutline {
                 t.Fatalf("expected modalNewOutline; got %v", mo2.modal)

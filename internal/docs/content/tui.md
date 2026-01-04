@@ -6,6 +6,7 @@ Current scope (early):
 - Centered layout by default (projects/outlines/outline/item views)
 - Breadcrumb at the top showing where you are (projects > project > outline > item)
 - Go to projects → outlines → items
+- Projects and outlines are shown as cards with basic metadata (counts + created/updated)
 - Optional preview pane for item details (outline on the left, preview on the right)
 - Full-screen item view (single pane)
 - Auto-refresh when the local store changes (polls file mtimes)

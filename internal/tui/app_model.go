@@ -231,9 +231,9 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
         m.debugLogPath = strings.TrimSpace(os.Getenv("CLARITY_TUI_DEBUG_LOG"))
 
         m.projectsList = newList("Projects", "Select a project", []list.Item{})
-        m.projectsList.SetDelegate(newCompactItemDelegate())
+        m.projectsList.SetDelegate(newProjectCardDelegate())
         m.outlinesList = newList("Outlines", "Select an outline", []list.Item{})
-        m.outlinesList.SetDelegate(newCompactItemDelegate())
+        m.outlinesList.SetDelegate(newOutlineCardDelegate())
         m.itemsList = newList("Outline", "Go to items (split view)", []list.Item{})
         m.itemsList.SetDelegate(newOutlineItemDelegate())
         // Enable "/" filtering to quickly scope down large outlines.

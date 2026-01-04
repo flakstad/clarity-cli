@@ -4,6 +4,7 @@ import (
         "fmt"
         "math"
         "strings"
+        "time"
 
         "clarity-cli/internal/model"
 
@@ -14,6 +15,7 @@ import (
 type projectItem struct {
         project model.Project
         current bool
+        meta    projectCardMeta
 }
 
 func (i projectItem) FilterValue() string { return i.project.Name }
@@ -25,8 +27,22 @@ func (i projectItem) Title() string {
 }
 func (i projectItem) Description() string { return i.project.ID }
 
+type projectCardMeta struct {
+        outlinesTotal    int
+        outlinesArchived int
+
+        itemsTotal    int
+        itemsDone     int
+        itemsOnHold   int
+        itemsNoStatus int
+
+        updatedAt  time.Time
+        hasUpdated bool
+}
+
 type outlineItem struct {
         outline model.Outline
+        meta    outlineCardMeta
 }
 
 func outlineDisplayName(o model.Outline) string {
@@ -46,6 +62,19 @@ func (i outlineItem) Title() string {
         return outlineDisplayName(i.outline)
 }
 func (i outlineItem) Description() string { return i.outline.ID }
+
+type outlineCardMeta struct {
+        topLevel int
+
+        itemsTotal      int
+        itemsWithStatus int
+        itemsDone       int
+        itemsOnHold     int
+        itemsNoStatus   int
+
+        updatedAt  time.Time
+        hasUpdated bool
+}
 
 // outlineMoveOptionItem is used by the "Move to outline" picker.
 // Unlike outlineItem, it includes the project name in the display to disambiguate

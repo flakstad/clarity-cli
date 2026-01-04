@@ -509,11 +509,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.refreshOutlines(it.project.ID)
                                         return m, nil
                                 }
-                                if _, ok := m.projectsList.SelectedItem().(addProjectRow); ok {
-                                        // "+ Add" (same as pressing "n")
-                                        m.openInputModal(modalNewProject, "", "Project name", "")
-                                        return m, nil
-                                }
                         case viewOutlines:
                                 if it, ok := m.outlinesList.SelectedItem().(outlineItem); ok {
                                         m.selectedOutlineID = it.outline.ID
@@ -524,11 +519,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.itemArchivedReadOnly = false
                                         m.collapsed = map[string]bool{}
                                         m.refreshItems(it.outline)
-                                        return m, nil
-                                }
-                                if _, ok := m.outlinesList.SelectedItem().(addOutlineRow); ok {
-                                        // "+ Add" (same as pressing "n")
-                                        m.openInputModal(modalNewOutline, "", "Outline name (optional)", "")
                                         return m, nil
                                 }
                         case viewAgenda:
