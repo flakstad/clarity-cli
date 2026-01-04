@@ -4,6 +4,9 @@ import (
         "context"
         "errors"
         "fmt"
+        "os"
+        "os/exec"
+        "path/filepath"
         "sort"
         "strings"
         "time"
@@ -31,6 +34,12 @@ type captureFinishedMsg struct {
         result   CaptureResult
         canceled bool
 }
+
+// captureOpenTemplatesMsg is sent by embedded capture to ask the parent app model
+// to open the capture templates manager.
+type captureOpenTemplatesMsg struct{}
+
+type captureEditConfigDoneMsg struct{ err error }
 
 func RunCapture(cfg *store.GlobalConfig, actorOverride string) (CaptureResult, error) {
         applyThemePreference()
@@ -301,6 +310,23 @@ func newEmbeddedCaptureModel(cfg *store.GlobalConfig, actorOverride string) (cap
         return m, nil
 }
 
+func (m *captureModel) reloadTemplates(cfg *store.GlobalConfig) {
+        if m == nil {
+                return
+        }
+        if cfg == nil {
+                cfg = &store.GlobalConfig{}
+        }
+        if err := store.ValidateCaptureTemplates(cfg); err != nil {
+                m.minibuffer = "Templates: " + err.Error()
+                return
+        }
+        m.cfg = cfg
+        m.templateTree = buildCaptureTemplateTree(cfg.CaptureTemplates)
+        m.templatePrefix = nil
+        m.refreshTemplateList()
+}
+
 func (m *captureModel) outlineLabel(ws, outlineID string) string {
         ws = strings.TrimSpace(ws)
         outlineID = strings.TrimSpace(outlineID)
@@ -421,6 +447,20 @@ func (m captureModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 m.resizeLists()
                 return m, nil
 
+        case captureEditConfigDoneMsg:
+                if msg.err != nil {
+                        m.minibuffer = "Edit templates: " + msg.err.Error()
+                        return m, nil
+                }
+                cfg, err := store.LoadConfig()
+                if err != nil {
+                        m.minibuffer = "Reload templates: " + err.Error()
+                        return m, nil
+                }
+                (&m).reloadTemplates(cfg)
+                m.minibuffer = "Templates reloaded"
+                return m, nil
+
         case tea.KeyMsg:
                 // Global cancel.
                 switch msg.String() {
@@ -491,6 +531,26 @@ func (m *captureModel) closeModal() {
 
 func (m captureModel) updateTemplateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
         switch msg.String() {
+        case "ctrl+t":
+                if !m.quitOnDone {
+                        return m, func() tea.Msg { return captureOpenTemplatesMsg{} }
+                }
+                path, err := store.ConfigPath()
+                if err != nil {
+                        m.minibuffer = "Edit templates: " + err.Error()
+                        return m, nil
+                }
+                _ = os.MkdirAll(filepath.Dir(path), 0o755)
+                if _, err := os.Stat(path); err != nil {
+                        _ = os.WriteFile(path, []byte("{}\n"), 0o644)
+                }
+                editor := strings.TrimSpace(externalEditorName())
+                if editor == "" {
+                        m.minibuffer = "Edit templates: set $VISUAL or $EDITOR"
+                        return m, nil
+                }
+                cmd := exec.Command(editor, path)
+                return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return captureEditConfigDoneMsg{err: err} })
         case "backspace":
                 if len(m.templatePrefix) > 0 {
                         m.templatePrefix = m.templatePrefix[:len(m.templatePrefix)-1]
@@ -598,6 +658,14 @@ func (m *captureModel) startDraftFromTemplate(t store.CaptureTemplate) error {
                 return fmt.Errorf("outline not found in workspace %q: %s", ws, outID)
         }
 
+        exp := newCaptureExpansionContext(ws, o.ID)
+        defaultTitle := expandCaptureTemplateString(t.Defaults.Title, exp)
+        defaultTitle = strings.ReplaceAll(defaultTitle, "\n", " ")
+        defaultTitle = strings.ReplaceAll(defaultTitle, "\r", " ")
+        defaultTitle = strings.TrimSpace(defaultTitle)
+        defaultDesc := expandCaptureTemplateString(t.Defaults.Description, exp)
+        defaultTags := store.NormalizeCaptureTemplateTags(t.Defaults.Tags)
+
         m.workspace = ws
         m.dir = dir
         m.st = st
@@ -615,11 +683,16 @@ func (m *captureModel) startDraftFromTemplate(t store.CaptureTemplate) error {
         m.draftCollapsed = map[string]bool{}
         m.draftSeq = 0
         // Seed with a single root draft item.
-        rootID := m.addDraftItem(nil, "")
+        rootID := m.addDraftItem(nil, defaultTitle)
+        if d := m.findDraftItem(rootID); d != nil {
+                d.Description = defaultDesc
+                d.Tags = defaultTags
+                m.setDraftItem(*d)
+        }
         m.phase = capturePhaseEditDraft
         m.modal = captureModalEditTitle
         m.minibuffer = warn
-        m.openTitleModal(rootID, "")
+        m.openTitleModal(rootID, defaultTitle)
         m.refreshDraftList()
         return nil
 }
@@ -1468,7 +1541,7 @@ func (m captureModel) View() string {
                 title = "Capture: template"
                 body = m.templateList.View()
                 if strings.TrimSpace(m.templateHint) != "" {
-                        body = body + "\n\n" + m.templateHint + "\n(backspace: up  enter: select  esc: cancel)"
+                        body = body + "\n\n" + m.templateHint + "\n(backspace: up  enter: select  ctrl+t: templates  esc: cancel)"
                 }
         case capturePhaseEditDraft:
                 title = "Capture: draft"

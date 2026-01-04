@@ -51,3 +51,10 @@ func TestValidateCaptureTemplates(t *testing.T) {
                 t.Fatalf("expected duplicate-keys error")
         }
 }
+
+func TestNormalizeCaptureTemplateTags(t *testing.T) {
+        got := NormalizeCaptureTemplateTags([]string{"  foo ", "#bar", "", "foo"})
+        if len(got) != 2 || got[0] != "foo" || got[1] != "bar" {
+                t.Fatalf("unexpected tags: %#v", got)
+        }
+}

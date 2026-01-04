@@ -1824,14 +1824,11 @@ func (s *Server) handleCaptureTemplateUpsert(w http.ResponseWriter, r *http.Requ
                         continue
                 }
                 if strings.Join(ks, "") == keyPath {
-                        next = append(next, store.CaptureTemplate{
-                                Name: name,
-                                Keys: keys,
-                                Target: store.CaptureTemplateTarget{
-                                        Workspace: wsName,
-                                        OutlineID: outlineID,
-                                },
-                        })
+                        updated := t
+                        updated.Name = name
+                        updated.Keys = keys
+                        updated.Target = store.CaptureTemplateTarget{Workspace: wsName, OutlineID: outlineID}
+                        next = append(next, updated)
                         replaced = true
                         continue
                 }

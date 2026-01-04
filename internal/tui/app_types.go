@@ -137,6 +137,9 @@ const (
         modalCaptureTemplateKeys
         modalCaptureTemplatePickWorkspace
         modalCaptureTemplatePickOutline
+        modalCaptureTemplateDefaultTitle
+        modalCaptureTemplateDefaultDescription
+        modalCaptureTemplateDefaultTags
         modalConfirmDeleteCaptureTemplate
         modalCapture
         modalGitSetupRemote

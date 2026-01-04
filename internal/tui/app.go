@@ -3527,6 +3527,12 @@ func (m *appModel) renderModal() string {
                 return renderModalBox(m.width, "Capture template: workspace", "Pick the target workspace for this template.\n\n"+m.captureTemplateWorkspaceList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
         case modalCaptureTemplatePickOutline:
                 return renderModalBox(m.width, "Capture template: outline", "Pick the target outline (archived outlines are hidden).\n\n"+m.captureTemplateOutlineList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
+        case modalCaptureTemplateDefaultTitle:
+                return m.renderInputModalWithDescription("Capture template: default title", "Optional. Used to prefill the capture title.\n\nExpansions: {{date}} {{time}} {{now}} {{clipboard}} {{url}} {{selection}}")
+        case modalCaptureTemplateDefaultDescription:
+                return renderModalBox(m.width, "Capture template: default description", "Optional. Used to prefill the capture description.\n\nExpansions: {{date}} {{time}} {{now}} {{clipboard}} {{url}} {{selection}}\n- Override sources via env: CLARITY_CAPTURE_CLIPBOARD / CLARITY_CAPTURE_URL / CLARITY_CAPTURE_SELECTION\n\n"+m.textarea.View()+"\n\nctrl+s: save   esc/ctrl+g: cancel")
+        case modalCaptureTemplateDefaultTags:
+                return m.renderInputModalWithDescription("Capture template: default tags", "Optional. Space- or comma-separated (e.g. \"inbox ops\"). Stored without leading #.")
         case modalConfirmDeleteCaptureTemplate:
                 return m.renderConfirmDeleteCaptureTemplateModal()
         case modalGitSetupRemote:
@@ -4723,6 +4729,45 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, nil
                 }
 
+                if m.modal == modalCaptureTemplateDefaultDescription {
+                        switch km := msg.(type) {
+                        case tea.KeyMsg:
+                                switch km.String() {
+                                case "esc", "ctrl+g":
+                                        m.modal = modalCaptureTemplates
+                                        m.captureTemplateEdit = nil
+                                        m.modalForID = ""
+                                        m.modalForKey = ""
+                                        m.textarea.SetValue("")
+                                        m.textarea.Blur()
+                                        m.textFocus = textFocusBody
+                                        return m, nil
+                                case "ctrl+s":
+                                        if m.captureTemplateEdit == nil {
+                                                m.modal = modalCaptureTemplates
+                                                m.textarea.SetValue("")
+                                                m.textarea.Blur()
+                                                return m, nil
+                                        }
+                                        m.captureTemplateEdit.tmpl.Defaults.Description = strings.TrimSpace(m.textarea.Value())
+                                        m.captureTemplateEdit.stage = captureTemplateEditDefaultTags
+                                        initial := strings.Join(m.captureTemplateEdit.tmpl.Defaults.Tags, " ")
+
+                                        m.modalForID = ""
+                                        m.modalForKey = ""
+                                        m.textarea.SetValue("")
+                                        m.textarea.Blur()
+                                        m.textFocus = textFocusBody
+
+                                        m.openInputModal(modalCaptureTemplateDefaultTags, "", "Default tags (optional)", initial)
+                                        return m, nil
+                                }
+                        }
+                        var cmd tea.Cmd
+                        m.textarea, cmd = m.textarea.Update(msg)
+                        return m, cmd
+                }
+
                 if m.modal == modalAddComment || m.modal == modalReplyComment || m.modal == modalAddWorklog || m.modal == modalEditDescription || m.modal == modalEditOutlineDescription || m.modal == modalStatusNote {
                         switch km := msg.(type) {
                         case tea.KeyMsg:
@@ -5256,16 +5301,8 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                 return m, nil
                                         }
                                         m.captureTemplateEdit.tmpl.Target.OutlineID = oid
-                                        if err := m.saveCaptureTemplateEdit(); err != nil {
-                                                m.showMinibuffer("Save failed: " + err.Error())
-                                                m.modal = modalCaptureTemplates
-                                                return m, nil
-                                        }
-                                        keys := strings.Join(m.captureTemplateEdit.tmpl.Keys, "")
-                                        m.captureTemplateEdit = nil
-                                        m.showMinibuffer("Template saved")
-                                        m.modal = modalCaptureTemplates
-                                        m.refreshCaptureTemplatesList(keys)
+                                        m.captureTemplateEdit.stage = captureTemplateEditDefaultTitle
+                                        m.openInputModal(modalCaptureTemplateDefaultTitle, "", "Default title (optional)", m.captureTemplateEdit.tmpl.Defaults.Title)
                                         return m, nil
                                 }
                         }
@@ -5278,7 +5315,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case tea.KeyMsg:
                         switch km.String() {
                         case "esc", "ctrl+g":
-                                if m.modal == modalCaptureTemplateName || m.modal == modalCaptureTemplateKeys {
+                                if m.modal == modalCaptureTemplateName || m.modal == modalCaptureTemplateKeys || m.modal == modalCaptureTemplateDefaultTitle || m.modal == modalCaptureTemplateDefaultTags {
                                         m.modal = modalCaptureTemplates
                                         m.captureTemplateEdit = nil
                                         m.modalForID = ""
@@ -5377,6 +5414,32 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.captureTemplateEdit.tmpl.Keys = keys
                                         m.captureTemplateEdit.stage = captureTemplateEditWorkspace
                                         m.openCaptureTemplateWorkspacePicker(m.captureTemplateEdit.tmpl.Target.Workspace)
+                                        return m, nil
+                                case modalCaptureTemplateDefaultTitle:
+                                        if m.captureTemplateEdit == nil {
+                                                m.modal = modalCaptureTemplates
+                                                return m, nil
+                                        }
+                                        m.captureTemplateEdit.tmpl.Defaults.Title = val // allow empty
+                                        m.captureTemplateEdit.stage = captureTemplateEditDefaultDescription
+                                        m.openCaptureTemplateDefaultDescriptionModal(m.captureTemplateEdit.tmpl.Defaults.Description)
+                                        return m, nil
+                                case modalCaptureTemplateDefaultTags:
+                                        if m.captureTemplateEdit == nil {
+                                                m.modal = modalCaptureTemplates
+                                                return m, nil
+                                        }
+                                        m.captureTemplateEdit.tmpl.Defaults.Tags = store.NormalizeCaptureTemplateTags(parseCaptureTemplateTagsInput(val))
+                                        if err := m.saveCaptureTemplateEdit(); err != nil {
+                                                m.showMinibuffer("Save failed: " + err.Error())
+                                                m.modal = modalCaptureTemplates
+                                                return m, nil
+                                        }
+                                        keys := strings.Join(m.captureTemplateEdit.tmpl.Keys, "")
+                                        m.captureTemplateEdit = nil
+                                        m.showMinibuffer("Template saved")
+                                        m.modal = modalCaptureTemplates
+                                        m.refreshCaptureTemplatesList(keys)
                                         return m, nil
                                 case modalJumpToItem:
                                         val = normalizeJumpItemID(val)

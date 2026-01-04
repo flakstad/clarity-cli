@@ -67,6 +67,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 // Embedded capture flow completed; return to the main TUI.
                 m.modal = modalNone
                 m.capture = nil
+                m.returnToCaptureAfterTemplates = false
                 if msg.canceled {
                         return m, nil
                 }
@@ -80,6 +81,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 if strings.TrimSpace(msg.result.Dir) != "" && strings.TrimSpace(msg.result.Dir) == strings.TrimSpace(m.dir) {
                         _ = m.reloadFromDisk()
                 }
+                return m, nil
+
+        case captureOpenTemplatesMsg:
+                // Capture modal requested opening the templates manager; keep capture state so we can return.
+                m.returnToCaptureAfterTemplates = true
+                m.openCaptureTemplatesModal()
                 return m, nil
 
         case previewComputeMsg:

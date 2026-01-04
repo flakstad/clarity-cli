@@ -51,7 +51,8 @@ Example:
     {
       "name": "Work inbox",
       "keys": ["w", "i"],
-      "target": { "workspace": "Flakstad Software", "outlineId": "out-y2v74pgi" }
+      "target": { "workspace": "Flakstad Software", "outlineId": "out-y2v74pgi" },
+      "defaults": { "title": "Inbox: {{date}}", "tags": ["inbox"] }
     },
     {
       "name": "Personal inbox",
@@ -65,6 +66,24 @@ Example:
 Notes:
 - `target` is stored as `(workspace name, outline id)` for stability, but the TUI shows outline names (users shouldn’t need to think about ids).
 - During capture you can change the target outline (move) before saving; if the destination outline has different status definitions, capture will prompt you to pick a valid status.
+
+### Template defaults (v2)
+
+Templates can optionally seed the capture draft with defaults:
+- `defaults.title` (string)
+- `defaults.description` (string, Markdown)
+- `defaults.tags` (list of strings; stored without leading `#`)
+
+`defaults.title` and `defaults.description` support lightweight expansions:
+- `{{date}}` → `YYYY-MM-DD`
+- `{{time}}` → `HH:MM`
+- `{{now}}` → RFC3339 timestamp
+- `{{clipboard}}` → clipboard text (best-effort; can be overridden with `CLARITY_CAPTURE_CLIPBOARD`)
+- `{{url}}` → `CLARITY_CAPTURE_URL` (set this in your hotkey wrapper if you can fetch the active URL)
+- `{{selection}}` → `CLARITY_CAPTURE_SELECTION` (set this in your hotkey wrapper if you can fetch selected text)
+
+Notes:
+- Clarity does not (yet) auto-detect URL/selection from your OS/app; those values are currently provided via env vars by your launcher script/window manager.
 
 ### Cross-workspace capture + Git sync (v1)
 Capture writes directly into the target workspace directory (which may be a Git-backed workspace repo).

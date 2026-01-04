@@ -20,6 +20,9 @@ const (
         captureTemplateEditKeys
         captureTemplateEditWorkspace
         captureTemplateEditOutline
+        captureTemplateEditDefaultTitle
+        captureTemplateEditDefaultDescription
+        captureTemplateEditDefaultTags
 )
 
 type captureTemplateEditState struct {
@@ -150,7 +153,7 @@ func (m *appModel) refreshCaptureTemplatesList(preferKeys string) {
 }
 
 func (m appModel) renderCaptureTemplatesModal() string {
-        desc := "Create, edit, and delete org-capture style templates (name + key sequence + target outline)."
+        desc := "Create, edit, and delete org-capture style templates (keys + target + optional defaults)."
         h := "\n\nenter/e: edit   n:new   d:delete   esc/ctrl+g: close"
         return renderModalBox(m.width, "Capture templates", desc+"\n\n"+m.captureTemplatesList.View()+h)
 }
@@ -200,6 +203,57 @@ func parseCaptureKeysInput(s string) ([]string, error) {
                 parts = append(parts, string(r))
         }
         return store.NormalizeCaptureTemplateKeys(parts)
+}
+
+func parseCaptureTemplateTagsInput(s string) []string {
+        s = strings.TrimSpace(s)
+        if s == "" {
+                return nil
+        }
+        parts := strings.FieldsFunc(s, func(r rune) bool {
+                return r == ',' || r == ' ' || r == '\t' || r == '\n'
+        })
+        if len(parts) == 0 {
+                return nil
+        }
+        out := make([]string, 0, len(parts))
+        for _, p := range parts {
+                p = strings.TrimSpace(p)
+                p = strings.TrimPrefix(p, "#")
+                if p == "" {
+                        continue
+                }
+                out = append(out, p)
+        }
+        if len(out) == 0 {
+                return nil
+        }
+        return out
+}
+
+func (m *appModel) openCaptureTemplateDefaultDescriptionModal(initial string) {
+        if m == nil {
+                return
+        }
+        m.modal = modalCaptureTemplateDefaultDescription
+        m.modalForID = ""
+        m.modalForKey = ""
+        m.textFocus = textFocusBody
+
+        bodyW := modalBodyWidth(m.width)
+        h := m.height - 12
+        if h < 6 {
+                h = 6
+        }
+        if h > 16 {
+                h = 16
+        }
+
+        m.textarea.Placeholder = "Default description (optional)"
+        m.textarea.SetWidth(bodyW)
+        m.textarea.SetHeight(h)
+        m.textarea.SetValue(initial)
+        m.textarea.Focus()
 }
 
 func (m *appModel) openCaptureTemplateWorkspacePicker(selected string) {
@@ -395,6 +449,17 @@ func (m *appModel) updateCaptureTemplatesModal(msg tea.Msg) (tea.Model, tea.Cmd)
         case tea.KeyMsg:
                 switch km.String() {
                 case "esc", "ctrl+g":
+                        if m.returnToCaptureAfterTemplates && m.capture != nil {
+                                m.returnToCaptureAfterTemplates = false
+                                cfg, err := store.LoadConfig()
+                                if err != nil {
+                                        m.showMinibuffer("Capture templates: " + err.Error())
+                                } else {
+                                        m.capture.reloadTemplates(cfg)
+                                }
+                                m.modal = modalCapture
+                                return *m, nil
+                        }
                         m.modal = modalNone
                         return *m, nil
                 case "n":

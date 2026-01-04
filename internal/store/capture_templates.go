@@ -12,6 +12,12 @@ type CaptureTemplateTarget struct {
         OutlineID string `json:"outlineId"`
 }
 
+type CaptureTemplateDefaults struct {
+        Title       string   `json:"title,omitempty"`
+        Description string   `json:"description,omitempty"`
+        Tags        []string `json:"tags,omitempty"`
+}
+
 type CaptureTemplate struct {
         // Name is a human label for selection UIs.
         Name string `json:"name"`
@@ -19,6 +25,8 @@ type CaptureTemplate struct {
         Keys []string `json:"keys"`
         // Target identifies where the captured item should be created by default.
         Target CaptureTemplateTarget `json:"target"`
+        // Defaults are optional initial values used to seed the capture draft.
+        Defaults CaptureTemplateDefaults `json:"defaults,omitempty"`
 }
 
 func NormalizeCaptureTemplateKeys(keys []string) ([]string, error) {
@@ -37,6 +45,27 @@ func NormalizeCaptureTemplateKeys(keys []string) ([]string, error) {
                 out = append(out, k)
         }
         return out, nil
+}
+
+func NormalizeCaptureTemplateTags(tags []string) []string {
+        if len(tags) == 0 {
+                return nil
+        }
+        seen := map[string]bool{}
+        out := make([]string, 0, len(tags))
+        for _, t := range tags {
+                t = strings.TrimSpace(t)
+                t = strings.TrimPrefix(t, "#")
+                if t == "" || seen[t] {
+                        continue
+                }
+                seen[t] = true
+                out = append(out, t)
+        }
+        if len(out) == 0 {
+                return nil
+        }
+        return out
 }
 
 func ValidateCaptureTemplates(cfg *GlobalConfig) error {
@@ -68,6 +97,11 @@ func ValidateCaptureTemplates(cfg *GlobalConfig) error {
                 if outID == "" {
                         return fmt.Errorf("captureTemplates[%d].target.outlineId is empty", i)
                 }
+
+                // Normalize defaults (validation is best-effort; preserve backward compatibility).
+                _ = strings.TrimSpace(t.Defaults.Title)
+                _ = strings.TrimSpace(t.Defaults.Description)
+                _ = NormalizeCaptureTemplateTags(t.Defaults.Tags)
         }
         return nil
 }
