@@ -5415,6 +5415,22 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         return m, m.schedulePreviewCompute()
                 }
 
+                // Org-mode style folding (outline list mode): Tab cycles subtree; Shift+Tab cycles global.
+                // Keep Tab reserved for focus switching in split-preview mode, and for column navigation in
+                // columns mode.
+                if m.view == viewOutline && m.modal == modalNone && m.curOutlineViewMode() != outlineViewModeColumns {
+                        switch msg.String() {
+                        case "tab":
+                                if m.pane == paneOutline && !m.splitPreviewVisible() {
+                                        m.toggleCollapseSelected()
+                                        return m, nil
+                                }
+                        case "shift+tab", "backtab":
+                                m.toggleCollapseAll()
+                                return m, nil
+                        }
+                }
+
                 if msg.String() == "f12" && m.debugEnabled {
                         m.debugOverlay = !m.debugOverlay
                         if m.debugOverlay {

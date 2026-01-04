@@ -57,6 +57,8 @@ Outline navigation (outline.js-style):
 - `←`, `h`, `ctrl+b`: go to parent
 - `g`, `home`, `<`: go to start
 - `G`, `end`, `>`: go to end
+- `tab`: cycle subtree folding (collapsed → first layer → all layers) (list mode; not in split-preview)
+- `shift+tab`: cycle global folding (all collapsed → first layer → all layers)
 - `z`: cycle subtree folding (collapsed → first layer → all layers)
 - `Shift+Z`: cycle global folding (all collapsed → first layer → all layers)
 
