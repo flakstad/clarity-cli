@@ -6698,7 +6698,117 @@ func (m *appModel) toggleCollapseSelected() {
         if !it.row.hasChildren && !it.row.hasDescription {
                 return
         }
-        m.collapsed[it.row.item.ID] = !m.collapsed[it.row.item.ID]
+        // Org-mode style subtree cycling:
+        // - collapsed
+        // - open first layer (children visible, deeper collapsed)
+        // - open all layers (fully expanded)
+        //
+        // For leaf nodes (no collapsible descendants), this behaves like a simple toggle.
+        selectedID := strings.TrimSpace(it.row.item.ID)
+        if selectedID == "" {
+                return
+        }
+        mode := m.curOutlineViewMode()
+
+        its := make([]model.Item, 0, 64)
+        for _, item := range m.db.Items {
+                if item.Archived {
+                        continue
+                }
+                if item.OutlineID != it.outline.ID {
+                        continue
+                }
+                its = append(its, item)
+        }
+
+        children := map[string][]string{}
+        hasChildren := map[string]bool{}
+        for _, item := range its {
+                if item.ParentID == nil || strings.TrimSpace(*item.ParentID) == "" {
+                        continue
+                }
+                pid := strings.TrimSpace(*item.ParentID)
+                children[pid] = append(children[pid], item.ID)
+        }
+        for pid, ch := range children {
+                if len(ch) > 0 {
+                        hasChildren[pid] = true
+                }
+        }
+
+        hasDesc := func(item model.Item) bool {
+                if mode == outlineViewModeColumns {
+                        return false
+                }
+                return strings.TrimSpace(item.Description) != ""
+        }
+        itemByID := map[string]model.Item{}
+        for _, item := range its {
+                itemByID[strings.TrimSpace(item.ID)] = item
+        }
+        isCollapsible := func(id string) bool {
+                id = strings.TrimSpace(id)
+                if id == "" {
+                        return false
+                }
+                if hasChildren[id] {
+                        return true
+                }
+                if item, ok := itemByID[id]; ok && hasDesc(item) {
+                        return true
+                }
+                return false
+        }
+
+        // Collect collapsible descendants (excluding the selected node).
+        var collapsibleDesc []string
+        stack := append([]string(nil), children[selectedID]...)
+        seen := map[string]bool{}
+        for len(stack) > 0 {
+                cur := stack[len(stack)-1]
+                stack = stack[:len(stack)-1]
+                cur = strings.TrimSpace(cur)
+                if cur == "" || seen[cur] {
+                        continue
+                }
+                seen[cur] = true
+                if isCollapsible(cur) {
+                        collapsibleDesc = append(collapsibleDesc, cur)
+                }
+                stack = append(stack, children[cur]...)
+        }
+
+        descExpanded := false
+        for _, id := range collapsibleDesc {
+                if !m.collapsed[id] {
+                        descExpanded = true
+                        break
+                }
+        }
+
+        if m.collapsed[selectedID] {
+                // collapsed -> open first layer
+                m.collapsed[selectedID] = false
+                for _, id := range collapsibleDesc {
+                        m.collapsed[id] = true
+                }
+        } else {
+                // expanded -> open all OR collapse, depending on current subtree state
+                if len(collapsibleDesc) == 0 {
+                        m.collapsed[selectedID] = true
+                } else if descExpanded {
+                        // open all (or mixed) -> collapsed
+                        m.collapsed[selectedID] = true
+                        for _, id := range collapsibleDesc {
+                                m.collapsed[id] = true
+                        }
+                } else {
+                        // open first layer -> open all
+                        for _, id := range collapsibleDesc {
+                                m.collapsed[id] = false
+                        }
+                }
+        }
         m.refreshItems(it.outline)
 }
 
@@ -6707,31 +6817,119 @@ func (m *appModel) toggleCollapseAll() {
                 return
         }
 
-        // If anything collapsible is expanded, collapse all; otherwise expand all.
-        collapsible := map[string]bool{}
+        // Org-mode style global cycling:
+        // - all collapsed
+        // - open first layer
+        // - open all layers
         mode := m.curOutlineViewMode()
-        for _, it := range m.db.Items {
-                if it.Archived || it.OutlineID != m.selectedOutline.ID {
+
+        // Collect outline items (non-archived) and build parent/roots like flattenOutline does.
+        its := make([]model.Item, 0, 128)
+        present := map[string]bool{}
+        for _, item := range m.db.Items {
+                if item.Archived {
                         continue
                 }
-                if it.ParentID != nil && *it.ParentID != "" {
-                        collapsible[*it.ParentID] = true
+                if item.OutlineID != m.selectedOutline.ID {
+                        continue
                 }
-                if mode != outlineViewModeColumns && strings.TrimSpace(it.Description) != "" {
-                        collapsible[it.ID] = true
+                its = append(its, item)
+                present[item.ID] = true
+        }
+
+        children := map[string][]model.Item{}
+        var roots []model.Item
+        for _, item := range its {
+                if item.ParentID == nil || strings.TrimSpace(*item.ParentID) == "" {
+                        roots = append(roots, item)
+                        continue
+                }
+                if !present[strings.TrimSpace(*item.ParentID)] {
+                        roots = append(roots, item)
+                        continue
+                }
+                children[strings.TrimSpace(*item.ParentID)] = append(children[strings.TrimSpace(*item.ParentID)], item)
+        }
+
+        hasChildren := map[string]bool{}
+        for pid, ch := range children {
+                if len(ch) > 0 {
+                        hasChildren[pid] = true
                 }
         }
 
-        anyExpanded := false
+        collapsible := map[string]bool{}
+        rootCollapsible := map[string]bool{}
+        for _, item := range its {
+                id := strings.TrimSpace(item.ID)
+                if id == "" {
+                        continue
+                }
+                if hasChildren[id] || (mode != outlineViewModeColumns && strings.TrimSpace(item.Description) != "") {
+                        collapsible[id] = true
+                }
+        }
+        for _, r := range roots {
+                id := strings.TrimSpace(r.ID)
+                if collapsible[id] {
+                        rootCollapsible[id] = true
+                }
+        }
+        if len(collapsible) == 0 {
+                return
+        }
+
+        allCollapsed := true
+        allExpanded := true
         for id := range collapsible {
                 if !m.collapsed[id] {
-                        anyExpanded = true
+                        allCollapsed = false
+                }
+                if m.collapsed[id] {
+                        allExpanded = false
+                }
+        }
+
+        firstLayer := true
+        for id := range collapsible {
+                if rootCollapsible[id] {
+                        if m.collapsed[id] {
+                                firstLayer = false
+                                break
+                        }
+                        continue
+                }
+                if !m.collapsed[id] {
+                        firstLayer = false
                         break
                 }
         }
 
-        for id := range collapsible {
-                m.collapsed[id] = anyExpanded
+        switch {
+        case allCollapsed:
+                // all collapsed -> open first layer
+                for id := range collapsible {
+                        if rootCollapsible[id] {
+                                m.collapsed[id] = false
+                        } else {
+                                m.collapsed[id] = true
+                        }
+                }
+        case firstLayer:
+                // open first layer -> open all
+                for id := range collapsible {
+                        m.collapsed[id] = false
+                }
+        case allExpanded:
+                // open all -> all collapsed
+                for id := range collapsible {
+                        m.collapsed[id] = true
+                }
+        default:
+                // mixed -> all collapsed (predictable reset)
+                for id := range collapsible {
+                        m.collapsed[id] = true
+                }
         }
         m.refreshItems(*m.selectedOutline)
 }

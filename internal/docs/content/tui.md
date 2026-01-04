@@ -57,8 +57,8 @@ Outline navigation (outline.js-style):
 - `←`, `h`, `ctrl+b`: go to parent
 - `g`, `home`, `<`: go to start
 - `G`, `end`, `>`: go to end
-- `z`: toggle collapse for selected item
-- `Shift+Z`: collapse all ↔ expand all
+- `z`: cycle subtree folding (collapsed → first layer → all layers)
+- `Shift+Z`: cycle global folding (all collapsed → first layer → all layers)
 
 Outline movement (hold Alt):
 - `alt+↑/↓` (or `alt+k/j`, `alt+p/n`): move item up/down among siblings

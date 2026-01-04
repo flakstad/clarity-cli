@@ -8,6 +8,7 @@ import (
         "github.com/charmbracelet/glamour"
         "github.com/charmbracelet/glamour/ansi"
         "github.com/charmbracelet/glamour/styles"
+        "github.com/charmbracelet/lipgloss"
 )
 
 var (
@@ -107,9 +108,13 @@ func renderMarkdownNoMargin(md string, width int) string {
 func markdownStyleConfig(styleName string) ansi.StyleConfig {
         switch strings.ToLower(strings.TrimSpace(styleName)) {
         case "light":
-                return styles.LightStyleConfig
+                cfg := styles.LightStyleConfig
+                applyClarityMarkdownPalette(&cfg, "light")
+                return cfg
         default:
-                return styles.DarkStyleConfig
+                cfg := styles.DarkStyleConfig
+                applyClarityMarkdownPalette(&cfg, "dark")
+                return cfg
         }
 }
 
@@ -137,6 +142,59 @@ func markdownStyle() string {
         }
         return "dark"
 }
+
+func applyClarityMarkdownPalette(cfg *ansi.StyleConfig, styleName string) {
+        if cfg == nil {
+                return
+        }
+
+        // Headings: keep them high-contrast and aligned with the normal text palette
+        // (no bright blue).
+        headingColor := mdColor(colorSurfaceFg, styleName)
+        cfg.Heading.Color = headingColor
+        cfg.H1.Color = headingColor
+        cfg.H2.Color = headingColor
+        cfg.H3.Color = headingColor
+        cfg.H4.Color = headingColor
+        cfg.H5.Color = headingColor
+        cfg.H6.Color = headingColor
+
+        // Links: avoid red; use Clarity accent with underline.
+        linkColor := mdColor(colorAccent, styleName)
+        cfg.Link.Color = linkColor
+        cfg.Link.Underline = mdBoolPtr(true)
+        cfg.LinkText.Color = linkColor
+        cfg.LinkText.Underline = mdBoolPtr(true)
+
+        // Inline code: avoid bright red; keep readable and distinct.
+        cfg.Code.Color = mdColor(colorSurfaceFg, styleName)
+        cfg.CodeBlock.Color = mdColor(colorSurfaceFg, styleName)
+        if cfg.CodeBlock.BackgroundColor == nil {
+                cfg.CodeBlock.BackgroundColor = mdColor(colorControlBg, styleName)
+        }
+
+        // Ensure base text remains aligned with the surface foreground.
+        cfg.Text.Color = mdColor(colorSurfaceFg, styleName)
+
+        // This also makes emphasis/strong inherit the base text color, preventing
+        // surprising “keyword” colors in some styles.
+        cfg.Strong.Color = nil
+        cfg.Emph.Color = nil
+
+        // Avoid faint markdown elements becoming too hard to read.
+        // (Some default styles use faint for blockquotes and similar.)
+        cfg.BlockQuote.Faint = mdBoolPtr(false)
+}
+
+func mdColor(c lipgloss.AdaptiveColor, styleName string) *string {
+        if strings.TrimSpace(strings.ToLower(styleName)) == "light" {
+                return mdStrPtr(c.Light)
+        }
+        return mdStrPtr(c.Dark)
+}
+
+func mdStrPtr(s string) *string { return &s }
+func mdBoolPtr(b bool) *bool    { return &b }
 
 func atoi(s string) int {
         s = strings.TrimSpace(s)
