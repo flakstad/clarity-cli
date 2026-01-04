@@ -69,7 +69,6 @@ type appModel struct {
         hasArchivedReturnView bool
         agendaCollapsed       map[string]bool
         collapsed             map[string]bool
-        collapseInitialized   bool
         // itemFocus is used on the full-screen item view to allow Tab navigation across
         // editable fields (title/status/description/comment/worklog).
         itemFocus            itemPageFocus

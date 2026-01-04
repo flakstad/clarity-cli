@@ -523,7 +523,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.openItemID = ""
                                         m.itemArchivedReadOnly = false
                                         m.collapsed = map[string]bool{}
-                                        m.collapseInitialized = false
                                         m.refreshItems(it.outline)
                                         return m, nil
                                 }

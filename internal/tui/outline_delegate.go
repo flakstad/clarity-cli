@@ -52,6 +52,9 @@ func (d outlineItemDelegate) Render(w io.Writer, m list.Model, index int, item l
         case outlineRowItem:
                 fmt.Fprint(w, d.renderOutlineRow(contentW, prefix, it, focused))
                 return
+        case outlineDescRowItem:
+                fmt.Fprint(w, d.renderOutlineDescRow(contentW, prefix, it, focused))
+                return
         case addItemRow:
                 // Match the outline's twisty column (2 chars) so "+ Add item" aligns.
                 line := prefix + "  " + it.Title()
@@ -108,7 +111,7 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
 
         indent := strings.Repeat("  ", it.row.depth)
         twisty := " "
-        if it.row.hasChildren {
+        if it.row.hasChildren || it.row.hasDescription {
                 if it.row.collapsed {
                         twisty = "▸"
                 } else {
@@ -240,6 +243,53 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
         return out
 }
 
+func (d outlineItemDelegate) renderOutlineDescRow(width int, prefix string, it outlineDescRowItem, focused bool) string {
+        bg := d.selected.GetBackground()
+
+        base := d.normal
+        if focused {
+                base = lipgloss.NewStyle().
+                        Foreground(d.selected.GetForeground()).
+                        Background(bg).
+                        Bold(true)
+        }
+
+        indent := strings.Repeat("  ", it.depth)
+        leadRaw := prefix + indent + "  "
+        leadSeg := base.Render(leadRaw)
+
+        avail := width - xansi.StringWidth(leadRaw)
+        if avail < 0 {
+                avail = 0
+        }
+        line := strings.TrimRight(it.line, " \t")
+        if focused {
+                // For consistent selection highlighting, render focused rows as plain text.
+                line = xansi.Strip(line)
+        }
+        if xansi.StringWidth(line) > avail {
+                if focused {
+                        line = truncateText(line, avail)
+                } else {
+                        line = truncateStyledText(line, avail)
+                }
+        }
+
+        txtSeg := line
+        if focused {
+                txtSeg = base.Render(line)
+        }
+
+        out := leadSeg + txtSeg
+        curW := xansi.StringWidth(out)
+        if curW < width {
+                out += base.Render(strings.Repeat(" ", width-curW))
+        } else if curW > width {
+                out = xansi.Cut(out, 0, width) + "\x1b[0m"
+        }
+        return out
+}
+
 func (d outlineItemDelegate) renderFocusedRow(width int, base lipgloss.Style, line string) string {
         style := base.Copy().
                 Foreground(d.selected.GetForeground()).
@@ -269,4 +319,18 @@ func truncateText(s string, maxW int) string {
                 return "…"
         }
         return xansi.Cut(s, 0, maxW-1) + "…"
+}
+
+func truncateStyledText(s string, maxW int) string {
+        if maxW <= 0 {
+                return ""
+        }
+        if xansi.StringWidth(s) <= maxW {
+                return s
+        }
+        if maxW == 1 {
+                return "…"
+        }
+        // Ensure any open ANSI styling is always terminated.
+        return xansi.Cut(s, 0, maxW-1) + "…" + "\x1b[0m"
 }

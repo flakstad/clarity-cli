@@ -10,6 +10,7 @@ Current scope (early):
 - Full-screen item view (single pane)
 - Auto-refresh when the local store changes (polls file mtimes)
 - Outline shows progress cookies for items with children (e.g. `1/2`)
+- Outline list shows item descriptions inline (collapsed by default; `z` toggles)
 - Create items directly from the TUI (sibling and subitem)
 - Reorder and restructure items (reorder, indent, outdent)
 

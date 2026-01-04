@@ -85,7 +85,6 @@ func TestMoveOutlinePicker_Enter_MovesItem_WhenStatusValidInTargetOutline(t *tes
         m.selectedOutlineID = "out-a"
         m.selectedOutline = &db.Outlines[0]
         m.collapsed = map[string]bool{}
-        m.collapseInitialized = false
         m.refreshItems(db.Outlines[0])
         selectListItemByID(&m.itemsList, "item-a")
 
@@ -196,7 +195,6 @@ func TestMoveOutlinePicker_WhenStatusInvalid_PromptsForStatusThenMoves(t *testin
         m.selectedOutlineID = "out-a"
         m.selectedOutline = &db.Outlines[0]
         m.collapsed = map[string]bool{}
-        m.collapseInitialized = false
         m.refreshItems(db.Outlines[0])
         selectListItemByID(&m.itemsList, "item-a")
 
@@ -323,7 +321,6 @@ func TestMoveOutlinePicker_AllowsMovingToOutlineInAnotherProject(t *testing.T) {
         m.selectedOutlineID = "out-a"
         m.selectedOutline = &db.Outlines[0]
         m.collapsed = map[string]bool{}
-        m.collapseInitialized = false
         m.refreshItems(db.Outlines[0])
         selectListItemByID(&m.itemsList, "item-a")
 

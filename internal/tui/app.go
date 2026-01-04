@@ -914,6 +914,9 @@ func outlineViewModeFromString(s string) (outlineViewMode, bool) {
         case "document":
                 // Back-compat: "document" was an experimental mode; treat it as list.
                 return outlineViewModeList, true
+        case "list+descriptions", "list-descriptions", "descriptions", "list+desc", "list-desc":
+                // Back-compat: descriptions mode is now the default list.
+                return outlineViewModeList, true
         case "list+preview", "list-preview", "preview", "split":
                 return outlineViewModeListPreview, true
         case "list":
@@ -1126,7 +1129,6 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
         m.setOutlineViewMode(outlineID, mode)
 
         m.collapsed = map[string]bool{}
-        m.collapseInitialized = false
         m.refreshItems(*ol)
         m.openItemID = ""
         m.hasReturnView = false
@@ -2624,26 +2626,43 @@ func (m *appModel) refreshItems(outline model.Outline) {
                         its = append(its, it)
                 }
         }
-        if !m.collapseInitialized {
-                childrenCount := map[string]int{}
-                for _, it := range its {
-                        if it.ParentID == nil || *it.ParentID == "" {
-                                continue
-                        }
-                        childrenCount[*it.ParentID]++
+        // Default outline behavior: start parents collapsed so the view is lean/scannable.
+        // Only initialize collapse state for items we haven't seen before (so user toggles
+        // persist while the app is running).
+        childrenCount := map[string]int{}
+        for _, it := range its {
+                if it.ParentID == nil || *it.ParentID == "" {
+                        continue
                 }
-                for id, n := range childrenCount {
-                        if n > 0 {
-                                m.collapsed[id] = true
-                        }
+                childrenCount[*it.ParentID]++
+        }
+        for id, n := range childrenCount {
+                if n <= 0 {
+                        continue
                 }
-                m.collapseInitialized = true
+                if _, ok := m.collapsed[id]; !ok {
+                        m.collapsed[id] = true
+                }
+        }
+        // In "list+descriptions" mode, items with descriptions are also collapsible and
+        // should start collapsed by default.
+        for _, it := range its {
+                if strings.TrimSpace(it.Description) == "" {
+                        continue
+                }
+                if _, ok := m.collapsed[it.ID]; !ok {
+                        m.collapsed[it.ID] = true
+                }
         }
 
         flat := flattenOutline(outline, its, m.collapsed)
         var items []list.Item
+        showInlineDescriptions := m.outlineViewModeForID(outline.ID) != outlineViewModeColumns
 
         for _, row := range flat {
+                if showInlineDescriptions && strings.TrimSpace(row.item.Description) != "" {
+                        row.hasDescription = true
+                }
                 // Cache display labels for metadata that needs DB context.
                 if row.item.AssignedActorID != nil && strings.TrimSpace(*row.item.AssignedActorID) != "" {
                         row.assignedLabel = actorDisplayLabel(m.db, *row.item.AssignedActorID)
@@ -2665,6 +2684,25 @@ func (m *appModel) refreshItems(outline model.Outline) {
                         flash = m.flashKind
                 }
                 items = append(items, outlineRowItem{row: row, outline: outline, flashKind: flash})
+                if showInlineDescriptions && row.hasDescription && !row.collapsed {
+                        contentW := m.itemsList.Width()
+                        if contentW <= 0 {
+                                contentW = m.width
+                        }
+                        if contentW <= 0 {
+                                contentW = 80
+                        }
+                        descDepth := row.depth + 1
+                        leadW := (2 * descDepth) + 2 // indent + "  "
+                        avail := contentW - leadW
+                        for _, line := range outlineDescriptionLinesMarkdown(row.item.Description, avail) {
+                                items = append(items, outlineDescRowItem{
+                                        parentID: row.item.ID,
+                                        depth:    descDepth,
+                                        line:     line,
+                                })
+                        }
+                }
         }
         // Always-present affordance for adding an item (useful for empty outlines).
         items = append(items, addItemRow{})
@@ -6597,6 +6635,10 @@ func (m *appModel) navIntoFirstChild() {
                 return
         }
         if !it.row.hasChildren {
+                if it.row.hasDescription && it.row.collapsed {
+                        m.collapsed[it.row.item.ID] = false
+                        m.refreshItems(it.outline)
+                }
                 return
         }
         if it.row.collapsed {
@@ -6653,7 +6695,7 @@ func (m *appModel) toggleCollapseSelected() {
         if !ok {
                 return
         }
-        if !it.row.hasChildren {
+        if !it.row.hasChildren && !it.row.hasDescription {
                 return
         }
         m.collapsed[it.row.item.ID] = !m.collapsed[it.row.item.ID]
@@ -6665,33 +6707,30 @@ func (m *appModel) toggleCollapseAll() {
                 return
         }
 
-        // If anything with children is expanded, collapse all; otherwise expand all.
-        childrenCount := map[string]int{}
+        // If anything collapsible is expanded, collapse all; otherwise expand all.
+        collapsible := map[string]bool{}
+        mode := m.curOutlineViewMode()
         for _, it := range m.db.Items {
                 if it.Archived || it.OutlineID != m.selectedOutline.ID {
                         continue
                 }
-                if it.ParentID == nil || *it.ParentID == "" {
-                        continue
+                if it.ParentID != nil && *it.ParentID != "" {
+                        collapsible[*it.ParentID] = true
                 }
-                childrenCount[*it.ParentID]++
+                if mode != outlineViewModeColumns && strings.TrimSpace(it.Description) != "" {
+                        collapsible[it.ID] = true
+                }
         }
 
         anyExpanded := false
-        for id, n := range childrenCount {
-                if n <= 0 {
-                        continue
-                }
+        for id := range collapsible {
                 if !m.collapsed[id] {
                         anyExpanded = true
                         break
                 }
         }
 
-        for id, n := range childrenCount {
-                if n <= 0 {
-                        continue
-                }
+        for id := range collapsible {
                 m.collapsed[id] = anyExpanded
         }
         m.refreshItems(*m.selectedOutline)

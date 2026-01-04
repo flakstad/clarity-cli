@@ -109,7 +109,6 @@ func TestOutdentSelected_DuplicateDestRanks_OnlyUpdatesMovedItem(t *testing.T) {
         m.selectedOutlineID = out
         m.selectedOutline = &db.Outlines[0]
         m.collapsed = map[string]bool{parentID: false}
-        m.collapseInitialized = true
         m.refreshItems(db.Outlines[0])
         selectListItemByID(&m.itemsList, childID)
 
