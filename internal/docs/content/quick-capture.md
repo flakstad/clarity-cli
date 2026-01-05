@@ -43,6 +43,8 @@ You can manage templates in the TUI (recommended): open the Action Panel (`x`), 
 
 Templates are selected via a multi-key sequence (org-capture style). Each key in `keys` must be exactly one character.
 
+In the template selection screen you can also press `/` to fuzzy-search templates by name/keys as a fallback.
+
 Example:
 
 ```json
@@ -137,3 +139,22 @@ iTerm2 has a built-in "Hotkey Window" that can toggle a dropdown terminal instan
 - A shell function / keybinding runs `clarity capture`.
 
 Equivalent setups exist in other terminals (WezTerm/kitty/Ghostty/Windows Terminal) and desktop environments, but configuration is terminal/OS-specific.
+
+## More launch recipes (sketches)
+
+These are intentionally minimal (Clarity stays cross-platform; your terminal/OS does the window management).
+
+### macOS (WezTerm / kitty)
+
+- Use a “drop-down” or “quake” style terminal window if your terminal supports it.
+- Bind a global shortcut to: show/toggle that window, then run `clarity capture --hotkey`.
+
+### Linux (GNOME / KDE)
+
+- Configure a global keyboard shortcut that opens a terminal (or toggles an existing one) and runs `clarity capture --hotkey`.
+- Prefer reusing an existing terminal instance (to avoid cold starts) if your desktop environment supports it.
+
+### Windows (Windows Terminal)
+
+- Use a shortcut to focus/show Windows Terminal and run `clarity capture --hotkey`.
+- If you need a true global hotkey that toggles a window, pair Windows Terminal with a launcher tool (outside Clarity) that can focus/toggle a specific window.

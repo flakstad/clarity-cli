@@ -18,6 +18,11 @@ type Status struct {
         Branch   string `json:"branch,omitempty"`
         Upstream string `json:"upstream,omitempty"`
 
+        // UpstreamRemote is derived from Upstream (e.g. origin from origin/main).
+        UpstreamRemote string `json:"upstreamRemote,omitempty"`
+        // UpstreamRemoteURL is the configured fetch URL for UpstreamRemote (best-effort).
+        UpstreamRemoteURL string `json:"upstreamRemoteURL,omitempty"`
+
         Head string `json:"head,omitempty"`
 
         Dirty bool `json:"dirty"`
@@ -49,6 +54,20 @@ func GetStatus(ctx context.Context, dir string) (Status, error) {
         head, _ := git(ctx, dir, "rev-parse", "--short", "HEAD")
         upstream, _ := git(ctx, dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
 
+        upstreamRemote := ""
+        upstreamRemoteURL := ""
+        if u := strings.TrimSpace(upstream); u != "" {
+                // rev-parse @{u} usually returns "<remote>/<branch>" (e.g. "origin/main").
+                if remote, _, ok := strings.Cut(u, "/"); ok {
+                        upstreamRemote = strings.TrimSpace(remote)
+                        if upstreamRemote != "" {
+                                if url, err := RemoteURL(ctx, dir, upstreamRemote); err == nil {
+                                        upstreamRemoteURL = strings.TrimSpace(url)
+                                }
+                        }
+                }
+        }
+
         porcelain, _ := git(ctx, dir, "status", "--porcelain=v1")
         dirty, unmerged := parsePorcelain(porcelain)
         porcelainTracked, _ := git(ctx, dir, "status", "--porcelain=v1", "--untracked-files=no")
@@ -70,9 +89,11 @@ func GetStatus(ctx context.Context, dir string) (Status, error) {
                 IsRepo: true,
                 Root:   strings.TrimSpace(root),
 
-                Branch:   strings.TrimSpace(branch),
-                Upstream: strings.TrimSpace(upstream),
-                Head:     strings.TrimSpace(head),
+                Branch:            strings.TrimSpace(branch),
+                Upstream:          strings.TrimSpace(upstream),
+                UpstreamRemote:    upstreamRemote,
+                UpstreamRemoteURL: upstreamRemoteURL,
+                Head:              strings.TrimSpace(head),
 
                 Dirty:        dirty,
                 DirtyTracked: dirtyTracked,

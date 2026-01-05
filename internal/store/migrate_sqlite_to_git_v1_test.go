@@ -26,14 +26,18 @@ func TestMigrateSQLiteToGitBackedV1_WritesMetaDeviceAndEvents(t *testing.T) {
                 t.Fatalf("write legacy events.jsonl: %v", err)
         }
 
-        // Create at least one event in SQLite.
-        if err := src.AppendEvent("act-a", "identity.create", "act-a", map[string]any{"id": "act-a"}); err != nil {
-                t.Fatalf("AppendEvent: %v", err)
-        }
-        evs, err := src.ReadEventsV1(ctx, 0)
-        if err != nil {
-                t.Fatalf("ReadEventsV1: %v", err)
-        }
+        // Create at least one event in legacy SQLite event log mode.
+        var evs []EventV1
+        withEnv(t, envEventLogBackend, string(EventLogBackendSQLite), func() {
+                if err := src.AppendEvent("act-a", "identity.create", "act-a", map[string]any{"id": "act-a"}); err != nil {
+                        t.Fatalf("AppendEvent: %v", err)
+                }
+                got, err := src.ReadEventsV1(ctx, 0)
+                if err != nil {
+                        t.Fatalf("ReadEventsV1: %v", err)
+                }
+                evs = got
+        })
         if len(evs) == 0 {
                 t.Fatalf("expected events")
         }

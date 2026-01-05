@@ -47,15 +47,16 @@ func ReplayEventsV1(dir string) (ReplayResult, error) {
         })
 
         db := &DB{
-                Version:  1,
-                NextIDs:  map[string]int{},
-                Actors:   []model.Actor{},
-                Projects: []model.Project{},
-                Outlines: []model.Outline{},
-                Items:    []model.Item{},
-                Deps:     []model.Dependency{},
-                Comments: []model.Comment{},
-                Worklog:  []model.WorklogEntry{},
+                Version:     1,
+                NextIDs:     map[string]int{},
+                Actors:      []model.Actor{},
+                Projects:    []model.Project{},
+                Outlines:    []model.Outline{},
+                Items:       []model.Item{},
+                Deps:        []model.Dependency{},
+                Comments:    []model.Comment{},
+                Worklog:     []model.WorklogEntry{},
+                Attachments: []model.Attachment{},
         }
 
         res := ReplayResult{
@@ -849,6 +850,46 @@ func applyEventV1(db *DB, ev EventV1) (bool, error) {
                         return true, nil
                 }
                 db.Worklog = append(db.Worklog, w)
+                return true, nil
+
+        case "attachment.add":
+                var a model.Attachment
+                if err := json.Unmarshal(ev.Payload, &a); err != nil {
+                        return false, err
+                }
+                if strings.TrimSpace(a.ID) == "" {
+                        a.ID = strings.TrimSpace(ev.EntityID)
+                }
+                if strings.TrimSpace(a.ID) == "" {
+                        return false, nil
+                }
+                for i := range db.Attachments {
+                        if strings.TrimSpace(db.Attachments[i].ID) == strings.TrimSpace(a.ID) {
+                                db.Attachments[i] = a
+                                return true, nil
+                        }
+                }
+                db.Attachments = append(db.Attachments, a)
+                return true, nil
+
+        case "attachment.update":
+                var a model.Attachment
+                if err := json.Unmarshal(ev.Payload, &a); err != nil {
+                        return false, err
+                }
+                if strings.TrimSpace(a.ID) == "" {
+                        a.ID = strings.TrimSpace(ev.EntityID)
+                }
+                if strings.TrimSpace(a.ID) == "" {
+                        return false, nil
+                }
+                for i := range db.Attachments {
+                        if strings.TrimSpace(db.Attachments[i].ID) == strings.TrimSpace(a.ID) {
+                                db.Attachments[i] = a
+                                return true, nil
+                        }
+                }
+                db.Attachments = append(db.Attachments, a)
                 return true, nil
 
         default:

@@ -14,6 +14,7 @@ type view int
 const (
         viewProjects view = iota
         viewOutlines
+        viewProjectAttachments
         viewOutline
         viewItem
         viewAgenda
@@ -149,6 +150,13 @@ const (
         modalCaptureTemplateDefaultTags
         modalConfirmDeleteCaptureTemplate
         modalConfirmDeleteCaptureTemplatePrompt
+        modalPickAttachmentFile
+        modalPickTargets
+        modalAddAttachmentPath
+        modalAddAttachmentTitle
+        modalAddAttachmentAlt
+        modalEditAttachmentTitle
+        modalEditAttachmentAlt
         modalCapture
         modalGitSetupRemote
 )
@@ -181,6 +189,13 @@ type actionPanelActionKind int
 const (
         actionPanelActionExec actionPanelActionKind = iota
         actionPanelActionNav
+)
+
+type attachmentAddFlow int
+
+const (
+        attachmentAddFlowCommit attachmentAddFlow = iota
+        attachmentAddFlowCommentDraft
 )
 
 type archiveTarget int
@@ -236,6 +251,12 @@ func (m *appModel) closeAllModals() {
         m.pendingMoveOutlineTo = ""
         m.captureTemplateEdit = nil
         m.captureTemplateDeleteIdx = -1
+        m.commentDraftAttachments = nil
+        m.attachmentAddFlow = attachmentAddFlowCommit
+        m.attachmentAddReturnModal = modalNone
+        m.attachmentAddReturnForID = ""
+        m.attachmentAddReturnForKey = ""
+        m.targetPickTargets = nil
 
         m.textFocus = textFocusBody
         m.dateFocus = dateFocusYear

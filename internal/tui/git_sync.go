@@ -54,6 +54,11 @@ func (m *appModel) syncPushCmd() tea.Cmd {
                 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
                 defer cancel()
 
+                if !m.jsonlWorkspace {
+                        st, _ := gitrepo.GetStatus(ctx, dir)
+                        return syncOpDoneMsg{op: "push", status: st, err: "workspace is not Git-backed (SQLite event log); migrate to a JSONL workspace to sync items/events"}
+                }
+
                 st, err := gitrepo.GetStatus(ctx, dir)
                 if err != nil {
                         return syncOpDoneMsg{op: "push", status: st, err: err.Error()}
@@ -116,6 +121,14 @@ func (m *appModel) syncSetupCmd(remoteURL string) tea.Cmd {
         return func() tea.Msg {
                 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
                 defer cancel()
+
+                // Git sync is built around JSONL workspaces (`events/events*.jsonl`).
+                // If we're on the SQLite event log backend, setting up a remote is misleading:
+                // item changes won't result in commits/pushes.
+                if !m.jsonlWorkspace && remoteURL != "" {
+                        st, _ := gitrepo.GetStatus(ctx, dir)
+                        return syncOpDoneMsg{op: "setup", status: st, err: "workspace is not Git-backed (SQLite event log); migrate to a JSONL workspace before configuring a remote"}
+                }
 
                 // Ensure Clarity ignores exist.
                 if _, err := store.EnsureGitignoreHasClarityIgnores(filepath.Join(dir, ".gitignore")); err != nil {

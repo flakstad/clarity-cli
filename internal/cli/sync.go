@@ -21,6 +21,7 @@ func newSyncCmd(app *App) *cobra.Command {
         }
 
         cmd.AddCommand(newSyncStatusCmd(app))
+        cmd.AddCommand(newSyncRemotesCmd(app))
         cmd.AddCommand(newSyncSetupCmd(app))
         cmd.AddCommand(newSyncPullCmd(app))
         cmd.AddCommand(newSyncPushCmd(app))
@@ -169,6 +170,47 @@ func newSyncStatusCmd(app *App) *cobra.Command {
                 },
         }
 
+        return cmd
+}
+
+func newSyncRemotesCmd(app *App) *cobra.Command {
+        cmd := &cobra.Command{
+                Use:   "remotes",
+                Short: "List configured Git remotes for the current workspace directory",
+                RunE: func(cmd *cobra.Command, args []string) error {
+                        dir, err := resolveDir(app)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+
+                        ctx := context.Background()
+                        st, err := gitrepo.GetStatus(ctx, dir)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if !st.IsRepo {
+                                return writeErr(cmd, errors.New("sync remotes: not a git repository"))
+                        }
+
+                        remotes, err := gitrepo.ListRemotes(ctx, dir)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+
+                        return writeOut(cmd, app, map[string]any{
+                                "data": map[string]any{
+                                        "dir":      dir,
+                                        "branch":   st.Branch,
+                                        "upstream": st.Upstream,
+                                        "remotes":  remotes,
+                                },
+                                "_hints": []string{
+                                        "git remote -v",
+                                        "clarity sync status",
+                                },
+                        })
+                },
+        }
         return cmd
 }
 

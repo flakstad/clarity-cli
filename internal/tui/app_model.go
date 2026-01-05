@@ -10,6 +10,7 @@ import (
         "clarity-cli/internal/model"
         "clarity-cli/internal/store"
 
+        "github.com/charmbracelet/bubbles/filepicker"
         "github.com/charmbracelet/bubbles/list"
         "github.com/charmbracelet/bubbles/textarea"
         "github.com/charmbracelet/bubbles/textinput"
@@ -19,7 +20,10 @@ type appModel struct {
         dir       string
         workspace string
         store     store.Store
-        db        *store.DB
+        // jsonlWorkspace indicates whether this workspace uses the JSONL event log backend
+        // (the Git-syncable v1 format with `events/events*.jsonl`).
+        jsonlWorkspace bool
+        db             *store.DB
         // eventsTail caches the last N events from events.jsonl for cheap "recent history" rendering.
         eventsTail []model.Event
 
@@ -32,17 +36,18 @@ type appModel struct {
 
         view view
 
-        projectsList    list.Model
-        outlinesList    list.Model
-        itemsList       list.Model
-        statusList      list.Model
-        outlinePickList list.Model
-        assigneeList    list.Model
-        tagsList        list.Model
-        tagsListActive  *bool
-        workspaceList   list.Model
-        agendaList      list.Model
-        archivedList    list.Model
+        projectsList           list.Model
+        outlinesList           list.Model
+        projectAttachmentsList list.Model
+        itemsList              list.Model
+        statusList             list.Model
+        outlinePickList        list.Model
+        assigneeList           list.Model
+        tagsList               list.Model
+        tagsListActive         *bool
+        workspaceList          list.Model
+        agendaList             list.Model
+        archivedList           list.Model
         // outlineStatusDefsList is used in the outline statuses editor modal.
         outlineStatusDefsList list.Model
 
@@ -77,6 +82,7 @@ type appModel struct {
         // itemFocus is used on the full-screen item view to allow Tab navigation across
         // editable fields (title/status/description/comment/worklog).
         itemFocus            itemPageFocus
+        itemAttachmentIdx    int
         itemCommentIdx       int
         itemWorklogIdx       int
         itemHistoryIdx       int
@@ -111,6 +117,34 @@ type appModel struct {
         tagsFocus    tagsModalFocus
         timeEnabled  bool
         replyQuoteMD string
+
+        attachmentAddKind      string
+        attachmentAddEntityID  string
+        attachmentAddPath      string
+        attachmentAddTitle     string
+        attachmentAddAlt       string
+        attachmentAddTitleHint string
+
+        attachmentEditID    string
+        attachmentEditTitle string
+        attachmentEditAlt   string
+
+        // commentDraftAttachments stores queued uploads while composing a comment/reply.
+        // These are attached to the new comment upon save.
+        commentDraftAttachments []attachmentDraft
+
+        attachmentAddFlow attachmentAddFlow
+        // When attachmentAddFlow == attachmentAddFlowCommentDraft, these store where to return after
+        // finishing the file/title/alt prompts.
+        attachmentAddReturnModal  modalKind
+        attachmentAddReturnForID  string
+        attachmentAddReturnForKey string
+
+        targetPickList    list.Model
+        targetPickTargets []targetPickTarget
+
+        attachmentFilePicker        filepicker.Model
+        attachmentFilePickerLastDir string
 
         // externalEditorPath is the temp file used when opening the current textarea
         // content in $VISUAL/$EDITOR.
@@ -211,15 +245,16 @@ func (m appModel) clipboardShowCmd(itemID string) string {
 func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appModel {
         s := store.Store{Dir: dir}
         m := appModel{
-                dir:       dir,
-                workspace: strings.TrimSpace(workspace),
-                store:     s,
-                db:        db,
-                view:      viewProjects,
-                pane:      paneOutline,
+                dir:            dir,
+                workspace:      strings.TrimSpace(workspace),
+                store:          s,
+                jsonlWorkspace: s.IsJSONLWorkspace(),
+                db:             db,
+                view:           viewProjects,
+                pane:           paneOutline,
         }
 
-        if shouldAutoCommit() {
+        if shouldAutoCommit() && m.jsonlWorkspace {
                 m.autoCommit = gitrepo.NewDebouncedCommitter(gitrepo.DebouncedCommitterOpts{
                         WorkspaceDir:   dir,
                         Debounce:       2 * time.Second,
@@ -240,6 +275,10 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
         m.projectsList.SetDelegate(newProjectCardDelegate())
         m.outlinesList = newList("Outlines", "Select an outline", []list.Item{})
         m.outlinesList.SetDelegate(newOutlineCardDelegate())
+        m.projectAttachmentsList = newList("Uploads", "All project uploads", []list.Item{})
+        m.projectAttachmentsList.SetDelegate(newCompactItemDelegate())
+        m.projectAttachmentsList.SetFilteringEnabled(true)
+        m.projectAttachmentsList.SetShowFilter(true)
         m.itemsList = newList("Outline", "Go to items (split view)", []list.Item{})
         m.itemsList.SetDelegate(newOutlineItemDelegate())
         // Enable "/" filtering to quickly scope down large outlines.
@@ -305,6 +344,16 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
         m.captureTemplatesList.SetDelegate(newCompactItemDelegate())
         m.captureTemplatesList.SetFilteringEnabled(true)
         m.captureTemplatesList.SetShowFilter(true)
+
+        m.targetPickList = newList("Targets", "Select a target", []list.Item{})
+        m.targetPickList.SetDelegate(newCompactItemDelegate())
+        // Filtering helps when a description has many links.
+        m.targetPickList.SetFilteringEnabled(true)
+        m.targetPickList.SetShowFilter(true)
+        // Keep list chrome minimal inside the modal.
+        m.targetPickList.SetShowHelp(false)
+        m.targetPickList.SetShowStatusBar(false)
+        m.targetPickList.SetShowPagination(false)
 
         m.captureTemplateWorkspaceList = newList("Workspaces", "Select a workspace", []list.Item{})
         m.captureTemplateWorkspaceList.SetDelegate(newCompactItemDelegate())

@@ -115,6 +115,7 @@ func (s Store) SaveSQLite(ctx context.Context, st *DB) error {
                 "deps",
                 "comments",
                 "worklog",
+                "attachments",
         }
         for _, t := range tables {
                 if _, err := tx.ExecContext(ctx, `DELETE FROM `+t); err != nil {
@@ -209,6 +210,24 @@ func (s Store) SaveSQLite(ctx context.Context, st *DB) error {
                         return err
                 }
         }
+        for _, a := range st.Attachments {
+                raw, _ := json.Marshal(a)
+                if _, err := tx.ExecContext(ctx, `INSERT INTO attachments(
+                        id, entity_kind, entity_id,
+                        original_name, size_bytes,
+                        json, updated_at_unixms
+                ) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+                        a.ID,
+                        strings.TrimSpace(a.EntityKind),
+                        strings.TrimSpace(a.EntityID),
+                        strings.TrimSpace(a.OriginalName),
+                        a.SizeBytes,
+                        string(raw),
+                        nowMs,
+                ); err != nil {
+                        return err
+                }
+        }
 
         return tx.Commit()
 }
@@ -294,6 +313,16 @@ func migrateSQLiteState(ctx context.Context, db *sql.DB) error {
                         updated_at_unixms INTEGER NOT NULL
                 );`,
                 `CREATE INDEX IF NOT EXISTS idx_worklog_entity ON worklog(entity_kind, entity_id, created_at_unixms);`,
+                `CREATE TABLE IF NOT EXISTS attachments (
+                        id TEXT PRIMARY KEY,
+                        entity_kind TEXT NOT NULL,
+                        entity_id TEXT NOT NULL,
+                        original_name TEXT NOT NULL,
+                        size_bytes INTEGER NOT NULL,
+                        json TEXT NOT NULL,
+                        updated_at_unixms INTEGER NOT NULL
+                );`,
+                `CREATE INDEX IF NOT EXISTS idx_attachments_entity ON attachments(entity_kind, entity_id, updated_at_unixms);`,
         }
         for _, st := range stmts {
                 if _, err := db.ExecContext(ctx, st); err != nil {
@@ -376,6 +405,11 @@ func loadStateFromSQLite(ctx context.Context, db *sql.DB) (*DB, error) {
         } else {
                 return nil, err
         }
+        if xs, err := readJSONRows[model.Attachment](ctx, db, `SELECT json FROM attachments`); err == nil {
+                out.Attachments = xs
+        } else {
+                return nil, err
+        }
 
         // Ensure nil slices are empty for stable callers.
         if out.Actors == nil {
@@ -398,6 +432,9 @@ func loadStateFromSQLite(ctx context.Context, db *sql.DB) (*DB, error) {
         }
         if out.Worklog == nil {
                 out.Worklog = []model.WorklogEntry{}
+        }
+        if out.Attachments == nil {
+                out.Attachments = []model.Attachment{}
         }
 
         return out, nil

@@ -1,6 +1,8 @@
 package store
 
 import (
+        "context"
+        "database/sql"
         "encoding/json"
         "fmt"
         "os"
@@ -72,12 +74,17 @@ func (s Store) eventLogBackend() EventLogBackend {
         case string(EventLogBackendSQLite):
                 return EventLogBackendSQLite
         default:
-                // Auto-detect: if a Git-backed events directory exists, prefer JSONL.
-                // Otherwise default to SQLite (current stable behavior).
+                // Auto-detect:
+                // 1) If a Git-backed events directory exists, use JSONL.
+                // 2) If a legacy SQLite event log exists, keep using SQLite to avoid silent history splits.
+                // 3) Otherwise default to JSONL (Git-first).
                 if s.hasJSONLEvents() {
                         return EventLogBackendJSONL
                 }
-                return EventLogBackendSQLite
+                if s.hasSQLiteEventLog() {
+                        return EventLogBackendSQLite
+                }
+                return EventLogBackendJSONL
         }
 }
 
@@ -100,6 +107,38 @@ func (s Store) hasJSONLEvents() bool {
         }
         sort.Strings(names)
         return len(names) > 0
+}
+
+func (s Store) hasSQLiteEventLog() bool {
+        // Best-effort detection of legacy SQLite event log workspaces.
+        // We only consider existing files to avoid creating a new SQLite DB as a side effect.
+        path, ok := s.existingSQLitePath()
+        if !ok || strings.TrimSpace(path) == "" {
+                return false
+        }
+
+        // Read-only open to avoid mutating the DB (or creating it).
+        dsn := "file:" + path + "?mode=ro"
+        db, err := sql.Open("sqlite", dsn)
+        if err != nil {
+                return false
+        }
+        defer func() { _ = db.Close() }()
+
+        // Detect the event log schema (not the derived state schema).
+        // The legacy event log uses tables: meta, events, entity_heads, entity_seq.
+        required := []string{"events", "entity_heads", "entity_seq"}
+        for _, tbl := range required {
+                var name string
+                err := db.QueryRowContext(context.Background(),
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1",
+                        tbl,
+                ).Scan(&name)
+                if err != nil || strings.TrimSpace(name) == "" {
+                        return false
+                }
+        }
+        return true
 }
 
 // inferEntityKindFromType maps existing event type prefixes to v1 entity kinds.

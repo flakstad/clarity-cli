@@ -101,7 +101,7 @@ func buildOutlineColumnsBoard(db *store.DB, outline model.Outline, items []model
                         HasChildren:   len(children[it.ID]) > 0,
                 }
                 if wrapped.Item.AssignedActorID != nil && strings.TrimSpace(*wrapped.Item.AssignedActorID) != "" {
-                        wrapped.AssignedLabel = actorDisplayLabel(db, *wrapped.Item.AssignedActorID)
+                        wrapped.AssignedLabel = actorCompactLabel(db, *wrapped.Item.AssignedActorID)
                 }
                 if len(wrapped.Item.Tags) > 0 {
                         cleaned := make([]string, 0, len(wrapped.Item.Tags))

@@ -7,6 +7,7 @@ import (
         "encoding/json"
         "fmt"
         "os"
+        "path/filepath"
         "sort"
         "strings"
         "testing"
@@ -320,9 +321,43 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
         run(t, invocation{name: "deps cycles", cmdPath: "deps cycles", args: []string{"--dir", dir, "--actor", humanID, "deps", "cycles"}, expect: expectJSONEnvelope})
 
         // comments: add + list pagination.
-        run(t, invocation{name: "comments add", cmdPath: "comments add", args: []string{"--dir", dir, "--actor", humanID, "comments", "add", itemA, "--body", "Comment 1"}, expect: expectJSONEnvelope})
+        comment1 := mustID(t, run(t, invocation{name: "comments add", cmdPath: "comments add", args: []string{"--dir", dir, "--actor", humanID, "comments", "add", itemA, "--body", "Comment 1"}, expect: expectJSONEnvelope}).env)
         assertPaginatedListMeta(t, run(t, invocation{name: "comments list (limit/offset)", cmdPath: "comments list", args: []string{"--dir", dir, "--actor", humanID, "comments", "list", itemA, "--limit", "1", "--offset", "0"}, expect: expectJSONEnvelope}).env)
         run(t, invocation{name: "comments list (all)", cmdPath: "comments list", args: []string{"--dir", dir, "--actor", humanID, "comments", "list", itemA, "--limit", "0"}, expect: expectJSONEnvelope})
+
+        // attachments: add/list/open/export (avoid actually opening GUI by using --print-path).
+        attSrcDir := t.TempDir()
+        attSrc := filepath.Join(attSrcDir, "note.txt")
+        _ = writeFile(t, attSrcDir, "note.txt", []byte("hello attachment"))
+        att1 := mustID(t, run(t, invocation{
+                name:    "attachments add (item)",
+                cmdPath: "attachments add",
+                args: []string{
+                        "--dir", dir, "--actor", humanID,
+                        "attachments", "add", itemA, attSrc,
+                        "--title", "Note",
+                        "--alt", "Alt text",
+                        "--max-mb", "50",
+                },
+                expect: expectJSONEnvelope,
+        }).env)
+        run(t, invocation{name: "attachments list (item)", cmdPath: "attachments list", args: []string{"--dir", dir, "--actor", humanID, "attachments", "list", itemA}, expect: expectJSONEnvelope})
+
+        att2 := mustID(t, run(t, invocation{
+                name:    "attachments add (comment)",
+                cmdPath: "attachments add",
+                args: []string{
+                        "--dir", dir, "--actor", humanID,
+                        "attachments", "add", comment1, attSrc,
+                        "--kind", "comment",
+                },
+                expect: expectJSONEnvelope,
+        }).env)
+        run(t, invocation{name: "attachments list (comment)", cmdPath: "attachments list", args: []string{"--dir", dir, "--actor", humanID, "attachments", "list", comment1}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "attachments open --print-path", cmdPath: "attachments open", args: []string{"--dir", dir, "--actor", humanID, "attachments", "open", att1, "--print-path"}, expect: expectRawText})
+        attDestDir := t.TempDir()
+        attDest := filepath.Join(attDestDir, "exported.txt")
+        run(t, invocation{name: "attachments export", cmdPath: "attachments export", args: []string{"--dir", dir, "--actor", humanID, "attachments", "export", att2, attDest}, expect: expectJSONEnvelope})
 
         // worklog: add + list pagination.
         run(t, invocation{name: "worklog add", cmdPath: "worklog add", args: []string{"--dir", dir, "--actor", humanID, "worklog", "add", itemA, "--body", "Worklog 1"}, expect: expectJSONEnvelope})
@@ -486,6 +521,7 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
         run(t, invocation{name: "sync push (non-repo error, --message, --pull=false, --dir)", cmdPath: "sync push", args: []string{"--dir", dir, "sync", "push", "--message", "test", "--pull=false"}, expect: expectError})
         run(t, invocation{name: "sync resolve (non-repo error, --dir)", cmdPath: "sync resolve", args: []string{"--dir", dir, "sync", "resolve"}, expect: expectError})
         run(t, invocation{name: "sync setup (--dir)", cmdPath: "sync setup", args: []string{"--dir", dir, "sync", "setup", "--commit=false", "--push=false"}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "sync remotes (--dir)", cmdPath: "sync remotes", args: []string{"--dir", dir, "sync", "remotes"}, expect: expectJSONEnvelope})
         run(t, invocation{name: "sync setup (--remote-url/--remote-name/--message)", cmdPath: "sync setup", args: []string{"--dir", dir, "sync", "setup", "--remote-name", "origin", "--remote-url", "https://example.com/repo.git", "--message", "clarity: setup (test)", "--commit=false", "--push=false"}, expect: expectJSONEnvelope})
 
         // web: long-running server command; cover flags via --help (no server start).

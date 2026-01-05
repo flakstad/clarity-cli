@@ -9,12 +9,14 @@ import (
         "clarity-cli/internal/store"
 
         "github.com/charmbracelet/lipgloss"
+        xansi "github.com/charmbracelet/x/ansi"
 )
 
 type itemSidePanelKind int
 
 const (
         itemSideNone itemSidePanelKind = iota
+        itemSideAttachments
         itemSideComments
         itemSideWorklog
         itemSideHistory
@@ -22,6 +24,8 @@ const (
 
 func sidePanelKindForFocus(f itemPageFocus) itemSidePanelKind {
         switch f {
+        case itemFocusAttachments:
+                return itemSideAttachments
         case itemFocusComments:
                 return itemSideComments
         case itemFocusWorklog:
@@ -33,7 +37,7 @@ func sidePanelKindForFocus(f itemPageFocus) itemSidePanelKind {
         }
 }
 
-func renderItemSidePanelWithEvents(db *store.DB, it model.Item, width, height int, kind itemSidePanelKind, commentIdx, worklogIdx, historyIdx int, scroll int, events []model.Event) string {
+func renderItemSidePanelWithEvents(db *store.DB, it model.Item, width, height int, kind itemSidePanelKind, attachmentIdx, commentIdx, worklogIdx, historyIdx int, scroll int, events []model.Event) string {
         if width < 0 {
                 width = 0
         }
@@ -61,16 +65,22 @@ func renderItemSidePanelWithEvents(db *store.DB, it model.Item, width, height in
 
         lines := []string{}
         switch kind {
+        case itemSideAttachments:
+                rows := buildAttachmentPanelRows(db, it)
+                lines = append(lines, headerStyle.Render(fmt.Sprintf("Attachments (%d)", len(rows))))
+                lines = append(lines, headerStyle.Render("up/down, j/k, ctrl+n/p: select  enter: open  u: upload  e: edit  pgup/pgdown: scroll"))
+                lines = append(lines, "")
+                lines = append(lines, renderAttachmentPanelRows(rows, attachmentIdx, innerW, height-3, scroll, focusRowStyle, moreStyle)...)
         case itemSideComments:
                 comments := db.CommentsForItem(it.ID)
                 lines = append(lines, headerStyle.Render(fmt.Sprintf("Comments (%d)", len(comments))))
-                lines = append(lines, headerStyle.Render("up/down, j/k, ctrl+n/p: select  home/end: jump  pgup/pgdown: scroll  R: reply"))
+                lines = append(lines, headerStyle.Render("up/down, j/k, ctrl+n/p: select  home/end: jump  enter: attachments  pgup/pgdown: scroll  R: reply  l: links"))
                 lines = append(lines, "")
                 lines = append(lines, renderThreadedComments(db, comments, commentIdx, innerW, height-3, scroll, focusRowStyle, moreStyle)...)
         case itemSideWorklog:
                 worklog := db.WorklogForItem(it.ID)
                 lines = append(lines, headerStyle.Render(fmt.Sprintf("Worklog (%d)", len(worklog))))
-                lines = append(lines, headerStyle.Render("up/down, j/k, ctrl+n/p: select  home/end: jump  pgup/pgdown: scroll"))
+                lines = append(lines, headerStyle.Render("up/down, j/k, ctrl+n/p: select  home/end: jump  pgup/pgdown: scroll  l: links"))
                 lines = append(lines, "")
                 lines = append(lines, renderAccordionWorklog(db, worklog, worklogIdx, innerW, height-3, scroll, focusRowStyle, moreStyle)...)
         case itemSideHistory:
@@ -82,6 +92,100 @@ func renderItemSidePanelWithEvents(db *store.DB, it model.Item, width, height in
         }
 
         return normalizePane(box.Render(strings.Join(lines, "\n")), width, height)
+}
+
+type attachmentPanelRow struct {
+        Attachment model.Attachment
+        Comment    *model.Comment
+}
+
+func buildAttachmentPanelRows(db *store.DB, it model.Item) []attachmentPanelRow {
+        if db == nil {
+                return nil
+        }
+        var out []attachmentPanelRow
+
+        for _, a := range db.AttachmentsForItem(it.ID) {
+                out = append(out, attachmentPanelRow{Attachment: a})
+        }
+        return out
+}
+
+func renderAttachmentPanelRows(rows []attachmentPanelRow, selected int, width, height, scroll int, focusRowStyle lipgloss.Style, moreStyle lipgloss.Style) []string {
+        if height < 1 {
+                return []string{}
+        }
+        if len(rows) == 0 {
+                return []string{"(no attachments)"}
+        }
+        if selected < 0 {
+                selected = 0
+        }
+        if selected >= len(rows) {
+                selected = len(rows) - 1
+        }
+        if scroll < 0 {
+                scroll = 0
+        }
+
+        lineFor := func(r attachmentPanelRow) string {
+                a := r.Attachment
+                name := strings.TrimSpace(a.Title)
+                if name == "" {
+                        name = strings.TrimSpace(a.OriginalName)
+                }
+                if name == "" {
+                        name = a.ID
+                }
+                meta := fmt.Sprintf("%d bytes, %s", a.SizeBytes, strings.TrimSpace(a.ID))
+                alt := truncateInline(strings.TrimSpace(a.Alt), maxInt(0, width-30))
+                if alt != "" {
+                        name = name + " — " + alt
+                }
+                prefix := ""
+                if r.Comment != nil {
+                        prefix = "cmt " + fmtTS(r.Comment.CreatedAt) + "  "
+                }
+                txt := prefix + name + "  (" + meta + ")"
+                if xansi.StringWidth(txt) > width {
+                        txt = xansi.Cut(txt, 0, maxInt(0, width))
+                }
+                return txt
+        }
+
+        // Simple scrolling list (no expanded view yet).
+        if scroll > len(rows)-height {
+                scroll = maxInt(0, len(rows)-height)
+        }
+        win := rows
+        if len(win) > height {
+                end := scroll + height
+                if end > len(rows) {
+                        end = len(rows)
+                }
+                win = rows[scroll:end]
+        }
+
+        out := make([]string, 0, len(win)+2)
+        if scroll > 0 {
+                out = append(out, moreStyle.Render(fmt.Sprintf("↑ %d more", scroll)))
+        }
+        for i := 0; i < len(win); i++ {
+                idx := scroll + i
+                line := lineFor(win[i])
+                if idx == selected {
+                        line = focusRowStyle.Render(line)
+                }
+                out = append(out, line)
+        }
+        if scroll+len(win) < len(rows) {
+                out = append(out, moreStyle.Render(fmt.Sprintf("↓ %d more", len(rows)-(scroll+len(win)))))
+        }
+        // Trim to height.
+        if len(out) > height {
+                out = out[:height]
+        }
+        return out
 }
 
 func renderThreadedComments(db *store.DB, comments []model.Comment, selected int, width, height, scroll int, focusRowStyle lipgloss.Style, moreStyle lipgloss.Style) []string {
@@ -106,6 +210,17 @@ func renderThreadedComments(db *store.DB, comments []model.Comment, selected int
                 scroll = 0
         }
 
+        attachmentsCountByCommentID := map[string]int{}
+        if db != nil {
+                for i := range rows {
+                        cid := strings.TrimSpace(rows[i].Comment.ID)
+                        if cid == "" {
+                                continue
+                        }
+                        attachmentsCountByCommentID[cid] = len(db.AttachmentsForComment(cid))
+                }
+        }
+
         // Collapsed line (always rendered, even when selected).
         lineFor := func(r commentThreadRow) string {
                 indent := strings.Repeat("  ", r.Depth)
@@ -116,7 +231,11 @@ func renderThreadedComments(db *store.DB, comments []model.Comment, selected int
                 actor := actorLabel(db, r.Comment.AuthorID)
                 snippetMax := maxInt(20, width-26-(2*r.Depth))
                 snippet := truncateInline(r.Comment.Body, snippetMax)
-                return fmt.Sprintf("%s%s%s  %s  %s", indent, prefix, fmtTS(r.Comment.CreatedAt), actor, snippet)
+                sfx := ""
+                if n := attachmentsCountByCommentID[strings.TrimSpace(r.Comment.ID)]; n > 0 {
+                        sfx = fmt.Sprintf("  (%d att)", n)
+                }
+                return fmt.Sprintf("%s%s%s  %s  %s%s", indent, prefix, fmtTS(r.Comment.CreatedAt), actor, snippet, sfx)
         }
 
         // Expanded markdown for selected comment: include inline quote if it's a reply.
@@ -136,6 +255,27 @@ func renderThreadedComments(db *store.DB, comments []model.Comment, selected int
         }
 
         mdLines := strings.Split(renderMarkdown(md, maxInt(10, width-2)), "\n")
+        if db != nil {
+                as := db.AttachmentsForComment(strings.TrimSpace(c.ID))
+                if len(as) > 0 {
+                        mdLines = append(mdLines, "")
+                        mdLines = append(mdLines, "Attachments:")
+                        for _, a := range as {
+                                name := strings.TrimSpace(a.Title)
+                                if name == "" {
+                                        name = strings.TrimSpace(a.OriginalName)
+                                }
+                                if name == "" {
+                                        name = strings.TrimSpace(a.ID)
+                                }
+                                line := "- " + name + " (" + strings.TrimSpace(a.ID) + ")"
+                                if xansi.StringWidth(line) > width-2 {
+                                        line = xansi.Cut(line, 0, maxInt(0, width-2))
+                                }
+                                mdLines = append(mdLines, line)
+                        }
+                }
+        }
         if scroll > len(mdLines) {
                 scroll = len(mdLines)
         }

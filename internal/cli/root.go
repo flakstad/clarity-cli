@@ -105,6 +105,7 @@ func NewRootCmd() *cobra.Command {
         cmd.AddCommand(newWorklogCmd(app))
         cmd.AddCommand(newAgentCmd(app))
         cmd.AddCommand(newCaptureCmd(app))
+        cmd.AddCommand(newAttachmentsCmd(app))
         cmd.AddCommand(newWebCmd(app))
         cmd.AddCommand(newWebTUICmd(app))
 

@@ -125,6 +125,31 @@ type WorklogEntry struct {
         LegacyTaskID string `json:"taskId,omitempty"`
 }
 
+type Attachment struct {
+        ID string `json:"id"`
+
+        // Entity references (v1 supports item and comment attachments).
+        EntityKind string `json:"entityKind"` // "item"|"comment"
+        EntityID   string `json:"entityId"`
+
+        // User-facing metadata.
+        Title string `json:"title,omitempty"` // editable display name
+        Alt   string `json:"alt,omitempty"`   // optional description/alt text
+
+        // Original file metadata.
+        OriginalName string `json:"originalName"`
+        SizeBytes    int64  `json:"sizeBytes"`
+        MimeType     string `json:"mimeType,omitempty"`
+        Sha256Hex    string `json:"sha256Hex,omitempty"`
+
+        // Relative path from workspace root to the stored file (git-trackable).
+        Path string `json:"path"`
+
+        CreatedBy string    `json:"createdBy"`
+        CreatedAt time.Time `json:"createdAt"`
+        UpdatedAt time.Time `json:"updatedAt"`
+}
+
 type Event struct {
         ID       string    `json:"id"`
         TS       time.Time `json:"ts"`

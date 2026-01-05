@@ -32,12 +32,14 @@ type DB struct {
         Deps             []model.Dependency   `json:"deps"`
         Comments         []model.Comment      `json:"comments"`
         Worklog          []model.WorklogEntry `json:"worklog"`
+        Attachments      []model.Attachment   `json:"attachments,omitempty"`
 
         // Derived indexes for fast per-item lookups in the TUI. These are not persisted.
-        idxBuilt            bool                            `json:"-"`
-        idxChildrenByParent map[string][]model.Item         `json:"-"`
-        idxCommentsByItem   map[string][]model.Comment      `json:"-"`
-        idxWorklogByItem    map[string][]model.WorklogEntry `json:"-"`
+        idxBuilt               bool                            `json:"-"`
+        idxChildrenByParent    map[string][]model.Item         `json:"-"`
+        idxCommentsByItem      map[string][]model.Comment      `json:"-"`
+        idxWorklogByItem       map[string][]model.WorklogEntry `json:"-"`
+        idxAttachmentsByEntity map[string][]model.Attachment   `json:"-"`
 }
 
 type Store struct {
@@ -493,6 +495,7 @@ func (db *DB) ensureIndexes() {
         db.idxChildrenByParent = map[string][]model.Item{}
         db.idxCommentsByItem = map[string][]model.Comment{}
         db.idxWorklogByItem = map[string][]model.WorklogEntry{}
+        db.idxAttachmentsByEntity = map[string][]model.Attachment{}
 
         for _, it := range db.Items {
                 if it.Archived {
@@ -534,6 +537,21 @@ func (db *DB) ensureIndexes() {
                 db.idxWorklogByItem[id] = entries
         }
 
+        for _, a := range db.Attachments {
+                kind := strings.TrimSpace(a.EntityKind)
+                id := strings.TrimSpace(a.EntityID)
+                if kind == "" || id == "" {
+                        continue
+                }
+                key := kind + "|" + id
+                db.idxAttachmentsByEntity[key] = append(db.idxAttachmentsByEntity[key], a)
+        }
+        for k := range db.idxAttachmentsByEntity {
+                xs := db.idxAttachmentsByEntity[k]
+                sort.Slice(xs, func(i, j int) bool { return xs[i].CreatedAt.After(xs[j].CreatedAt) })
+                db.idxAttachmentsByEntity[k] = xs
+        }
+
         db.idxBuilt = true
 }
 
@@ -559,6 +577,38 @@ func (db *DB) WorklogForItem(itemID string) []model.WorklogEntry {
         }
         db.ensureIndexes()
         return db.idxWorklogByItem[strings.TrimSpace(itemID)]
+}
+
+func (db *DB) AttachmentsForItem(itemID string) []model.Attachment {
+        if db == nil {
+                return nil
+        }
+        db.ensureIndexes()
+        return db.idxAttachmentsByEntity["item|"+strings.TrimSpace(itemID)]
+}
+
+func (db *DB) AttachmentsForComment(commentID string) []model.Attachment {
+        if db == nil {
+                return nil
+        }
+        db.ensureIndexes()
+        return db.idxAttachmentsByEntity["comment|"+strings.TrimSpace(commentID)]
+}
+
+func (db *DB) FindAttachment(id string) (*model.Attachment, bool) {
+        if db == nil {
+                return nil, false
+        }
+        id = strings.TrimSpace(id)
+        if id == "" {
+                return nil, false
+        }
+        for i := range db.Attachments {
+                if strings.TrimSpace(db.Attachments[i].ID) == id {
+                        return &db.Attachments[i], true
+                }
+        }
+        return nil, false
 }
 
 func NormalizeActorKind(s string) (model.ActorKind, error) {

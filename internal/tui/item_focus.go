@@ -13,6 +13,7 @@ const (
         itemFocusDescription
         itemFocusParent
         itemFocusChildren
+        itemFocusAttachments
         itemFocusComments
         itemFocusWorklog
         itemFocusHistory
@@ -27,6 +28,7 @@ var itemFocusOrder = []itemPageFocus{
         itemFocusDescription,
         itemFocusParent,
         itemFocusChildren,
+        itemFocusAttachments,
         itemFocusComments,
         itemFocusWorklog,
         itemFocusHistory,

@@ -40,6 +40,7 @@ Key bindings:
 Item view:
 - `tab` / `shift+tab`: cycle focus across fields (title/status/priority/description/children/…)
 - When **Children** is focused: `↑/↓` selects a child; `enter` opens the selected child
+- `l`: open a picker for links in the focused body (Description/Comments/Worklog). Attachments (`att-...`) are supported for Description and Comments only.
 
 Due/schedule modal:
 - Date is required (`YYYY-MM-DD`), time is optional (`HH:MM`)

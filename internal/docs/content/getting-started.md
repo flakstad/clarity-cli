@@ -31,9 +31,11 @@ If you have a Git repo directory that you want Clarity to treat as a workspace, 
 clarity workspace add <name> --dir /path/to/repo --use
 ```
 
-### Migrating legacy SQLite workspaces
+### Migrating legacy SQLite event log workspaces
 
-If you have an older workspace using the legacy SQLite event log, migrate it into the Git-backed JSONL v1 layout:
+Clarity’s Git sync is built around the JSONL event log (`events/events*.jsonl`) as the canonical history.
+
+If you have an older workspace created during the SQLite event log phase, migrate it into the Git-backed JSONL v1 layout:
 
 ```bash
 clarity workspace migrate --from /path/to/old --to /path/to/new

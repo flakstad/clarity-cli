@@ -632,15 +632,48 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                                 return mm, (&mm).syncRefreshStatusNow()
                         },
                 }
-                if !m.gitStatus.IsRepo || strings.TrimSpace(m.gitStatus.Upstream) == "" {
-                        actions["g"] = actionPanelAction{
-                                label: "Setup Git…",
-                                kind:  actionPanelActionExec,
-                                handler: func(mm appModel) (appModel, tea.Cmd) {
-                                        mm.openInputModal(modalGitSetupRemote, "", "Remote URL (optional)", "")
+                remoteLabel := "Remote…"
+                if !m.gitStatus.IsRepo {
+                        remoteLabel = "Setup Git…"
+                }
+                actions["g"] = actionPanelAction{
+                        label: remoteLabel,
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                // Prefill with current upstream remote URL when available.
+                                initial := ""
+                                if strings.TrimSpace(mm.gitStatus.UpstreamRemoteURL) != "" {
+                                        initial = strings.TrimSpace(mm.gitStatus.UpstreamRemoteURL)
+                                }
+                                mm.openInputModal(modalGitSetupRemote, "", "Remote URL (optional)", initial)
+                                return mm, nil
+                        },
+                }
+                actions["i"] = actionPanelAction{
+                        label: "Show remote info",
+                        kind:  actionPanelActionExec,
+                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                st := mm.gitStatus
+                                if !st.IsRepo {
+                                        mm.showMinibuffer("Sync: not a git repository")
                                         return mm, nil
-                                },
-                        }
+                                }
+                                if !mm.jsonlWorkspace {
+                                        mm.showMinibuffer("Git: workspace is local-only (SQLite event log); migrate to sync items/events")
+                                        return mm, nil
+                                }
+                                if strings.TrimSpace(st.Upstream) == "" {
+                                        mm.showMinibuffer("Git: no upstream (run Remote… to set one)")
+                                        return mm, nil
+                                }
+                                url := strings.TrimSpace(st.UpstreamRemoteURL)
+                                if url == "" {
+                                        mm.showMinibuffer("Git: " + strings.TrimSpace(st.Upstream))
+                                        return mm, nil
+                                }
+                                mm.showMinibuffer("Git: " + strings.TrimSpace(st.Upstream) + " → " + url)
+                                return mm, nil
+                        },
                 }
                 actions["p"] = actionPanelAction{
                         label: "Pull --rebase",
@@ -687,6 +720,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                         actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
                 case viewOutlines:
                         actions["enter"] = actionPanelAction{label: "Select outline", kind: actionPanelActionExec}
+                        actions["U"] = actionPanelAction{label: "Uploads", kind: actionPanelActionExec}
                         actions["n"] = actionPanelAction{label: "New outline", kind: actionPanelActionExec}
                         actions["e"] = actionPanelAction{label: "Rename outline", kind: actionPanelActionExec}
                         actions["D"] = actionPanelAction{label: "Edit outline description", kind: actionPanelActionExec}
@@ -709,6 +743,17 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
                                 actions["Y"] = actionPanelAction{label: "Copy CLI show command (includes --workspace)", kind: actionPanelActionExec}
                                 actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
                         } else {
+                                actions["l"] = actionPanelAction{
+                                        label: "Open links…",
+                                        kind:  actionPanelActionExec,
+                                        handler: func(mm appModel) (appModel, tea.Cmd) {
+                                                mmAny, cmd := mm.updateItem(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+                                                if m2, ok := mmAny.(appModel); ok {
+                                                        return m2, cmd
+                                                }
+                                                return mm, cmd
+                                        },
+                                }
                                 actions["e"] = actionPanelAction{label: "Edit title", kind: actionPanelActionExec}
                                 actions["D"] = actionPanelAction{label: "Edit description", kind: actionPanelActionExec}
                                 actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
@@ -842,6 +887,8 @@ func viewToString(v view) string {
                 return "projects"
         case viewOutlines:
                 return "outlines"
+        case viewProjectAttachments:
+                return "project_attachments"
         case viewOutline:
                 return "outline"
         case viewItem:
@@ -861,6 +908,8 @@ func viewFromString(s string) (view, bool) {
                 return viewProjects, true
         case "outlines":
                 return viewOutlines, true
+        case "project_attachments", "project-attachments":
+                return viewProjectAttachments, true
         case "outline":
                 return viewOutline, true
         case "item":
@@ -1107,6 +1156,12 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
                 return
         }
 
+        if wantView == viewProjectAttachments {
+                m.refreshProjectAttachments(projectID)
+                m.view = viewProjectAttachments
+                return
+        }
+
         // Outline/item views require a selected outline.
         if outlineID == "" {
                 m.view = viewOutlines
@@ -1298,6 +1353,8 @@ func (m appModel) View() string {
                 body = m.viewProjects()
         case viewOutlines:
                 body = m.viewOutlines()
+        case viewProjectAttachments:
+                body = m.viewProjectAttachments()
         case viewAgenda:
                 body = m.viewAgenda()
         case viewArchived:
@@ -1365,6 +1422,9 @@ func (m *appModel) breadcrumbText() string {
 
         if m.view == viewOutlines {
                 return strings.Join(parts, " > ")
+        }
+        if m.view == viewProjectAttachments {
+                return strings.Join(append(parts, "uploads"), " > ")
         }
 
         if m.selectedOutlineID != "" {
@@ -1473,6 +1533,39 @@ func (m *appModel) viewOutlines() string {
         }
         body := m.listBodyWithOverflowHint(&m.outlinesList, contentW, listH)
         body += "\n\n" + renderNewButtonLine(contentW, "New outline", "n")
+        body += "\n" + renderNewButtonLine(contentW, "Uploads", "U")
+        main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
+        main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
+        if m.modal == modalNone {
+                return main
+        }
+        bg := dimBackground(main)
+        fg := m.renderModal()
+        return overlayCenter(bg, fg, w, frameH)
+}
+
+func (m *appModel) viewProjectAttachments() string {
+        frameH := m.frameHeight()
+        if frameH < 8 {
+                frameH = 8
+        }
+        bodyHeight := frameH - (topPadLines + breadcrumbGap + 2)
+        if bodyHeight < 6 {
+                bodyHeight = 6
+        }
+
+        w := m.width
+        if w < 10 {
+                w = 10
+        }
+
+        contentW := w - 2*splitOuterMargin
+        if contentW < 10 {
+                contentW = w
+        }
+
+        crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+        body := m.listBodyWithOverflowHint(&m.projectAttachmentsList, contentW, bodyHeight)
         main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
         main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
         if m.modal == modalNone {
@@ -1617,6 +1710,9 @@ func (m appModel) footerText() string {
                 if m.modal == modalPickAssignee {
                         return "assign: enter: set  esc/ctrl+g: cancel"
                 }
+                if m.modal == modalPickTargets {
+                        return "open: enter: open  i: item  e: edit attachment  esc/ctrl+g: cancel"
+                }
                 if m.modal == modalEditTags {
                         return "tags: tab: focus  enter: add/toggle  esc/ctrl+g: close"
                 }
@@ -1627,10 +1723,10 @@ func (m appModel) footerText() string {
                         return "rename outline: type, enter/ctrl+s: save, esc/ctrl+g: cancel"
                 }
                 if m.modal == modalAddComment {
-                        return "comment: tab: focus  ctrl+o: editor  ctrl+s: save  esc/ctrl+g: cancel"
+                        return "comment: tab: focus  ctrl+o: editor  ctrl+u: attach file  ctrl+s: save  esc/ctrl+g: cancel"
                 }
                 if m.modal == modalReplyComment {
-                        return "reply: tab: focus  ctrl+o: editor  ctrl+s: save  esc/ctrl+g: cancel"
+                        return "reply: tab: focus  ctrl+o: editor  ctrl+u: attach file  ctrl+s: save  esc/ctrl+g: cancel"
                 }
                 if m.modal == modalAddWorklog {
                         return "worklog: tab: focus  ctrl+o: editor  ctrl+s: save  esc/ctrl+g: cancel"
@@ -2802,7 +2898,7 @@ func (m *appModel) refreshItems(outline model.Outline) {
                 }
                 // Cache display labels for metadata that needs DB context.
                 if row.item.AssignedActorID != nil && strings.TrimSpace(*row.item.AssignedActorID) != "" {
-                        row.assignedLabel = actorDisplayLabel(m.db, *row.item.AssignedActorID)
+                        row.assignedLabel = actorCompactLabel(m.db, *row.item.AssignedActorID)
                 }
                 // Normalize tags for stable display.
                 if len(row.item.Tags) > 0 {
@@ -2999,7 +3095,7 @@ func (m *appModel) refreshAgenda() {
                         flat := flattenOutline(o, its, m.agendaCollapsed)
                         for _, row := range flat {
                                 if row.item.AssignedActorID != nil && strings.TrimSpace(*row.item.AssignedActorID) != "" {
-                                        row.assignedLabel = actorDisplayLabel(m.db, *row.item.AssignedActorID)
+                                        row.assignedLabel = actorCompactLabel(m.db, *row.item.AssignedActorID)
                                 }
                                 if len(row.item.Tags) > 0 {
                                         cleaned := make([]string, 0, len(row.item.Tags))
@@ -3463,7 +3559,7 @@ func (m *appModel) viewItem() string {
                 leftW, rightW := splitPaneWidths(contentW)
                 // Render the left pane at full width (the right pane will overlay it).
                 left := renderItemDetailInteractive(m.db, *outline, *it, contentW, bodyHeight, m.itemFocus, m.eventsTail, m.itemChildIdx, m.itemChildOff, m.itemDetailScroll)
-                right := renderItemSidePanelWithEvents(m.db, *it, rightW, bodyHeight, sidePanelKindForFocus(m.itemFocus), m.itemCommentIdx, m.itemWorklogIdx, m.itemHistoryIdx, m.itemSideScroll, m.eventsTail)
+                right := renderItemSidePanelWithEvents(m.db, *it, rightW, bodyHeight, sidePanelKindForFocus(m.itemFocus), m.itemAttachmentIdx, m.itemCommentIdx, m.itemWorklogIdx, m.itemHistoryIdx, m.itemSideScroll, m.eventsTail)
                 // Same breadcrumb strategy as outline split preview: render at full width so wrapping is "behind" the overlay.
                 leftHeader := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
                 main := renderSplitWithLeftHeader(contentW, frameH, leftW, rightW, leftHeader, left, right)
@@ -3497,6 +3593,24 @@ func (m *appModel) renderModal() string {
                 return m.renderInputModal("Edit title")
         case modalEditDescription:
                 return m.renderTextAreaModal("Edit description")
+        case modalPickAttachmentFile:
+                return m.renderAttachmentFilePickerModal()
+        case modalPickTargets:
+                return renderModalBox(m.width, "Open", m.targetPickList.View()+"\n\nenter: open   i: go to item   e: edit attachment   esc/ctrl+g: cancel")
+        case modalAddAttachmentPath:
+                return m.renderInputModalWithDescription("Attachment: file", "Enter a local file path to upload (copied into resources/attachments/).")
+        case modalAddAttachmentTitle:
+                desc := "Title is strongly recommended so you can reliably find the right file later."
+                if strings.TrimSpace(m.attachmentAddTitleHint) != "" {
+                        desc += "\n\nSuggested: " + strings.TrimSpace(m.attachmentAddTitleHint)
+                }
+                return m.renderInputModalWithDescription("Attachment: title", desc)
+        case modalAddAttachmentAlt:
+                return m.renderInputModalWithDescription("Attachment: description", "Optional description/alt text. Use this to capture what the file shows/means (especially for screenshots).")
+        case modalEditAttachmentTitle:
+                return m.renderInputModalWithDescription("Attachment: edit title", "Edit the attachment title (display name).")
+        case modalEditAttachmentAlt:
+                return m.renderInputModalWithDescription("Attachment: edit description", "Edit the attachment description/alt text.")
         case modalStatusNote:
                 return m.renderStatusNoteModal()
         case modalEditOutlineName:
@@ -3552,7 +3666,7 @@ func (m *appModel) renderModal() string {
         case modalConfirmDeleteCaptureTemplatePrompt:
                 return m.renderConfirmDeleteCaptureTemplatePromptModal()
         case modalGitSetupRemote:
-                return m.renderInputModalWithDescription("Git setup", "Enter a Git remote URL (e.g. GitHub). Leave blank to only initialize a local repo.")
+                return m.renderInputModalWithDescription("Git remote", "Enter a Git remote URL (e.g. GitHub). Leave blank to keep the current remote (or initialize a local repo).")
         case modalNewWorkspace:
                 return m.renderInputModal("New workspace")
         case modalRenameWorkspace:
@@ -3720,12 +3834,43 @@ func (m *appModel) renderTextAreaModal(title string) string {
 
         sep := lipgloss.NewStyle().Background(colorControlBg).Render(" ")
         controls := lipgloss.JoinHorizontal(lipgloss.Top, save, sep, cancel)
+        queued := ""
+        if (m.modal == modalAddComment || m.modal == modalReplyComment) && len(m.commentDraftAttachments) > 0 {
+                bodyW := m.textarea.Width()
+                if bodyW < 10 {
+                        bodyW = 10
+                }
+                lines := []string{lipgloss.NewStyle().Width(bodyW).Bold(true).Render(fmt.Sprintf("Attachments (%d) — queued until save", len(m.commentDraftAttachments)))}
+                for i := range m.commentDraftAttachments {
+                        d := m.commentDraftAttachments[i]
+                        name := strings.TrimSpace(d.Title)
+                        if name == "" {
+                                name = filepath.Base(strings.TrimSpace(d.Path))
+                        }
+                        if name == "" {
+                                name = "(untitled)"
+                        }
+                        lines = append(lines, "- "+name)
+                }
+                queued = strings.Join(lines, "\n")
+        }
         body := strings.Join([]string{
                 m.textarea.View(),
+                func() string {
+                        if strings.TrimSpace(queued) == "" {
+                                return ""
+                        }
+                        return "\n" + queued
+                }(),
                 "",
                 controls,
                 "",
-                "ctrl+o: editor    ctrl+s: save    tab: focus    esc/ctrl+g: cancel",
+                func() string {
+                        if m.modal == modalAddComment || m.modal == modalReplyComment {
+                                return "ctrl+o: editor   ctrl+u: attach file   ctrl+s: save   tab: focus   esc/ctrl+g: cancel"
+                        }
+                        return "ctrl+o: editor    ctrl+s: save    tab: focus    esc/ctrl+g: cancel"
+                }(),
         }, "\n")
         return renderModalBox(m.width, title, body)
 }
@@ -3822,14 +3967,37 @@ func (m *appModel) renderReplyCommentModal() string {
         quoteRendered := truncateLines(strings.TrimSpace(renderMarkdown(quoteMD, bodyW)), 8)
         quoteRendered = faintIfDark(lipgloss.NewStyle()).Render(quoteRendered)
 
+        queued := ""
+        if len(m.commentDraftAttachments) > 0 {
+                lines := []string{lipgloss.NewStyle().Width(bodyW).Bold(true).Render(fmt.Sprintf("Attachments (%d) — queued until save", len(m.commentDraftAttachments)))}
+                for i := range m.commentDraftAttachments {
+                        d := m.commentDraftAttachments[i]
+                        name := strings.TrimSpace(d.Title)
+                        if name == "" {
+                                name = filepath.Base(strings.TrimSpace(d.Path))
+                        }
+                        if name == "" {
+                                name = "(untitled)"
+                        }
+                        lines = append(lines, "- "+name)
+                }
+                queued = strings.Join(lines, "\n")
+        }
+
         body := strings.Join([]string{
                 quoteRendered,
                 "",
                 m.textarea.View(),
+                func() string {
+                        if strings.TrimSpace(queued) == "" {
+                                return ""
+                        }
+                        return "\n" + queued
+                }(),
                 "",
                 controls,
                 "",
-                "ctrl+o: editor   tab: focus   ctrl+s: save   esc/ctrl+g: cancel",
+                "ctrl+o: editor   ctrl+u: attach file   tab: focus   ctrl+s: save   esc/ctrl+g: cancel",
         }, "\n")
         return renderModalBox(m.width, "Reply", body)
 }
@@ -3919,7 +4087,7 @@ func (m *appModel) renderInputModalWithDescription(title, desc string) string {
                 lipgloss.WithWhitespaceChars(" "),
                 lipgloss.WithWhitespaceBackground(colorInputBg),
         )
-        descLine := styleMuted().Width(bodyW).Render(strings.TrimSpace(desc))
+        descLine := lipgloss.NewStyle().Width(bodyW).Foreground(colorSurfaceFg).Render(strings.TrimSpace(desc))
         body := strings.Join([]string{
                 descLine,
                 "",
@@ -4015,6 +4183,8 @@ func (m *appModel) reloadFromDisk() error {
                 m.refreshProjects()
         case viewOutlines:
                 m.refreshOutlines(m.selectedProjectID)
+        case viewProjectAttachments:
+                m.refreshProjectAttachments(m.selectedProjectID)
         case viewAgenda:
                 m.refreshAgenda()
         case viewArchived:
@@ -4087,6 +4257,32 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                 if km, ok := msg.(tea.KeyMsg); ok && km.String() == "ctrl+g" {
                         (&m).closeAllModals()
                         return m, nil
+                }
+
+                if m.modal == modalPickAttachmentFile {
+                        // Treat Esc as cancel (filepicker uses Esc as "back" by default).
+                        if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+                                (&m).closeAllModals()
+                                return m, nil
+                        }
+
+                        var cmd tea.Cmd
+                        m.attachmentFilePicker, cmd = m.attachmentFilePicker.Update(msg)
+
+                        if didSelect, path := m.attachmentFilePicker.DidSelectFile(msg); didSelect {
+                                m.attachmentAddPath = strings.TrimSpace(path)
+                                m.attachmentFilePickerLastDir = strings.TrimSpace(m.attachmentFilePicker.CurrentDirectory)
+
+                                base := strings.TrimSpace(filepath.Base(m.attachmentAddPath))
+                                ext := strings.TrimSpace(filepath.Ext(base))
+                                m.attachmentAddTitleHint = strings.TrimSpace(strings.TrimSuffix(base, ext))
+                                m.attachmentAddTitle = ""
+
+                                m.openInputModal(modalAddAttachmentTitle, "", "Title (recommended)", "")
+                                return m, nil
+                        }
+
+                        return m, cmd
                 }
 
                 if m.modal == modalActionPanel {
@@ -4793,9 +4989,27 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.modalForID = ""
                                         m.modalForKey = ""
                                         m.replyQuoteMD = ""
+                                        m.commentDraftAttachments = nil
                                         m.textarea.Blur()
                                         m.textFocus = textFocusBody
                                         return m, nil
+                                case "ctrl+u":
+                                        // Queue attachments while composing a comment/reply. They will be attached to the
+                                        // new comment after saving.
+                                        if m.modal != modalAddComment && m.modal != modalReplyComment {
+                                                return m, nil
+                                        }
+                                        m.attachmentAddFlow = attachmentAddFlowCommentDraft
+                                        m.attachmentAddReturnModal = m.modal
+                                        m.attachmentAddReturnForID = strings.TrimSpace(m.modalForID)
+                                        m.attachmentAddReturnForKey = strings.TrimSpace(m.modalForKey)
+                                        m.attachmentAddKind = "comment"
+                                        m.attachmentAddEntityID = ""
+                                        m.attachmentAddPath = ""
+                                        m.attachmentAddTitle = ""
+                                        m.attachmentAddAlt = ""
+                                        m.attachmentAddTitleHint = ""
+                                        return m, m.openAttachmentFilePicker()
                                 case "tab":
                                         switch m.textFocus {
                                         case textFocusBody:
@@ -4845,10 +5059,16 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                                 return m, nil
                                                         }
                                                         if m.modal == modalAddComment {
-                                                                _, _ = m.addComment(itemID, body, nil)
+                                                                cid, _ := m.addComment(itemID, body, nil)
+                                                                if strings.TrimSpace(cid) != "" {
+                                                                        _ = m.attachQueuedDraftsToComment(cid)
+                                                                }
                                                         } else if m.modal == modalReplyComment {
                                                                 replyTo := strings.TrimSpace(m.modalForKey)
-                                                                _, _ = m.addComment(itemID, body, &replyTo)
+                                                                cid, _ := m.addComment(itemID, body, &replyTo)
+                                                                if strings.TrimSpace(cid) != "" {
+                                                                        _ = m.attachQueuedDraftsToComment(cid)
+                                                                }
                                                         } else {
                                                                 _ = m.addWorklog(itemID, body)
                                                         }
@@ -4857,6 +5077,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                 m.modalForID = ""
                                                 m.modalForKey = ""
                                                 m.replyQuoteMD = ""
+                                                m.commentDraftAttachments = nil
                                                 m.textarea.SetValue("")
                                                 m.textarea.Blur()
                                                 m.textFocus = textFocusBody
@@ -4892,10 +5113,16 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                                         return m, nil
                                                 }
                                                 if m.modal == modalAddComment {
-                                                        _, _ = m.addComment(itemID, body, nil)
+                                                        cid, _ := m.addComment(itemID, body, nil)
+                                                        if strings.TrimSpace(cid) != "" {
+                                                                _ = m.attachQueuedDraftsToComment(cid)
+                                                        }
                                                 } else if m.modal == modalReplyComment {
                                                         replyTo := strings.TrimSpace(m.modalForKey)
-                                                        _, _ = m.addComment(itemID, body, &replyTo)
+                                                        cid, _ := m.addComment(itemID, body, &replyTo)
+                                                        if strings.TrimSpace(cid) != "" {
+                                                                _ = m.attachQueuedDraftsToComment(cid)
+                                                        }
                                                 } else {
                                                         _ = m.addWorklog(itemID, body)
                                                 }
@@ -4904,6 +5131,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.modalForID = ""
                                         m.modalForKey = ""
                                         m.replyQuoteMD = ""
+                                        m.commentDraftAttachments = nil
                                         m.textarea.SetValue("")
                                         m.textarea.Blur()
                                         m.textFocus = textFocusBody
@@ -5077,6 +5305,60 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                         var cmd tea.Cmd
                         m.assigneeList, cmd = m.assigneeList.Update(msg)
+                        return m, cmd
+                }
+
+                if m.modal == modalPickTargets {
+                        switch km := msg.(type) {
+                        case tea.KeyMsg:
+                                switch km.String() {
+                                case "esc":
+                                        (&m).closeAllModals()
+                                        return m, nil
+                                case "enter":
+                                        if it, ok := m.targetPickList.SelectedItem().(targetPickItem); ok {
+                                                (&m).closeAllModals()
+                                                switch it.t.Kind {
+                                                case targetPickTargetAttachment:
+                                                        if a, ok := m.db.FindAttachment(strings.TrimSpace(it.t.Target)); ok && a != nil {
+                                                                return m, m.openAttachment(*a)
+                                                        }
+                                                        m.showMinibuffer("Attachment not found: " + strings.TrimSpace(it.t.Target))
+                                                        return m, nil
+                                                default:
+                                                        return m, m.openURL(strings.TrimSpace(it.t.Target))
+                                                }
+                                        }
+                                        (&m).closeAllModals()
+                                        return m, nil
+                                case "i":
+                                        if it, ok := m.targetPickList.SelectedItem().(targetPickItem); ok {
+                                                id := strings.TrimSpace(it.t.RelatedItem)
+                                                if id != "" {
+                                                        (&m).closeAllModals()
+                                                        if err := (&m).jumpToItemByID(id); err != nil {
+                                                                m.showMinibuffer("Jump: " + err.Error())
+                                                                return m, nil
+                                                        }
+                                                        return m, nil
+                                                }
+                                        }
+                                case "e":
+                                        if it, ok := m.targetPickList.SelectedItem().(targetPickItem); ok && it.t.Kind == targetPickTargetAttachment {
+                                                a, ok := m.db.FindAttachment(strings.TrimSpace(it.t.Target))
+                                                if !ok || a == nil {
+                                                        return m, nil
+                                                }
+                                                m.attachmentEditID = strings.TrimSpace(a.ID)
+                                                m.attachmentEditTitle = strings.TrimSpace(a.Title)
+                                                m.attachmentEditAlt = strings.TrimSpace(a.Alt)
+                                                m.openInputModal(modalEditAttachmentTitle, "", "Title (recommended)", m.attachmentEditTitle)
+                                                return m, nil
+                                        }
+                                }
+                        }
+                        var cmd tea.Cmd
+                        m.targetPickList, cmd = m.targetPickList.Update(msg)
                         return m, cmd
                 }
 
@@ -5689,6 +5971,47 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         }
                                         (&nm).showMinibuffer("Workspace: " + strings.TrimSpace(val))
                                         return nm, nil
+                                case modalAddAttachmentPath:
+                                        if val == "" {
+                                                return m, nil
+                                        }
+                                        m.attachmentAddPath = strings.TrimSpace(val)
+                                        base := strings.TrimSpace(filepath.Base(m.attachmentAddPath))
+                                        ext := strings.TrimSpace(filepath.Ext(base))
+                                        m.attachmentAddTitleHint = strings.TrimSpace(strings.TrimSuffix(base, ext))
+                                        m.attachmentAddTitle = ""
+                                        m.openInputModal(modalAddAttachmentTitle, "", "Title (recommended)", "")
+                                        return m, nil
+                                case modalAddAttachmentTitle:
+                                        m.attachmentAddTitle = val
+                                        if strings.TrimSpace(m.attachmentAddTitle) == "" && strings.TrimSpace(m.attachmentAddTitleHint) != "" {
+                                                // Keep a best-effort title if user leaves it blank.
+                                                m.attachmentAddTitle = strings.TrimSpace(m.attachmentAddTitleHint)
+                                        }
+                                        m.openInputModal(modalAddAttachmentAlt, "", "Description (optional)", strings.TrimSpace(m.attachmentAddAlt))
+                                        return m, nil
+                                case modalAddAttachmentAlt:
+                                        m.attachmentAddAlt = val // allow empty
+                                        if m.attachmentAddFlow == attachmentAddFlowCommentDraft {
+                                                if err := m.queueCommentDraftAttachment(); err != nil {
+                                                        m.showMinibuffer("Attachment error: " + err.Error())
+                                                }
+                                                return m, nil
+                                        }
+                                        if err := m.commitAttachmentAdd(); err != nil {
+                                                m.showMinibuffer("Attachment error: " + err.Error())
+                                                return m, nil
+                                        }
+                                case modalEditAttachmentTitle:
+                                        m.attachmentEditTitle = val // allow empty
+                                        m.openInputModal(modalEditAttachmentAlt, "", "Description (optional)", strings.TrimSpace(m.attachmentEditAlt))
+                                        return m, nil
+                                case modalEditAttachmentAlt:
+                                        m.attachmentEditAlt = val // allow empty
+                                        if err := m.commitAttachmentEdit(); err != nil {
+                                                m.showMinibuffer("Attachment error: " + err.Error())
+                                                return m, nil
+                                        }
                                 case modalEditTitle:
                                         if val == "" {
                                                 return m, nil
@@ -5699,11 +6022,20 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         }
                                 case modalEditOutlineName:
                                         _ = m.setOutlineNameFromModal(val)
+                                case modalNewSibling, modalNewChild:
+                                        if val == "" {
+                                                return m, nil
+                                        }
+                                        if err := m.createItemFromModal(val); err != nil {
+                                                return m, m.reportError("", err)
+                                        }
                                 default:
                                         if val == "" {
                                                 return m, nil
                                         }
-                                        _ = m.createItemFromModal(val)
+                                        if err := m.createItemFromModal(val); err != nil {
+                                                return m, m.reportError("", err)
+                                        }
                                 }
                                 m.modal = modalNone
                                 m.modalForID = ""
@@ -6934,6 +7266,14 @@ func overlayAt(bgLines []string, fgLines []string, w, x, y, fgW int) {
 }
 
 func dimBackground(s string) string {
+        // Many TUI components render with their own ANSI styles. If we just wrap the
+        // full string in a "dim" style, any inner ANSI resets will cancel the effect
+        // (e.g. list item rows can remain fully saturated while a modal is open).
+        //
+        // For a consistent "scrim", strip existing ANSI styling first, then apply the
+        // dimmed palette.
+        s = xansi.Strip(s)
+
         // A simple "scrim" effect: desaturate + faint. This keeps layout identical and
         // makes the modal feel closer without destroying the context behind it.
         if lipgloss.HasDarkBackground() {
@@ -7546,9 +7886,9 @@ func (m *appModel) createItemFromModal(title string) error {
                 return nil
         }
         outline := *m.selectedOutline
-        actorID := m.currentWriteActorID()
+        actorID := m.editActorID()
         if actorID == "" {
-                return nil
+                return errors.New("no current actor")
         }
 
         db, err := m.store.Load()
@@ -7629,9 +7969,17 @@ func (m *appModel) createItemFromModal(title string) error {
         m.db.Items = append(m.db.Items, newItem)
 
         if err := m.appendEvent(actorID, "item.create", newItem.ID, newItem); err != nil {
+                // Roll back optimistic in-memory append on failure.
+                if len(m.db.Items) > 0 && m.db.Items[len(m.db.Items)-1].ID == newItem.ID {
+                        m.db.Items = m.db.Items[:len(m.db.Items)-1]
+                }
                 return err
         }
         if err := m.store.Save(m.db); err != nil {
+                // Roll back optimistic in-memory append on failure.
+                if len(m.db.Items) > 0 && m.db.Items[len(m.db.Items)-1].ID == newItem.ID {
+                        m.db.Items = m.db.Items[:len(m.db.Items)-1]
+                }
                 return err
         }
         m.refreshEventsTail()
@@ -7988,7 +8336,7 @@ func (m *appModel) setAssignedActor(itemID string, assignedActorID *string) erro
                 return true, itemMutationResult{
                         eventType:    "item.set_assign",
                         eventPayload: res.EventPayload,
-                        minibuffer:   "Assigned: @" + actorDisplayLabel(db, next),
+                        minibuffer:   "Assigned: @" + actorCompactLabel(db, next),
                 }, nil
         })
 }
@@ -8387,7 +8735,7 @@ func (m *appModel) openAssigneePicker(itemID string) {
                 return ai < aj
         })
         for _, a := range actors {
-                lbl := actorDisplayLabel(m.db, a.ID)
+                lbl := actorPickerLabel(m.db, a.ID)
                 opts = append(opts, assigneeOptionItem{id: a.ID, label: lbl})
         }
 
@@ -9678,6 +10026,10 @@ func (m *appModel) openTextModal(kind modalKind, itemID, placeholder, initial st
         m.modalForID = itemID
         m.textFocus = textFocusBody
         bodyW := modalBodyWidth(m.width)
+
+        if kind == modalAddComment || kind == modalReplyComment {
+                m.commentDraftAttachments = nil
+        }
 
         h := m.height - 12
         if h < 6 {

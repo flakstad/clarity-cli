@@ -36,7 +36,7 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
         status := renderStatus(outline, it.StatusID)
         assigned := "-"
         if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) != "" {
-                assigned = "@" + actorDisplayLabel(db, *it.AssignedActorID)
+                assigned = "@" + actorDetailLabel(db, *it.AssignedActorID)
         }
         tags := "-"
         if len(it.Tags) > 0 {
@@ -75,6 +75,18 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
         lastComment := "-"
         if commentsCount > 0 {
                 lastComment = fmtTS(comments[0].CreatedAt)
+        }
+
+        attRows := buildAttachmentPanelRows(db, it)
+        lastAttachment := "-"
+        if len(attRows) > 0 {
+                latest := attRows[0].Attachment.CreatedAt
+                for i := 1; i < len(attRows); i++ {
+                        if attRows[i].Attachment.CreatedAt.After(latest) {
+                                latest = attRows[i].Attachment.CreatedAt
+                        }
+                }
+                lastAttachment = fmtTS(latest)
         }
 
         worklog := db.WorklogForItem(it.ID)
@@ -133,6 +145,7 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
                 renderChildrenOutline(db, outline, children, innerW, false, 0, 0, 8),
                 "",
                 labelStyle.Render("Related"),
+                fmt.Sprintf("Attachments: %d (last %s)", len(attRows), lastAttachment),
                 fmt.Sprintf("Comments: %d (last %s)", commentsCount, lastComment),
                 fmt.Sprintf("Worklog:   %d (last %s)", len(worklog), lastWorklog),
                 fmt.Sprintf("History:   %d (last %s)", len(history), lastHistory),
@@ -187,7 +200,7 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
         status := renderStatus(outline, it.StatusID)
         assigned := "-"
         if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) != "" {
-                assigned = "@" + actorDisplayLabel(db, *it.AssignedActorID)
+                assigned = "@" + actorDetailLabel(db, *it.AssignedActorID)
         }
         tags := "-"
         if len(it.Tags) > 0 {
@@ -226,6 +239,18 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
         lastComment := "-"
         if commentsCount > 0 {
                 lastComment = fmtTS(comments[0].CreatedAt)
+        }
+
+        attRows := buildAttachmentPanelRows(db, it)
+        lastAttachment := "-"
+        if len(attRows) > 0 {
+                latest := attRows[0].Attachment.CreatedAt
+                for i := 1; i < len(attRows); i++ {
+                        if attRows[i].Attachment.CreatedAt.After(latest) {
+                                latest = attRows[i].Attachment.CreatedAt
+                        }
+                }
+                lastAttachment = fmtTS(latest)
         }
 
         worklog := db.WorklogForItem(it.ID)
@@ -294,6 +319,7 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
         bodyLines = append(bodyLines, strings.Split(renderChildrenOutline(db, outline, children, innerW, focus == itemFocusChildren, childIdx, childOff, 8), "\n")...)
         bodyLines = append(bodyLines, "")
         bodyLines = append(bodyLines, labelStyle.Render("Related"))
+        bodyLines = append(bodyLines, btn(focus == itemFocusAttachments).Render(fmt.Sprintf("Attachments: %d (last %s)", len(attRows), lastAttachment)))
         bodyLines = append(bodyLines, btn(focus == itemFocusComments).Render(fmt.Sprintf("Comments: %d (last %s)", commentsCount, lastComment)))
         bodyLines = append(bodyLines, btn(focus == itemFocusWorklog).Render(fmt.Sprintf("Worklog:   %d (last %s)", len(worklog), lastWorklog)))
         bodyLines = append(bodyLines, btn(focus == itemFocusHistory).Render(fmt.Sprintf("History:   %d (last %s)", len(history), lastHistory)))

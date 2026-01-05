@@ -57,6 +57,9 @@ func (m *appModel) gitStatusBadgeText() string {
         if !st.IsRepo {
                 return ""
         }
+        if !m.jsonlWorkspace {
+                return "[git: local-only]"
+        }
         if st.Unmerged || st.InProgress {
                 return "[git: conflict]"
         }
@@ -82,5 +85,5 @@ func (m *appModel) gitStatusBadgeText() string {
         if strings.TrimSpace(st.Upstream) == "" {
                 return "[git: no upstream]"
         }
-        return "[git: synced]"
+        return "[git: up-to-date]"
 }

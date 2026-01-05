@@ -73,6 +73,7 @@ type captureModalKind int
 
 const (
         captureModalNone captureModalKind = iota
+        captureModalTemplateSearch
         captureModalEditTitle
         captureModalEditDescription
         captureModalPromptInput
@@ -101,11 +102,12 @@ type captureModel struct {
         cfg           *store.GlobalConfig
         actorOverride string
 
-        templateTree      *captureTemplateNode
-        templatePrefix    []string
-        templateList      list.Model
-        templateHint      string
-        outlineLabelByRef map[string]string
+        templateTree       *captureTemplateNode
+        templatePrefix     []string
+        templateList       list.Model
+        templateSearchList list.Model
+        templateHint       string
+        outlineLabelByRef  map[string]string
 
         promptTemplate *store.CaptureTemplate
         promptIndex    int
@@ -185,6 +187,33 @@ func (i captureOptionItem) Title() string {
 }
 func (i captureOptionItem) Description() string { return "" }
 
+type captureTemplateSearchItem struct {
+        template store.CaptureTemplate
+        keys     string
+        name     string
+        target   string
+}
+
+func (i captureTemplateSearchItem) FilterValue() string {
+        return strings.TrimSpace(i.keys) + " " + strings.TrimSpace(i.name) + " " + strings.TrimSpace(i.target)
+}
+func (i captureTemplateSearchItem) Title() string {
+        keys := strings.TrimSpace(i.keys)
+        if keys == "" {
+                keys = "(no keys)"
+        }
+        name := strings.TrimSpace(i.name)
+        if name == "" {
+                name = "(unnamed template)"
+        }
+        target := strings.TrimSpace(i.target)
+        if target == "" {
+                target = strings.TrimSpace(i.template.Target.Workspace) + "/" + strings.TrimSpace(i.template.Target.OutlineID)
+        }
+        return fmt.Sprintf("[%s] %s  → %s", keys, name, target)
+}
+func (i captureTemplateSearchItem) Description() string { return "" }
+
 type captureOutlineItem struct {
         outline model.Outline
         label   string
@@ -243,6 +272,11 @@ func newCaptureModel(cfg *store.GlobalConfig, actorOverride string) (captureMode
         m.templateList = newList("Capture Templates", "Select a template", []list.Item{})
         m.templateList.SetFilteringEnabled(false)
         m.templateList.SetShowFilter(false)
+
+        m.templateSearchList = newList("Template Search", "Search templates", []list.Item{})
+        m.templateSearchList.SetDelegate(newCompactItemDelegate())
+        m.templateSearchList.SetFilteringEnabled(true)
+        m.templateSearchList.SetShowFilter(true)
 
         m.promptList = newList("", "", []list.Item{})
         m.promptList.SetFilteringEnabled(false)
@@ -535,6 +569,8 @@ func (m *captureModel) closeModal() {
                 return
         }
         switch m.modal {
+        case captureModalTemplateSearch:
+                m.templateSearchList.ResetFilter()
         case captureModalEditTitle:
                 m.titleInput.Blur()
         case captureModalEditDescription:
@@ -565,6 +601,52 @@ func (m *captureModel) closeModal() {
         m.minibuffer = ""
 }
 
+func (m *captureModel) openTemplateSearchModal() {
+        if m == nil {
+                return
+        }
+
+        rows := make([]captureTemplateSearchItem, 0, len(m.cfg.CaptureTemplates))
+        for _, t := range m.cfg.CaptureTemplates {
+                keys, err := store.NormalizeCaptureTemplateKeys(t.Keys)
+                if err != nil {
+                        continue
+                }
+                rows = append(rows, captureTemplateSearchItem{
+                        template: t,
+                        keys:     strings.Join(keys, " "),
+                        name:     strings.TrimSpace(t.Name),
+                        target:   m.outlineLabel(t.Target.Workspace, t.Target.OutlineID),
+                })
+        }
+
+        sort.Slice(rows, func(i, j int) bool {
+                ai := strings.TrimSpace(rows[i].keys)
+                aj := strings.TrimSpace(rows[j].keys)
+                if ai != aj {
+                        return ai < aj
+                }
+                ni := strings.ToLower(strings.TrimSpace(rows[i].name))
+                nj := strings.ToLower(strings.TrimSpace(rows[j].name))
+                if ni != nj {
+                        return ni < nj
+                }
+                return strings.TrimSpace(rows[i].template.Target.OutlineID) < strings.TrimSpace(rows[j].template.Target.OutlineID)
+        })
+
+        items := make([]list.Item, 0, len(rows))
+        for _, r := range rows {
+                items = append(items, r)
+        }
+
+        m.templateSearchList.ResetFilter()
+        m.templateSearchList.SetItems(items)
+        if len(items) > 0 {
+                m.templateSearchList.Select(0)
+        }
+        m.modal = captureModalTemplateSearch
+}
+
 func (m captureModel) updateTemplateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
         switch msg.String() {
         case "ctrl+t":
@@ -587,6 +669,12 @@ func (m captureModel) updateTemplateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
                 }
                 cmd := exec.Command(editor, path)
                 return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return captureEditConfigDoneMsg{err: err} })
+        case "/", "ctrl+f":
+                (&m).openTemplateSearchModal()
+                // Immediately enter filter mode so the next keypress searches.
+                var cmd tea.Cmd
+                m.templateSearchList, cmd = m.templateSearchList.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+                return m, cmd
         case "backspace":
                 if len(m.templatePrefix) > 0 {
                         m.templatePrefix = m.templatePrefix[:len(m.templatePrefix)-1]
@@ -932,7 +1020,7 @@ func (m *captureModel) startDraftFromTemplateWithVars(t store.CaptureTemplate, v
         m.dir = dir
         m.st = st
         m.db = db
-        if shouldAutoCommit() {
+        if shouldAutoCommit() && st.IsJSONLWorkspace() {
                 m.autoCommit = gitrepo.NewDebouncedCommitter(gitrepo.DebouncedCommitterOpts{
                         WorkspaceDir:   dir,
                         Debounce:       2 * time.Second,
@@ -1359,7 +1447,7 @@ func (m *captureModel) refreshDraftList() {
         items := make([]list.Item, 0, len(flat))
         for _, row := range flat {
                 if row.item.AssignedActorID != nil && strings.TrimSpace(*row.item.AssignedActorID) != "" {
-                        row.assignedLabel = actorDisplayLabel(m.db, strings.TrimSpace(*row.item.AssignedActorID))
+                        row.assignedLabel = actorCompactLabel(m.db, strings.TrimSpace(*row.item.AssignedActorID))
                 }
                 items = append(items, outlineRowItem{row: row, outline: *o})
         }
@@ -1510,6 +1598,8 @@ func statusIDInDefs(id string, defs []model.OutlineStatusDef) bool {
 
 func (m *captureModel) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
         switch m.modal {
+        case captureModalTemplateSearch:
+                return m.updateTemplateSearchModal(msg)
         case captureModalEditTitle:
                 return m.updateTitleModal(msg)
         case captureModalEditDescription:
@@ -1533,6 +1623,25 @@ func (m *captureModel) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
         default:
                 return *m, nil
         }
+}
+
+func (m captureModel) updateTemplateSearchModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+        switch msg.String() {
+        case "enter":
+                sel, ok := m.templateSearchList.SelectedItem().(captureTemplateSearchItem)
+                (&m).closeModal()
+                if !ok {
+                        return m, nil
+                }
+                if err := (&m).beginTemplateCapture(sel.template); err != nil {
+                        m.minibuffer = err.Error()
+                        return m, nil
+                }
+                return m, nil
+        }
+        var cmd tea.Cmd
+        m.templateSearchList, cmd = m.templateSearchList.Update(msg)
+        return m, cmd
 }
 
 func (m *captureModel) openTitleModal(forDraftID string, initial string) {
@@ -1799,6 +1908,7 @@ func (m *captureModel) resizeLists() {
                 h = 6
         }
         m.templateList.SetSize(w, h)
+        m.templateSearchList.SetSize(w, h)
         m.promptList.SetSize(w, h)
         m.outlinePickList.SetSize(w, h)
         m.statusPickList.SetSize(w, h)
@@ -1825,7 +1935,7 @@ func (m captureModel) View() string {
                 title = "Capture: template"
                 body = m.templateList.View()
                 if strings.TrimSpace(m.templateHint) != "" {
-                        body = body + "\n\n" + m.templateHint + "\n(backspace: up  enter: select  ctrl+t: templates  esc: cancel)"
+                        body = body + "\n\n" + m.templateHint + "\n(backspace: up  /: search  enter: select  ctrl+t: templates  esc: cancel)"
                 }
         case capturePhaseEditDraft:
                 title = "Capture: draft"
@@ -1878,6 +1988,8 @@ func (m captureModel) renderDraftSummary() string {
 
 func (m captureModel) renderModal() string {
         switch m.modal {
+        case captureModalTemplateSearch:
+                return renderModalBox(m.width, "Capture: template search", m.templateSearchList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
         case captureModalEditTitle:
                 bodyW := modalBodyWidth(m.width)
                 expHelp := styleMuted().Width(bodyW).Render("Expansions: {{date}} {{time}} {{now}} {{clipboard}} {{url}} {{selection}} (+ prompt vars like {{project}})")
@@ -1956,7 +2068,7 @@ func (m *captureModel) openAssigneePicker(active *model.Item) {
                 return ai < aj
         })
         for _, a := range actors {
-                lbl := actorDisplayLabel(m.db, a.ID)
+                lbl := actorPickerLabel(m.db, a.ID)
                 opts = append(opts, assigneeOptionItem{id: a.ID, label: lbl})
         }
 

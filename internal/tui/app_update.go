@@ -12,6 +12,19 @@ import (
 )
 
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+        // The bubbles file picker emits internal message types (readDirMsg/errorMsg) that
+        // we can't switch on directly. When the picker modal is active, forward all
+        // non-window-size messages into updateOutline so the picker can handle them.
+        if m.modal == modalPickAttachmentFile {
+                if _, ok := msg.(tea.WindowSizeMsg); !ok {
+                        mmAny, cmd := m.updateOutline(msg)
+                        if mm, ok := mmAny.(appModel); ok {
+                                return mm, cmd
+                        }
+                        return m, cmd
+                }
+        }
+
         switch msg := msg.(type) {
         case externalEditorDoneMsg:
                 m.applyExternalEditorResult(msg)
@@ -19,6 +32,22 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 if m.modal == modalAddComment || m.modal == modalReplyComment || m.modal == modalAddWorklog || m.modal == modalEditDescription || m.modal == modalEditOutlineDescription || m.modal == modalStatusNote {
                         m.textFocus = textFocusBody
                         m.textarea.Focus()
+                }
+                return m, nil
+
+        case attachmentOpenDoneMsg:
+                if msg.err != nil {
+                        m.showMinibuffer("Open failed: " + msg.err.Error())
+                } else {
+                        m.showMinibuffer("Opened attachment")
+                }
+                return m, nil
+
+        case urlOpenDoneMsg:
+                if msg.err != nil {
+                        m.showMinibuffer("Open failed: " + msg.err.Error())
+                } else {
+                        m.showMinibuffer("Opened link")
                 }
                 return m, nil
 
@@ -32,6 +61,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 *m.capture = mm
                         }
                 }
+                var filePickerCmd tea.Cmd
+                if m.modal == modalPickAttachmentFile {
+                        m.attachmentFilePicker.Height = attachmentFilePickerHeight(m.height)
+                        m.attachmentFilePicker, filePickerCmd = m.attachmentFilePicker.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+                }
                 // Don't show the resize overlay on startup; only after we've seen an initial size.
                 if !m.seenWindowSize {
                         m.seenWindowSize = true
@@ -41,10 +75,14 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 m.resizing = true
                 m.resizeSeq++
                 seq := m.resizeSeq
-                return m, tea.Batch(
+                cmds := []tea.Cmd{
                         tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return resizeDoneMsg{seq: seq} }),
                         m.schedulePreviewCompute(),
-                )
+                }
+                if filePickerCmd != nil {
+                        cmds = append(cmds, filePickerCmd)
+                }
+                return m, tea.Batch(cmds...)
 
         case resizeDoneMsg:
                 // Debounce: only clear if this corresponds to the latest resize seq.
@@ -353,6 +391,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 m.refreshOutlines(m.selectedProjectID)
                                 m.showPreview = false
                                 return m, nil
+                        case viewProjectAttachments:
+                                m.view = viewOutlines
+                                m.refreshOutlines(m.selectedProjectID)
+                                return m, nil
                         case viewOutlines:
                                 m.view = viewProjects
                                 m.refreshProjects()
@@ -477,6 +519,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                         // Non-outline views: ESC goes back immediately.
                         switch m.view {
+                        case viewProjectAttachments:
+                                m.view = viewOutlines
+                                m.refreshOutlines(m.selectedProjectID)
+                                return m, nil
                         case viewOutlines:
                                 m.view = viewProjects
                                 m.refreshProjects()
@@ -527,6 +573,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         m.collapsed = map[string]bool{}
                                         m.refreshItems(it.outline)
                                         return m, nil
+                                }
+                        case viewProjectAttachments:
+                                if it, ok := m.projectAttachmentsList.SelectedItem().(projectAttachmentListItem); ok {
+                                        return m, m.openAttachment(it.Attachment)
                                 }
                         case viewAgenda:
                                 if it, ok := m.agendaList.SelectedItem().(agendaRowItem); ok {
@@ -643,6 +693,53 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         return m, nil
                                 }
                         }
+                        if m.view == viewProjectAttachments {
+                                if it, ok := m.projectAttachmentsList.SelectedItem().(projectAttachmentListItem); ok {
+                                        a := it.Attachment
+                                        m.attachmentEditID = strings.TrimSpace(a.ID)
+                                        m.attachmentEditTitle = strings.TrimSpace(a.Title)
+                                        m.attachmentEditAlt = strings.TrimSpace(a.Alt)
+                                        m.openInputModal(modalEditAttachmentTitle, "", "Title (recommended)", m.attachmentEditTitle)
+                                        return m, nil
+                                }
+                        }
+                case "i":
+                        if m.view == viewProjectAttachments {
+                                if it, ok := m.projectAttachmentsList.SelectedItem().(projectAttachmentListItem); ok {
+                                        id := strings.TrimSpace(it.ItemID)
+                                        if id == "" {
+                                                return m, nil
+                                        }
+                                        m.selectedProjectID = strings.TrimSpace(it.ProjectID)
+                                        m.selectedOutlineID = strings.TrimSpace(it.OutlineID)
+                                        if o, ok := m.db.FindOutline(m.selectedOutlineID); ok && o != nil {
+                                                m.selectedOutline = o
+                                                m.refreshItems(*o)
+                                                selectListItemByID(&m.itemsList, id)
+                                        }
+                                        m.openItemID = id
+                                        (&m).recordRecentItemVisit(m.openItemID)
+                                        m.view = viewItem
+                                        m.itemArchivedReadOnly = false
+                                        m.itemFocus = itemFocusTitle
+                                        m.itemCommentIdx = 0
+                                        m.itemWorklogIdx = 0
+                                        m.itemHistoryIdx = 0
+                                        m.itemSideScroll = 0
+                                        m.itemDetailScroll = 0
+                                        m.hasReturnView = true
+                                        m.returnView = viewProjectAttachments
+                                        m.showPreview = false
+                                        m.pane = paneOutline
+                                        return m, nil
+                                }
+                        }
+                case "U":
+                        if m.view == viewOutlines {
+                                m.view = viewProjectAttachments
+                                m.refreshProjectAttachments(m.selectedProjectID)
+                                return m, nil
+                        }
                 case "D":
                         // Edit outline description (outline list view).
                         if m.view == viewOutlines {
@@ -673,6 +770,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 case viewOutlines:
                         var cmd tea.Cmd
                         m.outlinesList, cmd = m.outlinesList.Update(msg)
+                        return m, cmd
+                case viewProjectAttachments:
+                        var cmd tea.Cmd
+                        m.projectAttachmentsList, cmd = m.projectAttachmentsList.Update(msg)
                         return m, cmd
                 case viewAgenda:
                         var cmd tea.Cmd
@@ -763,6 +864,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                 worklog := m.db.WorklogForItem(it.ID)
                 history := filterEventsForItem(m.db, m.eventsTail, it.ID)
                 commentRows := buildCommentThreadRows(comments)
+                attachmentRows := buildAttachmentPanelRows(m.db, *it)
                 children := m.db.ChildrenOf(it.ID)
                 sort.Slice(children, func(i, j int) bool { return compareOutlineItems(children[i], children[j]) < 0 })
                 if m.itemChildIdx < 0 {
@@ -806,6 +908,12 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         }
                                 }
                                 return m, nil
+                        case itemFocusAttachments:
+                                if len(attachmentRows) > 0 && m.itemAttachmentIdx > 0 {
+                                        m.itemAttachmentIdx--
+                                        m.itemSideScroll = 0
+                                }
+                                return m, nil
                         case itemFocusComments:
                                 if len(commentRows) > 0 && m.itemCommentIdx > 0 {
                                         m.itemCommentIdx--
@@ -846,6 +954,12 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         }
                                 }
                                 return m, nil
+                        case itemFocusAttachments:
+                                if n := len(attachmentRows); n > 0 && m.itemAttachmentIdx < n-1 {
+                                        m.itemAttachmentIdx++
+                                        m.itemSideScroll = 0
+                                }
+                                return m, nil
                         case itemFocusComments:
                                 if n := len(commentRows); n > 0 && m.itemCommentIdx < n-1 {
                                         m.itemCommentIdx++
@@ -867,7 +981,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                 case "pgup", "ctrl+u":
                         switch m.itemFocus {
-                        case itemFocusComments, itemFocusWorklog, itemFocusHistory:
+                        case itemFocusAttachments, itemFocusComments, itemFocusWorklog, itemFocusHistory:
                                 m.itemSideScroll -= 10
                                 return m, nil
                         default:
@@ -879,7 +993,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                 case "pgdown", "ctrl+d":
                         switch m.itemFocus {
-                        case itemFocusComments, itemFocusWorklog, itemFocusHistory:
+                        case itemFocusAttachments, itemFocusComments, itemFocusWorklog, itemFocusHistory:
                                 m.itemSideScroll += 10
                                 return m, nil
                         default:
@@ -891,9 +1005,13 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                 case "home":
                         switch m.itemFocus {
-                        case itemFocusComments, itemFocusWorklog, itemFocusHistory:
+                        case itemFocusAttachments, itemFocusComments, itemFocusWorklog, itemFocusHistory:
                                 // Jump to start of list (top) and reset scroll.
                                 switch m.itemFocus {
+                                case itemFocusAttachments:
+                                        if len(attachmentRows) > 0 {
+                                                m.itemAttachmentIdx = 0
+                                        }
                                 case itemFocusComments:
                                         if len(commentRows) > 0 {
                                                 m.itemCommentIdx = 0
@@ -912,6 +1030,12 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                 case "end":
                         switch m.itemFocus {
+                        case itemFocusAttachments:
+                                if len(attachmentRows) > 0 {
+                                        m.itemAttachmentIdx = len(attachmentRows) - 1
+                                }
+                                m.itemSideScroll = 0
+                                return m, nil
                         case itemFocusComments:
                                 if len(commentRows) > 0 {
                                         m.itemCommentIdx = len(commentRows) - 1
@@ -949,6 +1073,54 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         switch m.itemFocus {
                         case itemFocusTitle:
                                 m.openInputModal(modalEditTitle, activeID, "Title", active.Title)
+                                return m, nil
+                        case itemFocusAttachments:
+                                if len(attachmentRows) == 0 {
+                                        return m, nil
+                                }
+                                idx := m.itemAttachmentIdx
+                                if idx < 0 {
+                                        idx = 0
+                                }
+                                if idx >= len(attachmentRows) {
+                                        idx = len(attachmentRows) - 1
+                                }
+                                return m, m.openAttachment(attachmentRows[idx].Attachment)
+                        case itemFocusComments:
+                                if len(commentRows) == 0 || m.db == nil {
+                                        return m, nil
+                                }
+                                idx := m.itemCommentIdx
+                                if idx < 0 {
+                                        idx = 0
+                                }
+                                if idx >= len(commentRows) {
+                                        idx = len(commentRows) - 1
+                                }
+                                c := commentRows[idx].Comment
+                                as := m.db.AttachmentsForComment(strings.TrimSpace(c.ID))
+                                if len(as) == 0 {
+                                        return m, nil
+                                }
+                                targets := make([]targetPickTarget, 0, len(as))
+                                for _, a := range as {
+                                        label := strings.TrimSpace(a.Title)
+                                        if label == "" {
+                                                label = strings.TrimSpace(a.OriginalName)
+                                        }
+                                        if label == "" {
+                                                label = strings.TrimSpace(a.ID)
+                                        }
+                                        targets = append(targets, targetPickTarget{
+                                                Kind:         targetPickTargetAttachment,
+                                                Target:       strings.TrimSpace(a.ID),
+                                                Label:        label,
+                                                Description:  truncateInline(strings.TrimSpace(a.Alt), 120),
+                                                RelatedItem:  strings.TrimSpace(it.ID),
+                                                RelatedTitle: strings.TrimSpace(it.Title),
+                                        })
+                                }
+                                m.startTargetPicker("Comment attachments", targets)
                                 return m, nil
                         case itemFocusStatus:
                                 if o, ok := m.db.FindOutline(active.OutlineID); ok {
@@ -1021,9 +1193,78 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         default:
                                 return m, nil
                         }
+                case "l":
+                        // Open a picker for targets found in the selected markdown body.
+                        var md string
+                        loc := ""
+                        switch m.itemFocus {
+                        case itemFocusDescription:
+                                md = strings.TrimSpace(active.Description)
+                                loc = "description"
+                        case itemFocusComments:
+                                if len(commentRows) == 0 {
+                                        return m, nil
+                                }
+                                idx := m.itemCommentIdx
+                                if idx < 0 {
+                                        idx = 0
+                                }
+                                if idx >= len(commentRows) {
+                                        idx = len(commentRows) - 1
+                                }
+                                md = strings.TrimSpace(commentRows[idx].Comment.Body)
+                                loc = "comment"
+                        case itemFocusWorklog:
+                                if len(worklog) == 0 {
+                                        return m, nil
+                                }
+                                idx := m.itemWorklogIdx
+                                if idx < 0 {
+                                        idx = 0
+                                }
+                                if idx >= len(worklog) {
+                                        idx = len(worklog) - 1
+                                }
+                                md = strings.TrimSpace(worklog[idx].Body)
+                                loc = "worklog"
+                        default:
+                                return m, nil
+                        }
+                        var targets []targetPickTarget
+                        if loc == "worklog" {
+                                // Worklog entries support URLs only (no attachment ids).
+                                targets = m.targetsForMarkdownLinksURLOnly(md)
+                        } else {
+                                targets = m.targetsForMarkdownLinks(md)
+                        }
+                        if len(targets) == 0 {
+                                m.showMinibuffer("Links: none")
+                                return m, nil
+                        }
+                        m.startTargetPicker("Links ("+loc+")", targets)
+                        return m, nil
                 case "e":
                         if readOnly {
                                 m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
+                        // When focusing Attachments, 'e' edits attachment metadata (instead of item title).
+                        if m.itemFocus == itemFocusAttachments {
+                                if len(attachmentRows) == 0 {
+                                        return m, nil
+                                }
+                                idx := m.itemAttachmentIdx
+                                if idx < 0 {
+                                        idx = 0
+                                }
+                                if idx >= len(attachmentRows) {
+                                        idx = len(attachmentRows) - 1
+                                }
+                                a := attachmentRows[idx].Attachment
+                                m.attachmentEditID = strings.TrimSpace(a.ID)
+                                m.attachmentEditTitle = strings.TrimSpace(a.Title)
+                                m.attachmentEditAlt = strings.TrimSpace(a.Alt)
+                                m.openInputModal(modalEditAttachmentTitle, "", "Title (recommended)", m.attachmentEditTitle)
                                 return m, nil
                         }
                         if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
@@ -1039,6 +1280,28 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                         m.itemFocus = itemFocusTitle
                         m.openInputModal(modalEditTitle, activeID, "Title", active.Title)
+                        return m, nil
+                case "E":
+                        // Edit attachment metadata (attachments side panel).
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
+                        if m.itemFocus != itemFocusAttachments || len(attachmentRows) == 0 {
+                                return m, nil
+                        }
+                        idx := m.itemAttachmentIdx
+                        if idx < 0 {
+                                idx = 0
+                        }
+                        if idx >= len(attachmentRows) {
+                                idx = len(attachmentRows) - 1
+                        }
+                        a := attachmentRows[idx].Attachment
+                        m.attachmentEditID = strings.TrimSpace(a.ID)
+                        m.attachmentEditTitle = strings.TrimSpace(a.Title)
+                        m.attachmentEditAlt = strings.TrimSpace(a.Alt)
+                        m.openInputModal(modalEditAttachmentTitle, "", "Title (recommended)", m.attachmentEditTitle)
                         return m, nil
                 case "D":
                         if readOnly {
@@ -1214,6 +1477,42 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
                         m.itemSideScroll = 0
                         m.openTextModal(modalAddWorklog, it.ID, "Log work…", "")
                         return m, nil
+                case "u":
+                        if readOnly {
+                                m.showMinibuffer("Archived item: read-only")
+                                return m, nil
+                        }
+
+                        kind := "item"
+                        entityID := strings.TrimSpace(activeID)
+                        if m.itemFocus == itemFocusComments && len(commentRows) > 0 {
+                                idx := m.itemCommentIdx
+                                if idx < 0 {
+                                        idx = 0
+                                }
+                                if idx >= len(commentRows) {
+                                        idx = len(commentRows) - 1
+                                }
+                                cid := strings.TrimSpace(commentRows[idx].Comment.ID)
+                                if cid != "" {
+                                        kind = "comment"
+                                        entityID = cid
+                                }
+                        }
+                        if entityID == "" {
+                                return m, nil
+                        }
+
+                        m.itemFocus = itemFocusAttachments
+                        m.itemSideScroll = 0
+                        m.attachmentAddKind = kind
+                        m.attachmentAddEntityID = entityID
+                        m.attachmentAddPath = ""
+                        m.attachmentAddTitle = ""
+                        m.attachmentAddAlt = ""
+                        m.attachmentAddTitleHint = ""
+                        m.attachmentAddFlow = attachmentAddFlowCommit
+                        return m, m.openAttachmentFilePicker()
                 case " ":
                         if readOnly {
                                 m.showMinibuffer("Archived item: read-only")

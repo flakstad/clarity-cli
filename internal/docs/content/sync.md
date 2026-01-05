@@ -29,6 +29,10 @@ clarity sync setup --remote-url git@github.com:ORG/REPO.git --push
 
 Shows the Git working tree status for the current workspace directory.
 
+Includes (best-effort) upstream remote metadata when an upstream is configured:
+- `upstreamRemote` (e.g. `origin`)
+- `upstreamRemoteURL` (remote fetch URL)
+
 Examples:
 
 ```bash
@@ -39,6 +43,18 @@ clarity --dir /path/to/workspace sync status
 Use this when:
 - debugging why writes are blocked (future behavior), or
 - checking ahead/behind status before/after a pull.
+
+## `clarity sync remotes`
+
+Lists configured Git remotes (names + URLs) for the current workspace directory.
+
+Use this when you’re not sure which remote Clarity/Git is configured to push to.
+
+Examples:
+
+```bash
+clarity sync remotes
+```
 
 ## `clarity sync pull`
 

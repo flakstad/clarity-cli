@@ -744,6 +744,21 @@ clarity <item-id>
                                 return writeErr(cmd, err)
                         }
 
+                        // Best-effort: if the caller is an agent, prefer showing items already assigned
+                        // to that agent first, even when --include-assigned is false. This supports
+                        // autonomous agents that want to resume/pick up their own queue without
+                        // surfacing work assigned to other actors.
+                        actorID := strings.TrimSpace(app.ActorID)
+                        if actorID == "" {
+                                actorID = strings.TrimSpace(db.CurrentActorID)
+                        }
+                        isAgent := false
+                        if actorID != "" {
+                                if a, ok := db.FindActor(actorID); ok && a != nil {
+                                        isAgent = a.Kind == model.ActorKindAgent
+                                }
+                        }
+
                         blocked := map[string]bool{}
                         for _, d := range db.Deps {
                                 if d.Type == model.DependencyBlocks {
@@ -751,6 +766,7 @@ clarity <item-id>
                                 }
                         }
 
+                        mine := make([]model.Item, 0)
                         out := make([]model.Item, 0)
                         for _, t := range db.Items {
                                 if t.Archived {
@@ -762,13 +778,25 @@ clarity <item-id>
                                 if blocked[t.ID] {
                                         continue
                                 }
-                                if !includeAssigned && t.AssignedActorID != nil && strings.TrimSpace(*t.AssignedActorID) != "" {
-                                        continue
+                                assignedTo := ""
+                                if t.AssignedActorID != nil {
+                                        assignedTo = strings.TrimSpace(*t.AssignedActorID)
+                                }
+                                assignedToMe := assignedTo != "" && actorID != "" && assignedTo == actorID
+                                if assignedTo != "" && !includeAssigned && !(isAgent && assignedToMe) {
+                                        continue // assigned to someone else (or unknown actor)
                                 }
                                 if isEndState(db, t.OutlineID, t.StatusID) {
                                         continue
                                 }
-                                out = append(out, t)
+                                if isAgent && assignedToMe {
+                                        mine = append(mine, t)
+                                } else {
+                                        out = append(out, t)
+                                }
+                        }
+                        if len(mine) > 0 {
+                                out = append(mine, out...)
                         }
                         hints := []string{
                                 "clarity <item-id>",
