@@ -486,6 +486,20 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
         run(t, invocation{name: "workspace add (--dir --kind --use)", cmdPath: "workspace add", args: []string{"workspace", "add", regName, "--dir", regDir, "--kind", "git", "--use"}, expect: expectJSONEnvelope})
         run(t, invocation{name: "workspace forget", cmdPath: "workspace forget", args: []string{"workspace", "forget", regName}, expect: expectJSONEnvelope})
 
+        // workspace archive/unarchive/delete (global workspace meta + legacy cleanup).
+        // Use a throwaway legacy workspace name so we can safely delete it.
+        wsTmp := "ws-archive-delete"
+        run(t, invocation{name: "workspace init (tmp)", cmdPath: "workspace init", args: []string{"workspace", "init", wsTmp}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "workspace archive", cmdPath: "workspace archive", args: []string{"workspace", "archive", wsTmp}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "workspace list --include-archived", cmdPath: "workspace list", args: []string{"workspace", "list", "--include-archived"}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "workspace unarchive", cmdPath: "workspace unarchive", args: []string{"workspace", "unarchive", wsTmp}, expect: expectJSONEnvelope})
+        // Ensure we aren't deleting the current workspace (avoid surprising side-effects for later calls).
+        run(t, invocation{name: "workspace use (back to wsName2)", cmdPath: "workspace use", args: []string{"workspace", "use", wsName2}, expect: expectJSONEnvelope})
+        // Cover --force-legacy by registering the same name to a different path (Git-backed alias) first.
+        wsTmpRegDir := t.TempDir()
+        run(t, invocation{name: "workspace add (tmp, registry)", cmdPath: "workspace add", args: []string{"workspace", "add", wsTmp, "--dir", wsTmpRegDir, "--kind", "git"}, expect: expectJSONEnvelope})
+        run(t, invocation{name: "workspace delete --yes --force-legacy", cmdPath: "workspace delete", args: []string{"workspace", "delete", wsTmp, "--yes", "--force-legacy"}, expect: expectJSONEnvelope})
+
         // workspace export/import (+ flags).
         exportDir := t.TempDir()
         run(t, invocation{name: "workspace export (defaults, --to)", cmdPath: "workspace export", args: []string{"--workspace", wsName2, "--actor", wsHuman, "workspace", "export", "--to", exportDir}, expect: expectJSONEnvelope})

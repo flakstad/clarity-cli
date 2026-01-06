@@ -31,6 +31,31 @@ If you have a Git repo directory that you want Clarity to treat as a workspace, 
 clarity workspace add <name> --dir /path/to/repo --use
 ```
 
+### Archiving (hiding) unused workspaces
+
+Hide workspaces you don’t want to see in pickers/lists:
+
+```bash
+clarity workspace archive <name>
+clarity workspace list --include-archived
+clarity workspace unarchive <name>
+```
+
+### Deleting legacy workspaces (dangerous)
+
+If you have legacy workspaces under `~/.clarity/workspaces/<name>` that you want to permanently remove:
+
+```bash
+clarity workspace delete <name> --yes
+```
+
+If a workspace with the same name is registered to a different directory (e.g. a Git repo),
+use `--force-legacy` to delete only the legacy directory:
+
+```bash
+clarity workspace delete <name> --yes --force-legacy
+```
+
 ### Migrating legacy SQLite event log workspaces
 
 Clarity’s Git sync is built around the JSONL event log (`events/events*.jsonl`) as the canonical history.

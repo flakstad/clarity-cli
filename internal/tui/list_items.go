@@ -110,17 +110,22 @@ func (i outlineMoveOptionItem) Description() string {
 }
 
 type workspaceItem struct {
-        name    string
-        desc    string
-        current bool
+        name     string
+        desc     string
+        current  bool
+        archived bool
 }
 
 func (i workspaceItem) FilterValue() string { return i.name }
 func (i workspaceItem) Title() string {
-        if i.current {
-                return "• " + i.name
+        n := i.name
+        if i.archived {
+                n = n + " (archived)"
         }
-        return i.name
+        if i.current {
+                return "• " + n
+        }
+        return n
 }
 func (i workspaceItem) Description() string { return i.desc }
 

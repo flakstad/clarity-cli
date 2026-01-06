@@ -6,6 +6,9 @@ Clarity v1 workspaces can be **Git-backed**:
 - Derived state: `.clarity/index.sqlite` (local, rebuildable)
 - Recommended ignore: `.clarity/` (Clarity can add this to `.gitignore` during `clarity init`)
 
+Git is optional for the core storage model: Clarity still works without `git` installed (events + derived SQLite).
+Only the `clarity sync ...` commands require Git.
+
 ## `clarity sync setup`
 
 Initializes Git for the workspace and (optionally) connects it to a remote.

@@ -1,12 +1,10 @@
 package cli
 
 import (
-        "context"
         "os"
         "path/filepath"
         "strings"
 
-        "clarity-cli/internal/gitrepo"
         "clarity-cli/internal/store"
 
         "github.com/spf13/cobra"
@@ -37,26 +35,20 @@ func newInitCmd(app *App) *cobra.Command {
                                 }
                         }
 
-                        // If we're initializing inside a Git repo (or already have v1 files),
-                        // also bootstrap the Git-backed JSONL v1 layout.
+                        // Bootstrap the JSONL v1 workspace layout (events/ + meta/workspace.json).
                         //
-                        // This is intentionally best-effort; even if this fails, the legacy
-                        // SQLite-based store remains usable.
+                        // Git is optional: Clarity can use the v1 event log + derived SQLite state
+                        // even when `git` isn't installed. Sync commands require Git, but the core
+                        // storage model does not.
+                        //
+                        // This is intentionally best-effort; even if this fails, the SQLite-based
+                        // derived state remains usable.
                         var v1Init *store.GitBackedV1InitResult
-                        shouldInitV1 := false
-                        if v := strings.ToLower(strings.TrimSpace(os.Getenv("CLARITY_EVENTLOG"))); v == "jsonl" {
-                                shouldInitV1 = true
-                        }
-                        if _, err := os.Stat(filepath.Join(app.Dir, "meta", "workspace.json")); err == nil {
-                                shouldInitV1 = true
-                        }
-                        if _, err := os.Stat(filepath.Join(app.Dir, "events")); err == nil {
-                                shouldInitV1 = true
-                        }
-                        if st, err := gitrepo.GetStatus(context.Background(), app.Dir); err == nil && st.IsRepo {
-                                shouldInitV1 = true
-                        }
-                        if shouldInitV1 {
+                        backend := strings.ToLower(strings.TrimSpace(os.Getenv("CLARITY_EVENTLOG")))
+                        // Don't write v1 workspace files for the legacy "store root is .clarity/" mode.
+                        // This mode is used for fixtures/tests or isolated experiments.
+                        isClarityDirStore := filepath.Base(filepath.Clean(app.Dir)) == ".clarity"
+                        if backend != "sqlite" && !isClarityDirStore {
                                 if res, err := store.EnsureGitBackedV1Layout(app.Dir); err == nil {
                                         v1Init = &res
                                 }

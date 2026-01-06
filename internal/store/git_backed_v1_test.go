@@ -9,6 +9,9 @@ import (
 
 func TestEnsureGitBackedV1Layout_CreatesFiles(t *testing.T) {
         dir := t.TempDir()
+        if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+                t.Fatalf("mkdir .git: %v", err)
+        }
 
         res, err := EnsureGitBackedV1Layout(dir)
         if err != nil {

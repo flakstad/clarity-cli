@@ -46,6 +46,7 @@ type appModel struct {
         tagsList               list.Model
         tagsListActive         *bool
         workspaceList          list.Model
+        showArchivedWorkspaces bool
         agendaList             list.Model
         archivedList           list.Model
         // outlineStatusDefsList is used in the outline statuses editor modal.

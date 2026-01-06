@@ -567,7 +567,7 @@ func (m *appModel) openCaptureTemplateWorkspacePicker(selected string) {
         if m == nil {
                 return
         }
-        wss, err := store.ListWorkspaces()
+        ents, err := store.ListWorkspaceEntries()
         if err != nil {
                 m.showMinibuffer("Workspaces: " + err.Error())
                 return
@@ -584,9 +584,12 @@ func (m *appModel) openCaptureTemplateWorkspacePicker(selected string) {
         }
         seen := map[string]bool{}
         names := []string{}
-        for _, n := range wss {
-                n = strings.TrimSpace(n)
+        for _, e := range ents {
+                n := strings.TrimSpace(e.Name)
                 if n == "" || seen[n] {
+                        continue
+                }
+                if e.Archived && n != cur {
                         continue
                 }
                 seen[n] = true

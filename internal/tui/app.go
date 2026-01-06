@@ -3630,7 +3630,13 @@ func (m *appModel) renderModal() string {
         case modalEditTags:
                 return m.renderTagsModal()
         case modalPickWorkspace:
-                return renderModalBox(m.width, "Workspaces", m.workspaceList.View()+"\n\nenter: switch   n:new   r:rename   esc/ctrl+g: close")
+                suffix := ""
+                if m.showArchivedWorkspaces {
+                        suffix = "   A: hide archived"
+                } else {
+                        suffix = "   A: show archived"
+                }
+                return renderModalBox(m.width, "Workspaces", m.workspaceList.View()+"\n\nenter: switch   n:new   r:rename   a: archive/unarchive"+suffix+"   esc/ctrl+g: close")
         case modalCaptureTemplates:
                 return m.renderCaptureTemplatesModal()
         case modalCaptureTemplateName:
@@ -5512,6 +5518,43 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
                                         }
                                         m.modalForKey = old
                                         m.openInputModal(modalRenameWorkspace, "", "New workspace name", old)
+                                        return m, nil
+                                case "A":
+                                        m.showArchivedWorkspaces = !m.showArchivedWorkspaces
+                                        m.openWorkspacePicker()
+                                        return m, nil
+                                case "a":
+                                        name := ""
+                                        if it, ok := m.workspaceList.SelectedItem().(workspaceItem); ok {
+                                                name = strings.TrimSpace(it.name)
+                                        }
+                                        if name == "" {
+                                                return m, nil
+                                        }
+                                        cfg, err := store.LoadConfig()
+                                        if err != nil {
+                                                m.showMinibuffer("Workspace: " + err.Error())
+                                                return m, nil
+                                        }
+                                        if cfg.ArchivedWorkspaces == nil {
+                                                cfg.ArchivedWorkspaces = map[string]bool{}
+                                        }
+                                        next := !cfg.ArchivedWorkspaces[name]
+                                        if next {
+                                                cfg.ArchivedWorkspaces[name] = true
+                                        } else {
+                                                delete(cfg.ArchivedWorkspaces, name)
+                                        }
+                                        if err := store.SaveConfig(cfg); err != nil {
+                                                m.showMinibuffer("Workspace: " + err.Error())
+                                                return m, nil
+                                        }
+                                        if next {
+                                                m.showMinibuffer("Workspace archived: " + name)
+                                        } else {
+                                                m.showMinibuffer("Workspace unarchived: " + name)
+                                        }
+                                        m.openWorkspacePicker()
                                         return m, nil
                                 }
                         }
@@ -8892,6 +8935,7 @@ func (m *appModel) openWorkspacePicker() {
         seen := map[string]bool{}
         names := []string{}
         descByName := map[string]string{}
+        archivedByName := map[string]bool{}
 
         // Keep ListWorkspaceEntries ordering but ensure we include current.
         for _, e := range ws {
@@ -8899,8 +8943,12 @@ func (m *appModel) openWorkspacePicker() {
                 if n == "" || seen[n] {
                         continue
                 }
+                if e.Archived && !m.showArchivedWorkspaces && n != cur {
+                        continue
+                }
                 seen[n] = true
                 names = append(names, n)
+                archivedByName[n] = e.Archived
                 if !e.Legacy {
                         if p := strings.TrimSpace(e.Ref.Path); p != "" {
                                 descByName[n] = p
@@ -8913,7 +8961,7 @@ func (m *appModel) openWorkspacePicker() {
 
         items := make([]list.Item, 0, len(names))
         for _, n := range names {
-                items = append(items, workspaceItem{name: n, desc: descByName[n], current: n == cur})
+                items = append(items, workspaceItem{name: n, desc: descByName[n], current: n == cur, archived: archivedByName[n]})
         }
         m.workspaceList.Title = ""
         m.workspaceList.SetItems(items)

@@ -55,9 +55,17 @@ func EnsureGitBackedV1Layout(dir string) (GitBackedV1InitResult, error) {
         }
 
         gitignorePath := filepath.Join(dir, ".gitignore")
-        gitignoreUpdated, err := EnsureGitignoreHasClarityIgnores(gitignorePath)
-        if err != nil {
-                return GitBackedV1InitResult{}, err
+        gitignoreUpdated := false
+        // Git is optional for the v1 workspace layout. Only touch .gitignore when we have
+        // evidence the directory is (or is intended to be) a Git repo.
+        _, gitDirErr := os.Stat(filepath.Join(dir, ".git"))
+        _, gitignoreErr := os.Stat(gitignorePath)
+        if gitDirErr == nil || gitignoreErr == nil {
+                updated, err := EnsureGitignoreHasClarityIgnores(gitignorePath)
+                if err != nil {
+                        return GitBackedV1InitResult{}, err
+                }
+                gitignoreUpdated = updated
         }
 
         shardPath := s.shardPath(strings.TrimSpace(device.ReplicaID))

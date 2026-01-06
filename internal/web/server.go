@@ -1532,7 +1532,12 @@ type captureOutlineOption struct {
 }
 
 func (s *Server) handleCaptureOptions(w http.ResponseWriter, r *http.Request) {
-        cfg, _ := store.LoadConfig()
+        cfg, err := store.LoadConfig()
+        if err != nil || cfg == nil {
+                // Best-effort: this endpoint is read-only and can still serve defaults even if
+                // the global config is temporarily unreadable.
+                cfg = &store.GlobalConfig{}
+        }
         wsName := strings.TrimSpace(s.workspaceName())
 
         db, err := (store.Store{Dir: s.dir()}).Load()
@@ -1809,9 +1814,10 @@ func (s *Server) handleCaptureTemplateUpsert(w http.ResponseWriter, r *http.Requ
                 return
         }
 
-        cfg, _ := store.LoadConfig()
-        if cfg == nil {
-                cfg = &store.GlobalConfig{}
+        cfg, err := store.LoadConfig()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
         }
 
         // Upsert by keyPath (globally unique).
@@ -1868,9 +1874,10 @@ func (s *Server) handleCaptureTemplateDelete(w http.ResponseWriter, r *http.Requ
                 http.Error(w, "missing keyPath", http.StatusBadRequest)
                 return
         }
-        cfg, _ := store.LoadConfig()
-        if cfg == nil {
-                cfg = &store.GlobalConfig{}
+        cfg, err := store.LoadConfig()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
         }
         next := make([]store.CaptureTemplate, 0, len(cfg.CaptureTemplates))
         for _, t := range cfg.CaptureTemplates {
@@ -2208,11 +2215,13 @@ func (s *Server) switchWorkspace(name string) error {
 }
 
 func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
-        cfg, _ := store.LoadConfig()
-        current := ""
-        if cfg != nil {
-                current = strings.TrimSpace(cfg.CurrentWorkspace)
+        cfg, err := store.LoadConfig()
+        if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
         }
+        current := ""
+        current = strings.TrimSpace(cfg.CurrentWorkspace)
         if current == "" {
                 current = strings.TrimSpace(s.workspaceName())
         }

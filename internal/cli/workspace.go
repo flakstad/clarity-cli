@@ -22,6 +22,9 @@ func newWorkspaceCmd(app *App) *cobra.Command {
 
         cmd.AddCommand(newWorkspaceInitCmd(app))
         cmd.AddCommand(newWorkspaceAddCmd(app))
+        cmd.AddCommand(newWorkspaceArchiveCmd(app))
+        cmd.AddCommand(newWorkspaceUnarchiveCmd(app))
+        cmd.AddCommand(newWorkspaceDeleteCmd(app))
         cmd.AddCommand(newWorkspaceForgetCmd(app))
         cmd.AddCommand(newWorkspaceUseCmd(app))
         cmd.AddCommand(newWorkspaceCurrentCmd(app))
@@ -176,6 +179,12 @@ func newWorkspaceInitCmd(app *App) *cobra.Command {
                                 return writeErr(cmd, err)
                         }
 
+                        // Best-effort: bootstrap JSONL v1 layout so the workspace is ready for Git-backed
+                        // (Git-optional) event logs from day 1.
+                        if v := strings.ToLower(strings.TrimSpace(os.Getenv("CLARITY_EVENTLOG"))); v != "sqlite" {
+                                _, _ = store.EnsureGitBackedV1Layout(dir)
+                        }
+
                         cfg, err := store.LoadConfig()
                         if err != nil {
                                 return writeErr(cmd, err)
@@ -277,6 +286,8 @@ func newWorkspaceCurrentCmd(app *App) *cobra.Command {
 }
 
 func newWorkspaceListCmd(app *App) *cobra.Command {
+        var includeArchived bool
+
         cmd := &cobra.Command{
                 Use:   "list",
                 Short: "List all workspaces",
@@ -289,29 +300,46 @@ func newWorkspaceListCmd(app *App) *cobra.Command {
                                 cfg.CurrentWorkspace = "default"
                         }
 
-                        ws, err := store.ListWorkspaces()
+                        ents, err := store.ListWorkspaceEntries()
                         if err != nil {
                                 return writeErr(cmd, err)
                         }
 
                         type wsDetail struct {
-                                Name string `json:"name"`
-                                Path string `json:"path"`
-                                Kind string `json:"kind,omitempty"`
+                                Name     string `json:"name"`
+                                Path     string `json:"path"`
+                                Kind     string `json:"kind,omitempty"`
+                                Legacy   bool   `json:"legacy,omitempty"`
+                                Archived bool   `json:"archived,omitempty"`
                         }
-                        var details []wsDetail
-                        for _, name := range ws {
-                                dir, err := store.WorkspaceDir(name)
-                                if err != nil {
+
+                        ws := make([]string, 0, len(ents))
+                        details := make([]wsDetail, 0, len(ents))
+                        for _, e := range ents {
+                                name := strings.TrimSpace(e.Name)
+                                if name == "" {
                                         continue
                                 }
-                                d := wsDetail{Name: name, Path: dir}
-                                if cfg.Workspaces != nil {
-                                        if ref, ok := cfg.Workspaces[name]; ok {
-                                                d.Kind = strings.TrimSpace(ref.Kind)
+                                if e.Archived && !includeArchived && name != cfg.CurrentWorkspace {
+                                        continue
+                                }
+                                dir := strings.TrimSpace(e.Ref.Path)
+                                if dir == "" {
+                                        // Should not happen, but keep list output stable.
+                                        d, err := store.WorkspaceDir(name)
+                                        if err == nil {
+                                                dir = d
                                         }
                                 }
-                                details = append(details, d)
+
+                                ws = append(ws, name)
+                                details = append(details, wsDetail{
+                                        Name:     name,
+                                        Path:     dir,
+                                        Kind:     strings.TrimSpace(e.Ref.Kind),
+                                        Legacy:   e.Legacy,
+                                        Archived: e.Archived,
+                                })
                         }
 
                         return writeOut(cmd, app, map[string]any{
@@ -325,6 +353,194 @@ func newWorkspaceListCmd(app *App) *cobra.Command {
                         })
                 },
         }
+        cmd.Flags().BoolVar(&includeArchived, "include-archived", false, "Include archived workspaces")
+        return cmd
+}
+
+func newWorkspaceArchiveCmd(app *App) *cobra.Command {
+        cmd := &cobra.Command{
+                Use:   "archive <name>",
+                Short: "Archive a workspace (hide from default lists/pickers)",
+                Args:  cobra.ExactArgs(1),
+                RunE: func(cmd *cobra.Command, args []string) error {
+                        name, err := store.NormalizeWorkspaceName(args[0])
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        cfg, err := store.LoadConfig()
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if cfg.ArchivedWorkspaces == nil {
+                                cfg.ArchivedWorkspaces = map[string]bool{}
+                        }
+                        cfg.ArchivedWorkspaces[name] = true
+                        if err := store.SaveConfig(cfg); err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        return writeOut(cmd, app, map[string]any{
+                                "data": map[string]any{
+                                        "workspace": name,
+                                        "archived":  true,
+                                },
+                                "_hints": []string{
+                                        "clarity workspace list --include-archived",
+                                        "clarity workspace unarchive " + name,
+                                },
+                        })
+                },
+        }
+        return cmd
+}
+
+func newWorkspaceUnarchiveCmd(app *App) *cobra.Command {
+        cmd := &cobra.Command{
+                Use:   "unarchive <name>",
+                Short: "Unarchive a workspace (show in default lists/pickers)",
+                Args:  cobra.ExactArgs(1),
+                RunE: func(cmd *cobra.Command, args []string) error {
+                        name, err := store.NormalizeWorkspaceName(args[0])
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        cfg, err := store.LoadConfig()
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if cfg.ArchivedWorkspaces == nil {
+                                cfg.ArchivedWorkspaces = map[string]bool{}
+                        }
+                        delete(cfg.ArchivedWorkspaces, name)
+                        if err := store.SaveConfig(cfg); err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        return writeOut(cmd, app, map[string]any{
+                                "data": map[string]any{
+                                        "workspace": name,
+                                        "archived":  false,
+                                },
+                                "_hints": []string{
+                                        "clarity workspace list",
+                                },
+                        })
+                },
+        }
+        return cmd
+}
+
+func newWorkspaceDeleteCmd(app *App) *cobra.Command {
+        var yes bool
+        var forceLegacy bool
+
+        cmd := &cobra.Command{
+                Use:   "delete <name>",
+                Short: "Delete a legacy workspace directory under ~/.clarity/workspaces (dangerous; does not affect Git repos)",
+                Args:  cobra.ExactArgs(1),
+                RunE: func(cmd *cobra.Command, args []string) error {
+                        name, err := store.NormalizeWorkspaceName(args[0])
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if !yes {
+                                return writeErr(cmd, errors.New("refusing to delete without --yes"))
+                        }
+
+                        cfg, err := store.LoadConfig()
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+
+                        legacyDir, err := store.LegacyWorkspaceDir(name)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+
+                        // Safety: refuse to delete if this name is registered to a different path.
+                        hasRegistryDifferentPath := false
+                        if cfg.Workspaces != nil {
+                                if ref, ok := cfg.Workspaces[name]; ok {
+                                        rp := filepath.Clean(strings.TrimSpace(ref.Path))
+                                        lp := filepath.Clean(legacyDir)
+                                        if rp != "" && rp != lp {
+                                                hasRegistryDifferentPath = true
+                                                if !forceLegacy {
+                                                        return writeErr(cmd, fmt.Errorf("workspace %q is registered to %q; refusing to delete legacy dir %q (pass --force-legacy to delete only the legacy dir)", name, rp, lp))
+                                                }
+                                        }
+                                }
+                        }
+
+                        // Safety: ensure the path is actually under the legacy root.
+                        cfgDir, err := store.ConfigDir()
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        wsRoot := filepath.Clean(filepath.Join(cfgDir, "workspaces")) + string(os.PathSeparator)
+                        target := filepath.Clean(legacyDir)
+                        if !strings.HasPrefix(target+string(os.PathSeparator), wsRoot) {
+                                return writeErr(cmd, fmt.Errorf("refusing to delete path outside legacy root: %s", target))
+                        }
+
+                        st, err := os.Stat(target)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if !st.IsDir() {
+                                return writeErr(cmd, fmt.Errorf("not a directory: %s", target))
+                        }
+
+                        // Only delete directories that look like a Clarity workspace (or are empty).
+                        looksLikeWorkspace := false
+                        if st, err := os.Stat(filepath.Join(target, ".clarity")); err == nil && st.IsDir() {
+                                looksLikeWorkspace = true
+                        }
+                        ents, err := os.ReadDir(target)
+                        if err != nil {
+                                return writeErr(cmd, err)
+                        }
+                        if !looksLikeWorkspace && len(ents) > 0 {
+                                return writeErr(cmd, fmt.Errorf("refusing to delete non-empty dir without .clarity marker: %s", target))
+                        }
+
+                        if err := os.RemoveAll(target); err != nil {
+                                return writeErr(cmd, err)
+                        }
+
+                        // Clean up config pointers for this name.
+                        if cfg.Workspaces != nil {
+                                if ref, ok := cfg.Workspaces[name]; ok {
+                                        rp := filepath.Clean(strings.TrimSpace(ref.Path))
+                                        if rp == filepath.Clean(legacyDir) {
+                                                delete(cfg.Workspaces, name)
+                                        }
+                                }
+                        }
+                        if cfg.ArchivedWorkspaces != nil {
+                                delete(cfg.ArchivedWorkspaces, name)
+                        }
+                        // Only clear currentWorkspace when it actually pointed at the legacy dir we deleted.
+                        if cfg.CurrentWorkspace == name && !hasRegistryDifferentPath {
+                                cfg.CurrentWorkspace = ""
+                        }
+                        if err := store.SaveConfig(cfg); err != nil {
+                                return writeErr(cmd, err)
+                        }
+
+                        return writeOut(cmd, app, map[string]any{
+                                "data": map[string]any{
+                                        "workspace": name,
+                                        "deleted":   true,
+                                        "dir":       target,
+                                        "forced":    forceLegacy,
+                                },
+                                "_hints": []string{
+                                        "clarity workspace list",
+                                },
+                        })
+                },
+        }
+        cmd.Flags().BoolVar(&yes, "yes", false, "Confirm deletion")
+        cmd.Flags().BoolVar(&forceLegacy, "force-legacy", false, "Delete only the legacy directory even if a workspace registry entry points elsewhere")
         return cmd
 }
 
