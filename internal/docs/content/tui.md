@@ -12,6 +12,7 @@ Current scope (early):
 - Auto-refresh when the local store changes (polls file mtimes)
 - Outline shows progress cookies for items with children (e.g. `1/2`)
 - Outline list shows item descriptions inline (collapsed by default; `z` toggles)
+- Outline list shows comment counts (`c:N`) and a short threaded preview under expanded descriptions
 - Create items directly from the TUI (sibling and subitem)
 - Reorder and restructure items (reorder, indent, outdent)
 
@@ -26,7 +27,8 @@ Key bindings:
 - `m`: move selected/open item to another outline (can be in a different project)
 - `y`: copy selected item ID to clipboard
 - `Y`: copy `clarity items show <id>` to clipboard
-- `c`: add a comment (selected item)
+- `C`: add a comment (selected/open item)
+- `R`: reply to selected comment (when **Comments** is focused in item view)
 - `w`: add a worklog entry (selected item)
 - `o`: toggle on-hold (selected/open item)
 - `d`: set/clear due date (selected/open item)
@@ -38,7 +40,7 @@ Key bindings:
 - `tab`: toggle focus (outline/preview) (optional; only when preview is visible)
 
 Item view:
-- `tab` / `shift+tab`: cycle focus across fields (title/status/priority/description/children/…)
+- `tab` / `shift+tab`: cycle focus across fields (title/status/…/parent/children/description/attachments/comments/…)
 - When **Children** is focused: `↑/↓` selects a child; `enter` opens the selected child
 - `l`: open a picker for links in the focused body (Description/Comments/Worklog). Attachments (`att-...`) are supported for Description and Comments only.
 
