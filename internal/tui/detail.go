@@ -10,7 +10,6 @@ import (
 	"clarity-cli/internal/store"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/lipgloss/tree"
 	xansi "github.com/charmbracelet/x/ansi"
 )
 
@@ -327,73 +326,134 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
 		Background(colorSelectedBg).
 		Bold(true)
 
-	treeLines := func(t *tree.Tree) []string {
-		if t == nil {
-			return nil
-		}
-		s := strings.TrimRight(t.String(), "\n")
-		if strings.TrimSpace(s) == "" {
-			return nil
-		}
-		lines := strings.Split(s, "\n")
-		for i := range lines {
-			lines[i] = fixedWidthLine(lines[i], innerW)
-		}
-		return lines
-	}
-
-	renderSimpleListTree := func(lines []string) []string {
-		if len(lines) == 0 {
-			return nil
-		}
-		t := tree.New().Root("")
-		for _, ln := range lines {
-			t.Child(ln)
-		}
-		return treeLines(t)
-	}
-
-	renderCommentsTree := func() []string {
+	renderCommentsInline := func() []string {
 		if len(commentRows) == 0 {
 			return []string{"(no comments)"}
 		}
+		out := make([]string, 0, len(commentRows)*8)
 
-		t := tree.New().Root("")
-		stack := []*tree.Tree{t} // stack[0] is synthetic root
+		authorStyle := lipgloss.NewStyle().Bold(true).Foreground(colorSurfaceFg)
+		tsStyle := styleMuted()
+		attStyle := styleMuted()
+		focusBg := lipgloss.NewStyle().Background(colorSelectedBg)
+
+		// Local helper: keep lines tight, never pad; cut if needed.
+		cutLine := func(s string, w int) string {
+			s = strings.TrimRight(s, " ")
+			if w <= 0 {
+				return ""
+			}
+			if xansi.StringWidth(s) > w {
+				return xansi.Cut(s, 0, w) + "\x1b[0m"
+			}
+			return s
+		}
 
 		for i, r := range commentRows {
-			depth := r.Depth + 1
-			if depth < 1 {
-				depth = 1
-			}
-			if depth > len(stack) {
-				depth = len(stack)
+			depth := r.Depth
+			if depth < 0 {
+				depth = 0
 			}
 			if depth > 12 {
 				depth = 12
 			}
+			indentCols := 2 * depth
+			indent := strings.Repeat(" ", indentCols)
+			contentW := maxInt(10, innerW-indentCols)
 
-			// Ensure rows never overflow and wrap (some terminals wrap highlighted rows differently).
-			// The tree renderer's prefix is 4 columns per depth: "├── " and "│   " groups.
-			prefixW := 4 * depth
-			linePrefix := fmt.Sprintf("%s  %s  ", fmtTS(r.Comment.CreatedAt), actorLabel(db, r.Comment.AuthorID))
-			availSnippet := innerW - prefixW - xansi.StringWidth(linePrefix)
-			snippet := truncateInline(r.Comment.Body, maxInt(0, availSnippet))
-			txt := linePrefix + snippet
-			if i == commentIdx && focus == itemFocusComments {
-				txt = focusRowStyle.Render(txt)
+			author := authorStyle.Render(actorLabel(db, r.Comment.AuthorID))
+			ts := tsStyle.Render(fmtTS(r.Comment.CreatedAt))
+			metaPrefix := ""
+			metaIndent := indent
+			if depth > 0 {
+				// Reply indicator: down-right arrow.
+				metaPrefix = "↳ "
+				metaIndent = strings.Repeat(" ", maxInt(0, indentCols-2))
+			}
+			metaLine := metaIndent + metaPrefix + author + "  " + ts
+
+			attLines := []string(nil)
+			if db != nil {
+				as := db.AttachmentsForComment(strings.TrimSpace(r.Comment.ID))
+				if len(as) > 0 {
+					attLines = make([]string, 0, len(as))
+					for _, a := range as {
+						name := strings.TrimSpace(a.Title)
+						if name == "" {
+							name = strings.TrimSpace(a.OriginalName)
+						}
+						if name == "" {
+							name = strings.TrimSpace(a.ID)
+						}
+						alt := strings.TrimSpace(a.Alt)
+						if alt != "" {
+							name = name + " — " + alt
+						}
+						attLines = append(attLines, fmt.Sprintf("- %s  (%d bytes, %s)", name, a.SizeBytes, strings.TrimSpace(a.ID)))
+					}
+				}
 			}
 
-			if len(stack) > depth {
-				stack = stack[:depth]
+			selected := focus == itemFocusComments && i == commentIdx
+
+			block := make([]string, 0, 6)
+			block = append(block, metaLine)
+
+			bodyMD := strings.TrimSpace(r.Comment.Body)
+			if bodyMD != "" {
+				bodyRendered := strings.TrimRight(renderMarkdownCompact(bodyMD, contentW), "\n")
+				if strings.TrimSpace(bodyRendered) == "" {
+					bodyRendered = bodyMD
+				}
+				bodyLines := strings.Split(bodyRendered, "\n")
+				// Keep dense: collapse consecutive blank lines and trim ends.
+				collapsed := make([]string, 0, len(bodyLines))
+				blank := false
+				for _, ln := range bodyLines {
+					if strings.TrimSpace(xansi.Strip(ln)) == "" {
+						if blank {
+							continue
+						}
+						blank = true
+						collapsed = append(collapsed, "")
+						continue
+					}
+					blank = false
+					collapsed = append(collapsed, ln)
+				}
+				for len(collapsed) > 0 && strings.TrimSpace(xansi.Strip(collapsed[0])) == "" {
+					collapsed = collapsed[1:]
+				}
+				for len(collapsed) > 0 && strings.TrimSpace(xansi.Strip(collapsed[len(collapsed)-1])) == "" {
+					collapsed = collapsed[:len(collapsed)-1]
+				}
+				for _, ln := range collapsed {
+					block = append(block, ln)
+				}
 			}
-			parent := stack[depth-1]
-			node := tree.New().Root(txt)
-			parent.Child(node)
-			stack = append(stack, node)
+
+			if len(attLines) > 0 {
+				block = append(block, attStyle.Render(fmt.Sprintf("Attachments (%d)", len(attLines))))
+				for _, ln := range attLines {
+					block = append(block, attStyle.Render(truncateText(strings.TrimSpace(ln), contentW)))
+				}
+			}
+
+			for _, ln := range block {
+				ln = cutLine(ln, contentW)
+				ln = indent + ln
+				ln = cutLine(ln, innerW)
+				if selected {
+					ln = focusBg.Render(ln)
+				}
+				out = append(out, ln)
+			}
+			// Minimal vertical spacing between comments.
+			if i < len(commentRows)-1 {
+				out = append(out, "")
+			}
 		}
-
-		return treeLines(t)
+		return out
 	}
 
 	bodyLines := []string{
@@ -402,7 +462,7 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
 	if parent != nil {
 		bodyLines = append(bodyLines, strings.Split(renderParentOutline(db, outline, *parent, innerW, focus == itemFocusParent), "\n")...)
 	} else {
-		bodyLines = append(bodyLines, styleMuted().Render("(no parent)")+"\x1b[0m")
+		bodyLines = append(bodyLines, styleMuted().Render("(no parent)"))
 	}
 	bodyLines = append(bodyLines, "")
 	bodyLines = append(bodyLines, childrenBtn)
@@ -417,7 +477,6 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
 	if len(attRows) == 0 {
 		bodyLines = append(bodyLines, "(no attachments)")
 	} else {
-		ls := make([]string, 0, len(attRows))
 		for i := range attRows {
 			a := attRows[i].Attachment
 			name := strings.TrimSpace(a.Title)
@@ -435,30 +494,29 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
 			if i == attachmentIdx && focus == itemFocusAttachments {
 				txt = focusRowStyle.Render(txt)
 			}
-			ls = append(ls, txt)
+			bodyLines = append(bodyLines, fixedWidthLine(txt, innerW))
 		}
-		bodyLines = append(bodyLines, renderSimpleListTree(ls)...)
 	}
 	bodyLines = append(bodyLines, "")
 
 	bodyLines = append(bodyLines, btn(focus == itemFocusComments).Render(fmt.Sprintf("Comments (%d)  C: new  R: reply", commentsCount)))
-	bodyLines = append(bodyLines, renderCommentsTree()...)
+	bodyLines = append(bodyLines, renderCommentsInline()...)
 	bodyLines = append(bodyLines, "")
 
 	bodyLines = append(bodyLines, worklogBtn)
 	if len(worklog) == 0 {
 		bodyLines = append(bodyLines, "(no worklog)")
 	} else {
-		ls := make([]string, 0, len(worklog))
 		for i := range worklog {
 			w := worklog[i]
-			txt := fmt.Sprintf("%s  %s  %s", fmtTS(w.CreatedAt), actorLabel(db, w.AuthorID), truncateInline(w.Body, maxInt(20, innerW-26)))
-			if i == worklogIdx && focus == itemFocusWorklog {
-				txt = focusRowStyle.Render(txt)
+			metaPlain := fmt.Sprintf("%s  %s", fmtTS(w.CreatedAt), actorLabel(db, w.AuthorID))
+			txt := fmt.Sprintf("%s  %s", metaPlain, truncateInline(w.Body, maxInt(20, innerW-26)))
+			st := styleMuted()
+			if focus == itemFocusWorklog && i == worklogIdx {
+				st = st.Copy().Background(colorSelectedBg)
 			}
-			ls = append(ls, txt)
+			bodyLines = append(bodyLines, fixedWidthLine(st.Render(txt), innerW))
 		}
-		bodyLines = append(bodyLines, renderSimpleListTree(ls)...)
 	}
 	bodyLines = append(bodyLines, "")
 
@@ -466,16 +524,15 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
 	if len(history) == 0 {
 		bodyLines = append(bodyLines, "(no history)")
 	} else {
-		ls := make([]string, 0, len(history))
 		for i := range history {
 			ev := history[i]
-			txt := fmt.Sprintf("%s  %s  %s", fmtTS(ev.TS), actorLabel(db, ev.ActorID), truncateInline(eventSummary(ev), maxInt(20, innerW-26)))
+			txt := fmt.Sprintf("%s  %s  %s", fmtTS(ev.TS), actorLabel(db, ev.ActorID), eventSummary(ev))
+			st := styleMuted()
 			if i == historyIdx && focus == itemFocusHistory {
-				txt = focusRowStyle.Render(txt)
+				st = st.Copy().Background(colorSelectedBg)
 			}
-			ls = append(ls, txt)
+			bodyLines = append(bodyLines, fixedWidthLine(st.Render(txt), innerW))
 		}
-		bodyLines = append(bodyLines, renderSimpleListTree(ls)...)
 	}
 	bodyLines = append(bodyLines, "")
 

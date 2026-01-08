@@ -53,7 +53,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.WindowSizeMsg:
+		// Avoid rendering into the last terminal column: some terminals autowrap when
+		// writing a character in the final column, which can visually corrupt box
+		// borders (e.g. right border wrapping onto the next line).
 		m.width = msg.Width
+		if m.width > 0 {
+			m.width--
+		}
 		m.height = msg.Height
 		m.resizeLists()
 		if m.modal == modalCapture && m.capture != nil {
@@ -78,7 +84,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		seq := m.resizeSeq
 		cmds := []tea.Cmd{
 			tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return resizeDoneMsg{seq: seq} }),
-			m.schedulePreviewCompute(),
 		}
 		if filePickerCmd != nil {
 			cmds = append(cmds, filePickerCmd)
@@ -129,60 +134,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case previewComputeMsg:
-		// Debounced detail-pane rendering for split preview.
-		if msg.seq != m.previewSeq {
-			m.previewDbg.lastTickSkips++
-			return m, nil
-		}
-		if !m.splitPreviewVisible() {
-			return m, nil
-		}
-		if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-			if strings.TrimSpace(it.row.item.ID) != strings.TrimSpace(msg.itemID) {
-				m.previewDbg.lastReason = "selection changed"
-				return m, nil
-			}
-			start := time.Now()
-			m.previewCacheForID = strings.TrimSpace(msg.itemID)
-			m.previewCacheW = msg.w
-			m.previewCacheH = msg.h
-			m.previewCache = renderItemDetail(m.db, it.outline, it.row.item, msg.w, msg.h, m.pane == paneDetail, m.eventsTail)
-			dur := time.Since(start)
-
-			if m.debugEnabled {
-				m.previewDbg.lastAt = time.Now()
-				m.previewDbg.lastItemID = m.previewCacheForID
-				m.previewDbg.lastW = msg.w
-				m.previewDbg.lastH = msg.h
-				m.previewDbg.lastDur = dur
-				m.previewDbg.lastCacheLen = len(m.previewCache)
-				m.previewDbg.lastTitleLen = len(it.row.item.Title)
-				m.previewDbg.lastDescLen = len(it.row.item.Description)
-				m.previewDbg.lastChildN = len(m.db.ChildrenOf(it.row.item.ID))
-				m.previewDbg.lastCommentN = len(m.db.CommentsForItem(it.row.item.ID))
-				m.previewDbg.lastWorklogN = len(m.db.WorklogForItem(it.row.item.ID))
-				m.previewDbg.lastErr = ""
-				m.previewDbg.lastReason = ""
-
-				// Emit a log line for slow renders.
-				if dur > 250*time.Millisecond {
-					m.debugLogf("slow preview dur=%s item=%s size=%dx%d lens(title=%d desc=%d cache=%d) counts(child=%d cmt=%d wl=%d)",
-						dur, m.previewCacheForID, msg.w, msg.h,
-						m.previewDbg.lastTitleLen, m.previewDbg.lastDescLen, m.previewDbg.lastCacheLen,
-						m.previewDbg.lastChildN, m.previewDbg.lastCommentN, m.previewDbg.lastWorklogN)
-					m.showMinibuffer(fmt.Sprintf("Slow preview render: %s (item %s)", dur, m.previewCacheForID))
-				}
-			}
-		}
 		return m, nil
 
 	case reloadTickMsg:
 		if m.storeChanged() {
 			_ = m.reloadFromDisk()
 		}
-		// Also drive debounced preview rendering so it can't get "stuck loading"
-		// after list refreshes that don't originate from a navigation key.
-		cmds := []tea.Cmd{tickReload(), m.schedulePreviewCompute()}
+		cmds := []tea.Cmd{tickReload()}
 		if (&m).shouldRefreshGitStatus() {
 			cmds = append(cmds, (&m).startGitStatusRefresh())
 		}

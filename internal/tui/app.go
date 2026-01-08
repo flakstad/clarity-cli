@@ -85,14 +85,11 @@ type outlineViewMode int
 
 const (
 	outlineViewModeList outlineViewMode = iota
-	outlineViewModeListPreview
 	outlineViewModeColumns
 )
 
 func outlineViewModeLabel(v outlineViewMode) string {
 	switch v {
-	case outlineViewModeListPreview:
-		return "list+preview"
 	case outlineViewModeColumns:
 		return "columns"
 	default:
@@ -138,9 +135,6 @@ func (m *appModel) setOutlineViewMode(id string, mode outlineViewMode) {
 
 	// Apply side effects.
 	switch mode {
-	case outlineViewModeListPreview:
-		m.showPreview = true
-		m.pane = paneOutline
 	case outlineViewModeColumns:
 		// Kanban uses the whole canvas: disable preview.
 		m.showPreview = false
@@ -169,8 +163,6 @@ func (m *appModel) cycleOutlineViewMode() {
 	next := outlineViewModeList
 	switch cur {
 	case outlineViewModeList:
-		next = outlineViewModeListPreview
-	case outlineViewModeListPreview:
 		next = outlineViewModeColumns
 	default:
 		next = outlineViewModeList
@@ -947,8 +939,6 @@ func paneFromString(s string) (pane, bool) {
 
 func outlineViewModeToString(v outlineViewMode) string {
 	switch v {
-	case outlineViewModeListPreview:
-		return "list+preview"
 	case outlineViewModeColumns:
 		return "columns"
 	default:
@@ -966,8 +956,6 @@ func outlineViewModeFromString(s string) (outlineViewMode, bool) {
 	case "list+descriptions", "list-descriptions", "descriptions", "list+desc", "list-desc":
 		// Back-compat: descriptions mode is now the default list.
 		return outlineViewModeList, true
-	case "list+preview", "list-preview", "preview", "split":
-		return outlineViewModeListPreview, true
 	case "list":
 		return outlineViewModeList, true
 	default:
@@ -1031,10 +1019,10 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
 	}
 
 	// Restore split-preview state (it may be forced off later due to width).
-	if p, ok := paneFromString(st.Pane); ok {
-		m.pane = p
-	}
-	m.showPreview = st.ShowPreview
+	// Preview mode has been removed; always use the outline pane.
+	m.pane = paneOutline
+	// Preview mode has been removed; ignore persisted preview state.
+	m.showPreview = false
 
 	// Restore recent item visits (best-effort; drop missing/archived ids).
 	if len(st.RecentItemIDs) > 0 {
@@ -1175,13 +1163,9 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
 
 	m.selectedOutline = ol
 
-	// Backward compatibility: older state stored preview as a separate boolean. If that was set and
-	// the outline mode is still "list" (or missing), upgrade to list+preview.
-	mode := m.outlineViewModeForID(outlineID)
-	if st.ShowPreview && mode == outlineViewModeList {
-		mode = outlineViewModeListPreview
-	}
-	m.setOutlineViewMode(outlineID, mode)
+	// Backward compatibility: older state stored preview as a separate boolean. Preview mode has
+	// been removed; ignore it and just restore list/columns.
+	m.setOutlineViewMode(outlineID, m.outlineViewModeForID(outlineID))
 
 	m.collapsed = map[string]bool{}
 	m.refreshItems(*ol)
@@ -2538,13 +2522,8 @@ func (m *appModel) resizeLists() {
 }
 
 func (m *appModel) splitPreviewVisible() bool {
-	if m == nil {
-		return false
-	}
-	if !m.showPreview {
-		return false
-	}
-	return m.width >= minSplitPreviewW
+	// Preview mode has been removed.
+	return false
 }
 
 func splitPaneWidths(contentW int) (leftW, rightW int) {
@@ -2667,28 +2646,8 @@ func (m *appModel) outlineLayout() (frameH, bodyH, contentW int) {
 }
 
 func (m *appModel) schedulePreviewCompute() tea.Cmd {
-	if !m.splitPreviewVisible() {
-		return nil
-	}
-	it, ok := m.itemsList.SelectedItem().(outlineRowItem)
-	if !ok {
-		return nil
-	}
-	_, bodyH, contentW := m.outlineLayout()
-	_, rightW := splitPaneWidths(contentW)
-	itemID := strings.TrimSpace(it.row.item.ID)
-	if itemID == "" {
-		return nil
-	}
-	// If the cache already matches, nothing to do.
-	if m.previewCacheForID == itemID && m.previewCacheW == rightW && m.previewCacheH == bodyH && strings.TrimSpace(m.previewCache) != "" {
-		return nil
-	}
-	m.previewSeq++
-	seq := m.previewSeq
-	return tea.Tick(90*time.Millisecond, func(time.Time) tea.Msg {
-		return previewComputeMsg{seq: seq, itemID: itemID, w: rightW, h: bodyH}
-	})
+	// Preview mode has been removed.
+	return nil
 }
 
 func (m *appModel) refreshProjects() {
@@ -2938,19 +2897,7 @@ func (m *appModel) refreshItems(outline model.Outline) {
 			}
 
 			// Comments as replies under the description (single-line preview).
-			comments := m.db.CommentsForItem(row.item.ID)
-			if len(comments) > 0 {
-				const maxInlineComments = 5
-				// Match description tone: use the markdown text color (surface fg), not muted.
-				descTextStyle := lipgloss.NewStyle().Foreground(colorSurfaceFg)
-				for _, line := range commentThreadPreviewLines(m.db, comments, avail, 1, maxInlineComments) {
-					items = append(items, outlineDescRowItem{
-						parentID: row.item.ID,
-						depth:    descDepth,
-						line:     descTextStyle.Render(line) + "\x1b[0m",
-					})
-				}
-			}
+			// (Intentionally not rendering comment subtree inline; outline stays lean.)
 		}
 	}
 	// Always-present affordance for adding an item (useful for empty outlines).
@@ -6452,14 +6399,10 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case "v":
-			// Cycle outline view modes (list -> list+preview -> columns).
+			// Cycle outline view modes (list -> columns).
 			m.cycleOutlineViewMode()
 			if m.selectedOutline != nil {
 				m.refreshItems(*m.selectedOutline)
-			}
-			// Preview may have become visible; compute it.
-			if m.splitPreviewVisible() {
-				return m, m.schedulePreviewCompute()
 			}
 			return m, nil
 		case "S":

@@ -815,8 +815,9 @@
 
   const outlineViewNormalize = (mode) => {
     mode = String(mode || '').trim();
-    if (mode === 'list' || mode === 'list+preview' || mode === 'columns') return mode;
-    if (mode === 'preview' || mode === 'split' || mode === 'list-preview') return 'list+preview';
+    // Preview mode has been removed; normalize anything preview-related to list.
+    if (mode === 'list' || mode === 'columns') return mode;
+    if (mode === 'list+preview' || mode === 'preview' || mode === 'split' || mode === 'list-preview') return 'list';
     return 'list';
   };
 
@@ -846,16 +847,9 @@
     const previewPane = document.getElementById('outline-preview-pane');
     const columnsPane = document.getElementById('outline-columns-pane');
     if (listPane) listPane.style.display = (v === 'columns') ? 'none' : 'block';
-    if (previewPane) previewPane.style.display = (v === 'list+preview') ? 'block' : 'none';
+    if (previewPane) previewPane.style.display = 'none';
     if (columnsPane) columnsPane.style.display = (v === 'columns') ? 'block' : 'none';
 
-    if (v === 'list+preview') {
-      const id = (() => {
-        try { return sessionStorage.getItem(outlineFocusKey(root)) || ''; } catch (_) { return ''; }
-      })();
-      const itemId = String(id || '').trim();
-      if (itemId) refreshOutlinePreview(root, itemId);
-    }
     if (v === 'columns') {
       renderOutlineColumns(root);
     }
@@ -870,8 +864,7 @@
     const outlineId = (root.dataset.outlineId || '').trim();
     const cur = outlineViewNormalize(root.dataset.viewMode || outlineViewGetStored(outlineId));
     let next = 'list';
-    if (cur === 'list') next = 'list+preview';
-    else if (cur === 'list+preview') next = 'columns';
+    if (cur === 'list') next = 'columns';
     else next = 'list';
     outlineViewApply(root, next);
     return true;

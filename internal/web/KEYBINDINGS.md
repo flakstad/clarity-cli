@@ -48,7 +48,7 @@ All key handling is routed through a single `document.addEventListener('keydown'
 
 ## Outline view (native)
 
-- `v` cycle view mode: `list` → `list+preview` → `columns`
+- `v` cycle view mode: `list` ↔ `columns`
 - `h/l` or `←/→` or `Ctrl+B/F` navigate parent/child
 
 ## Item view

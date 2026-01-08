@@ -12,13 +12,13 @@ Current scope (early):
 - Auto-refresh when the local store changes (polls file mtimes)
 - Outline shows progress cookies for items with children (e.g. `1/2`)
 - Outline list shows item descriptions inline (collapsed by default; `z` toggles)
-- Outline list shows comment counts (`c:N`) and a short threaded preview under expanded descriptions
+- Outline list shows comment counts (`c:N`)
 - Create items directly from the TUI (sibling and subitem)
 - Reorder and restructure items (reorder, indent, outdent)
 
 Key bindings:
 - `enter`: open selected item (single-pane item view)
-- `v`: cycle outline view mode (`list` → `list+preview` → `columns`)
+- `v`: cycle outline view mode (`list` ↔ `columns`)
 - `O`: open outline actions menu (from outline screen; includes rename + description)
 - `D` (on outlines screen): edit selected outline description
 - `backspace` or `esc`: go back (from item view → outline; from outline → previous screen)
@@ -37,7 +37,6 @@ Key bindings:
   - `j`: jump to an item by id (accepts `item-vth` or just `vth`)
   - `A`: archived (browse archived content; items open read-only)
 - `q` or `ctrl+c`: quit
-- `tab`: toggle focus (outline/preview) (optional; only when preview is visible)
 
 Item view:
 - `tab` / `shift+tab`: cycle focus across fields (title/status/…/parent/children/description/attachments/comments/…)
