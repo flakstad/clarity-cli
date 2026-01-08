@@ -42,6 +42,8 @@ See also the docs surface:
 ```bash
 clarity docs
 clarity docs getting-started
+clarity docs licensing
+clarity docs network-contract
 clarity docs backup
 clarity items --help
 ```

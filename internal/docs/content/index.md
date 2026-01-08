@@ -12,6 +12,8 @@ For long-form docs:
 
 Recommended starting topics:
 - `direction`
+- `licensing`
+- `network-contract`
 - `getting-started`
 - `output-contract`
 - `identity-ownership`
