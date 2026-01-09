@@ -69,6 +69,21 @@ Notes:
 - `target` is stored as `(workspace name, outline id)` for stability, but the TUI shows outline names (users shouldn’t need to think about ids).
 - During capture you can change the target outline (move) before saving; if the destination outline has different status definitions, capture will prompt you to pick a valid status.
 
+### Prefix group labels (v4)
+
+If you use multi-key sequences, the template picker shows key prefixes as “groups”. By default, Clarity derives a group label from the first word of the first template name under that prefix.
+
+To set an explicit label, add `captureTemplateGroups`:
+
+```json
+{
+  "captureTemplateGroups": [
+    { "name": "Work", "keys": ["w"] },
+    { "name": "Personal", "keys": ["p"] }
+  ]
+}
+```
+
 ### Template defaults (v2)
 
 Templates can optionally seed the capture draft with defaults:
