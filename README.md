@@ -4,15 +4,17 @@ This is a Go CLI + Bubble Tea TUI for Clarity V1: items + dependencies + project
 
 ## Planned direction (product)
 
-Clarity is not trying to recreate Beads feature-for-feature.
-
 The target is closer to **Org Mode + Basecamp**:
 - **Communication-first project management**: tasks, decisions, and discussion live together with a clear history.
 - **Calm by default**: minimal notification pressure; updates are available when you seek them out.
-- **Humans use the TUI** (and later a web GUI); **agents use the CLI** (stable output contract for scripting).
+- **Humans use the TUI**; **agents use the CLI** (stable output contract for scripting).
 - **Agenda is the core power feature** (Org-style): cross-project views/filters/search over items and communication signals.
 
-Beads is a useful reference point specifically for agent ergonomics and operational UX, not as a parity checklist.
+## Principles / non-goals (V1)
+- Calm by default; avoid engagement-driven design and noisy notification pressure.
+- Communication is part of project management; keep a clear, replayable history.
+- No server and no web UI in V1; this repo is CLI + TUI + local store.
+- No surveillance features (time tracking, productivity scoring, anxiety-inducing activity feeds).
 
 ## Model: projects + outlines (one flexible container)
 
@@ -25,10 +27,12 @@ Within a project, **Outlines** are the primary container you add and name freely
 
 We may later introduce explicit settings on projects/outlines to change semantics (notifications, default sorting, etc), but the **data model stays centered on outlines + items**.
 
+For more context: `docs/clarity/VISION.md`.
+
 ## Install / build
 
 ```bash
-make install # runs unit tests first
+make install # runs unit + integration tests first
 ```
 
 Or:
@@ -52,7 +56,7 @@ clarity items --help
 
 ```bash
 clarity init
-clarity identity create --name "andreas" --kind human --use
+clarity identity create --name "<your-name>" --kind human --use
 clarity projects create --name "Clarity" --use
 clarity projects list
 ```

@@ -5214,7 +5214,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "enter":
 					itemID := strings.TrimSpace(m.modalForID)
 					to := ""
-					if it, ok := m.outlinePickList.SelectedItem().(outlineItem); ok {
+					if it, ok := m.outlinePickList.SelectedItem().(outlineMoveOptionItem); ok {
 						to = strings.TrimSpace(it.outline.ID)
 					}
 
@@ -9390,7 +9390,11 @@ func (m *appModel) openMoveOutlinePicker(itemID string) {
 		if o.Archived {
 			continue
 		}
-		opts = append(opts, outlineItem{outline: o})
+		projectName := ""
+		if p, ok := m.db.FindProject(strings.TrimSpace(o.ProjectID)); ok && p != nil {
+			projectName = strings.TrimSpace(p.Name)
+		}
+		opts = append(opts, outlineMoveOptionItem{outline: o, projectName: projectName})
 	}
 	if len(opts) <= 1 {
 		m.showMinibuffer("No other outlines")
@@ -9423,7 +9427,7 @@ func (m *appModel) openMoveOutlinePicker(itemID string) {
 	// Preselect current outline.
 	selected := 0
 	for i := 0; i < len(opts); i++ {
-		if oi, ok := opts[i].(outlineItem); ok && strings.TrimSpace(oi.outline.ID) == strings.TrimSpace(it.OutlineID) {
+		if oi, ok := opts[i].(outlineMoveOptionItem); ok && strings.TrimSpace(oi.outline.ID) == strings.TrimSpace(it.OutlineID) {
 			selected = i
 			break
 		}

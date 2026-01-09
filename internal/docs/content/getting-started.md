@@ -23,6 +23,8 @@ Clarity is **workspace-first** and will use the implicit **`default`** workspace
 
 For most users (and for agents), you should **stick to the default workspace** unless you were specifically instructed to use a different workspace.
 
+Advanced: `--dir` (or `CLARITY_DIR`) bypasses workspace resolution. If you have `CLARITY_DIR` set in your environment but want to target a named workspace, pass `--workspace <name>`.
+
 ### Registering Git-backed workspaces
 
 If you have a Git repo directory that you want Clarity to treat as a workspace, register it:

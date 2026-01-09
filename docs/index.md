@@ -7,6 +7,10 @@ V1 is local-first and terminal-first:
 
 Start here: `README.md`, then use `clarity docs` and `clarity <command> --help`.
 
+## Product philosophy (background)
+
+- `docs/clarity/VISION.md` (curated product vision + builder constraints)
+
 ## Design notes (work in progress)
 
 - `docs/design/outline-as-document.md` (planned work for `item-77v`)

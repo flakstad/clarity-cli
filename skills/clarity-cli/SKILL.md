@@ -1,6 +1,6 @@
 ---
 name: clarity-cli
-description: Use the local-first Clarity CLI (project management for humans and their agents) via a stable, scriptable command surface.
+description: Use Clarity as the default system of record for task management, work logging, and project communication; agents should create/claim items, update status, and record progress via comments/worklog using the `clarity` CLI.
 ---
 
 ## Purpose
@@ -15,21 +15,21 @@ Use Clarity to:
 ## Preconditions (local-only)
 - `clarity` is installed and available on `PATH` (or use a direct binary path).
 - **Default workspace is the norm**: assume all work happens in the implicit `default` workspace unless the user explicitly tells you otherwise.
-- Storage lives under `~/.clarity/workspaces/<name>/` (by default: `~/.clarity/workspaces/default/`).
-- Only use `--workspace <name>` or `--dir <path>` when the user explicitly asks for a specific workspace or an isolated store (fixtures/tests).
+- Only use `--workspace <name>` or `--dir <path>` when the user explicitly asks for a specific workspace or an isolated store.
 
 ## How to discover capabilities (progressive disclosure)
 - High-level help: `clarity --help`
 - Feature-level help: `clarity <command> --help`
-- Item lookup shortcut: `clarity <item-id>` (equivalent to `clarity items show <item-id>`)
+- Direct item lookup: `clarity <item-id>` (equivalent to `clarity items show <item-id>`)
 - Find the next thing to work on: `clarity items ready`
 - Long-form docs (on demand): `clarity docs` and `clarity docs <topic>`
 - Output convention: `clarity docs output-contract`
+- Follow-up discovery: many commands return `_hints` with suggested next commands
 
 ## Output contract
-- Default output is a stable JSON envelope: `{ "data": ... }`
-- Some commands also return `meta` and `_hints` for progressive disclosure
-- Use `--pretty` for readability while debugging
+- Default output is a stable JSON envelope: `{ "data": ... }` (optionally `meta` and `_hints`)
+- Formats: `--format json|edn` (or `CLARITY_FORMAT`)
+- Use `--pretty` only for human debugging; do not rely on it in scripts/agents
 
 ## Identity model (hard requirement)
 All writes are attributed to an **actor**:
@@ -55,8 +55,9 @@ Two supported patterns:
   - Omit the session key; Clarity will generate one automatically
   - Run `clarity agent start <item-id>`
 
-For session key conventions and ownership details, see:
-- `skills/clarity-cli/identity.md`
+Session key notes:
+- `CLARITY_AGENT_SESSION` can be any short string that stays stable for your tool/session (example: `codex-abc`).
+- If you use a long “date-like” suffix (e.g. `cursor-2025-12-20`), Clarity may normalize it to a shorter stable key for readability; the important property is “same input ⇒ same agent identity”.
 
 Minimal loop:
 
@@ -99,7 +100,14 @@ Environment variables (optional conveniences):
 - `CLARITY_AGENT_NAME`: display name used when creating agent identities
 - `CLARITY_AGENT_USER`: parent human actor id (if not resolvable from current actor)
 
-## Workspace-first usage
+## Workspace-first usage (where data lives)
+Workspace resolution is workspace-first and supports both registered and legacy workspaces:
+- Registered workspaces live in `~/.clarity/config.json` and can point anywhere on disk (useful for Git-backed workspaces).
+- Legacy workspaces live under `~/.clarity/workspaces/<name>/`.
+- `CLARITY_CONFIG_DIR` overrides `~/.clarity` (useful for isolated runs).
+- `--dir` / `CLARITY_DIR` is an advanced override for pointing at a specific workspace root (or a legacy `.clarity/` directory).
+- If `CLARITY_DIR` is set but `--workspace` is explicitly provided (without `--dir`), `--workspace` wins.
+
 Typical (recommended) workflow (default workspace):
 
 ```bash
@@ -116,7 +124,7 @@ clarity workspace use <name>
 
 ```bash
 clarity init
-clarity identity create --kind human --name "andreas" --use
+clarity identity create --kind human --name "<your-name>" --use
 clarity projects create --name "Clarity" --use
 clarity outlines create --project <project-id>
 ```
