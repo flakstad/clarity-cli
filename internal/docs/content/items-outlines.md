@@ -35,6 +35,16 @@ clarity projects use <project-id>
 clarity items create --title "Write spec" --description "Markdown supported"
 ```
 
+## Copy an item
+
+```bash
+# Copy within the same outline (inserted after the source item)
+clarity items copy <item-id>
+
+# Copy into a different project/outline
+clarity items copy <item-id> --project <project-id> --outline <outline-id>
+```
+
 ## Find the next item to work on
 
 ```bash

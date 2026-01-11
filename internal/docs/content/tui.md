@@ -24,24 +24,28 @@ Key bindings:
 - `backspace` or `esc`: go back (from item view → outline; from outline → previous screen)
 - `x` (or `?`): open the actions menu (context-aware; includes item actions from outline focus, details pane, and item view)
 - `r`: archive selected item (with confirm)
-- `m`: move selected/open item to another outline (can be in a different project)
+- `m`: move selected/open item to another outline, or under another item (make it a child; can be in a different project)
 - `y`: copy selected item ID to clipboard
 - `Y`: copy `clarity items show <id>` to clipboard
+- `V`: duplicate selected/open item
 - `C`: add a comment (selected/open item)
 - `R`: reply to selected comment (when **Comments** is focused in item view)
-- `w`: add a worklog entry (selected item)
+- `w`: add an entry to **My worklog** (selected item)
 - `o`: toggle on-hold (selected/open item)
 - `d`: set/clear due date (selected/open item)
 - `s`: set/clear schedule date (selected/open item)
 - `g`: open the Go to menu (shows available destinations, including `j` jump-to-item)
   - `j`: jump to an item by id (accepts `item-vth` or just `vth`)
   - `A`: archived (browse archived content; items open read-only)
+  - `1`–`5`: recently visited items (full item view)
+  - `6`–`9`: recently captured items (via Capture)
+  - When you jump to an item via Go to, `backspace`/`esc` returns you to the previous screen.
 - `q` or `ctrl+c`: quit
 
 Item view:
 - `tab` / `shift+tab`: cycle focus across fields (title/status/…/parent/children/description/attachments/comments/…)
 - When **Children** is focused: `↑/↓` selects a child; `enter` opens the selected child
-- `l`: open a picker for links in the focused body (Description/Comments/Worklog). Attachments (`att-...`) are supported for Description and Comments only.
+- `l`: open a picker for links in the focused body (Description/Comments/My worklog). Attachments (`att-...`) are supported for Description and Comments only.
 
 Due/schedule modal:
 - Date is required (`YYYY-MM-DD`), time is optional (`HH:MM`)

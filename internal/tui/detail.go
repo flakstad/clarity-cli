@@ -157,7 +157,7 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
 		labelStyle.Render("Related"),
 		fmt.Sprintf("Attachments: %d (last %s)", len(attRows), lastAttachment),
 		fmt.Sprintf("Comments: %d (last %s)", commentsCount, lastComment),
-		fmt.Sprintf("Worklog:   %d (last %s)", len(worklog), lastWorklog),
+		fmt.Sprintf("My worklog: %d (last %s)", len(worklog), lastWorklog),
 		fmt.Sprintf("History:   %d (last %s)", len(history), lastHistory),
 	)
 
@@ -284,7 +284,7 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
 	parentBtn := btn(focus == itemFocusParent).Render("Parent")
 	childrenBtn := btn(focus == itemFocusChildren).Render("Children")
 	attachmentsBtn := btn(focus == itemFocusAttachments).Render("Attachments")
-	worklogBtn := btn(focus == itemFocusWorklog).Render("Worklog")
+	worklogBtn := btn(focus == itemFocusWorklog).Render("My worklog")
 	historyBtn := btn(focus == itemFocusHistory).Render("History")
 
 	headerLines := []string{
@@ -364,13 +364,11 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
 			author := authorStyle.Render(actorLabel(db, r.Comment.AuthorID))
 			ts := tsStyle.Render(fmtTS(r.Comment.CreatedAt))
 			metaPrefix := ""
-			metaIndent := indent
 			if depth > 0 {
 				// Reply indicator: down-right arrow.
 				metaPrefix = "↳ "
-				metaIndent = strings.Repeat(" ", maxInt(0, indentCols-2))
 			}
-			metaLine := metaIndent + metaPrefix + author + "  " + ts
+			metaLine := metaPrefix + author + "  " + ts
 
 			attLines := []string(nil)
 			if db != nil {

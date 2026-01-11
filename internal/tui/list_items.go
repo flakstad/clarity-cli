@@ -109,6 +109,43 @@ func (i outlineMoveOptionItem) Description() string {
 	return fmt.Sprintf("%s  (%s)", oid, pid)
 }
 
+// moveUnderItemOptionItem is used by the move picker when targeting a specific item
+// (i.e. "make this item a child of ..."). It includes project and outline context
+// to disambiguate items across outlines.
+type moveUnderItemOptionItem struct {
+	item        model.Item
+	outline     model.Outline
+	projectName string
+}
+
+func (i moveUnderItemOptionItem) FilterValue() string {
+	return strings.TrimSpace(i.projectName) + " " + outlineDisplayName(i.outline) + " " + strings.TrimSpace(i.item.Title)
+}
+
+func (i moveUnderItemOptionItem) Title() string {
+	p := strings.TrimSpace(i.projectName)
+	if p == "" {
+		p = "(unknown project)"
+	}
+	t := strings.TrimSpace(i.item.Title)
+	if t == "" {
+		t = "(untitled item)"
+	}
+	return fmt.Sprintf("Under: %s / %s / %s", p, outlineDisplayName(i.outline), t)
+}
+
+func (i moveUnderItemOptionItem) Description() string {
+	iid := strings.TrimSpace(i.item.ID)
+	oid := strings.TrimSpace(i.outline.ID)
+	if iid == "" {
+		iid = "(unknown item)"
+	}
+	if oid == "" {
+		oid = "(unknown outline)"
+	}
+	return fmt.Sprintf("%s  (outline %s)", iid, oid)
+}
+
 type workspaceItem struct {
 	name     string
 	desc     string

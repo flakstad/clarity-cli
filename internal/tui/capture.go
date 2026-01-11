@@ -86,6 +86,7 @@ const (
 	captureModalEditTags
 	captureModalSetDue
 	captureModalSetSchedule
+	captureModalConfirmExit
 )
 
 type captureTemplateNode struct {
@@ -631,6 +632,11 @@ func (m captureModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				(&m).closeModal()
 				return m, nil
 			}
+			// Confirm exit when a draft is in progress, to prevent accidental loss.
+			if m.phase == capturePhaseEditDraft {
+				m.modal = captureModalConfirmExit
+				return m, nil
+			}
 			m.canceled = true
 			return m, m.finishCmd(true)
 		}
@@ -689,6 +695,7 @@ func (m *captureModel) closeModal() {
 		m.hourInput.Blur()
 		m.minuteInput.Blur()
 		m.dateFocus = dateFocusDay
+	case captureModalConfirmExit:
 	}
 	m.modal = captureModalNone
 	m.modalForDraftID = ""
@@ -1242,7 +1249,7 @@ func (m captureModel) updateDraft(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modal = captureModalPickOutline
 		m.openOutlinePicker(m.draftOutlineID)
 		return m, nil
-	case "enter":
+	case "enter", "ctrl+s":
 		// Require a title for every draft item (prevents accidentally creating blank items).
 		for _, d := range m.draftItems {
 			if strings.TrimSpace(d.Title) == "" {
@@ -1715,9 +1722,24 @@ func (m *captureModel) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateTagsModal(msg)
 	case captureModalSetDue, captureModalSetSchedule:
 		return m.updateDateModal(msg)
+	case captureModalConfirmExit:
+		return m.updateConfirmExitModal(msg)
 	default:
 		return *m, nil
 	}
+}
+
+func (m captureModel) updateConfirmExitModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter", "y":
+		m.canceled = true
+		(&m).closeModal()
+		return m, m.finishCmd(true)
+	case "n", "esc", "ctrl+g":
+		(&m).closeModal()
+		return m, nil
+	}
+	return m, nil
 }
 
 func (m captureModel) updateTemplateSearchModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -2071,7 +2093,7 @@ func (m captureModel) renderDraftSummary() string {
 
 	bodyW := modalBodyWidth(m.width)
 	header := styleMuted().Width(bodyW).Render("Target: " + outLabel)
-	help := styleMuted().Width(bodyW).Render("Keys: e title  D desc  a assign  t tags  s schedule  d due  p priority  o hold  SPACE status  m move  n sibling  N subitem  ENTER save  esc cancel")
+	help := styleMuted().Width(bodyW).Render("Keys: e title  D desc  a assign  t tags  s schedule  d due  p priority  o hold  SPACE status  m move  n sibling  N subitem  ENTER/CTRL+S save  esc/ctrl+g exit")
 	return strings.Join([]string{
 		header,
 		"",
@@ -2118,6 +2140,14 @@ func (m captureModel) renderModal() string {
 			return renderModalBox(m.width, "Capture: prompt", "")
 		}
 		return renderModalBox(m.width, "Capture: "+capturePromptLabel(p), m.promptList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
+	case captureModalConfirmExit:
+		bodyW := modalBodyWidth(m.width)
+		desc := styleMuted().Width(bodyW).Render("This draft is not saved until you submit it.")
+		body := strings.Join([]string{
+			"Exit capture and discard this draft?",
+			desc,
+		}, "\n\n")
+		return renderModalBox(m.width, "Confirm", body+"\n\nenter/y: exit   esc/n: keep editing")
 	case captureModalPickOutline:
 		return renderModalBox(m.width, "Capture: move to outline", m.outlinePickList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
 	case captureModalPickStatus:

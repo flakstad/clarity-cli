@@ -12,6 +12,10 @@ Bubble Tea (and TUIs in general) render to a terminal (TTY). So "a separate wind
 - Configure a terminal/OS hotkey to toggle a *pre-existing* terminal window, then run `clarity capture` inside it.
 - On save/cancel, `clarity capture` exits immediately so the hotkey window can hide/close again.
 
+Notes:
+- In the draft editor, `enter` or `ctrl+s` submits (writes items) and exits.
+- In the draft editor, `esc`/`ctrl+g` asks for confirmation before discarding the draft.
+
 This keeps the Clarity behavior cross-platform while letting each user pick their terminal + window manager.
 
 ## Performance notes

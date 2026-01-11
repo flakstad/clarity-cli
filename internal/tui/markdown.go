@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -190,6 +191,25 @@ func markdownStyle() string {
 		return "light"
 	case "dark":
 		return "dark"
+	}
+	// Keep markdown styling aligned with the TUI theme preference. Without this,
+	// markdown can render with a dark palette even when the TUI is forced to
+	// light mode, making description text unreadable on light terminals.
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CLARITY_TUI_THEME"))) {
+	case "light":
+		return "light"
+	case "dark":
+		return "dark"
+	case "auto":
+		// fallthrough
+	}
+	if v := strings.TrimSpace(os.Getenv("CLARITY_TUI_DARKBG")); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			if b {
+				return "dark"
+			}
+			return "light"
+		}
 	}
 	// Heuristic: COLORFGBG is often "fg;bg" (e.g. "15;0" => dark bg).
 	// Prefer this over term queries to avoid blocking.

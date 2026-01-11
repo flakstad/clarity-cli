@@ -71,15 +71,22 @@ type appModel struct {
 	showPreview bool
 	openItemID  string
 	// recentItemIDs stores most-recently-visited item ids (full item view only), newest first.
-	recentItemIDs         []string
-	returnView            view
-	hasReturnView         bool
-	agendaReturnView      view
-	hasAgendaReturnView   bool
-	archivedReturnView    view
-	hasArchivedReturnView bool
-	agendaCollapsed       map[string]bool
-	collapsed             map[string]bool
+	recentItemIDs []string
+	// recentCapturedItemIDs stores most-recently-captured item ids (created via Capture), newest first.
+	recentCapturedItemIDs []string
+	// Return-state for backing out of the item view to "where we came from".
+	// Only populated when hasReturnView is true (best-effort; fields may be empty).
+	returnSelectedProjectID string
+	returnSelectedOutlineID string
+	returnOpenItemID        string
+	returnView              view
+	hasReturnView           bool
+	agendaReturnView        view
+	hasAgendaReturnView     bool
+	archivedReturnView      view
+	hasArchivedReturnView   bool
+	agendaCollapsed         map[string]bool
+	collapsed               map[string]bool
 	// itemFocus is used on the full-screen item view to allow Tab navigation across
 	// editable fields (title/status/description/comment/worklog).
 	itemFocus            itemPageFocus
@@ -155,9 +162,17 @@ type appModel struct {
 	externalEditorPath   string
 	externalEditorBefore string
 
+	// externalViewEditorPath is the temp file used when opening a read-only/view
+	// body (e.g. an existing comment) in $VISUAL/$EDITOR for copying.
+	externalViewEditorPath string
+
 	// pendingMoveOutlineTo is set when a move-outline flow needs the user to pick a status
 	// compatible with the target outline. While set, the status picker "enter" applies the move.
 	pendingMoveOutlineTo string
+	// pendingMoveParentTo is set when a move flow targets "make child of <item>" and needs the
+	// user to pick a status compatible with the target outline. While set alongside
+	// pendingMoveOutlineTo, the status picker "enter" applies the move-under-item.
+	pendingMoveParentTo string
 
 	actionPanelStack []actionPanelKind
 	// actionPanelSelectedKey is the current selection in the action panel (for tab/enter navigation).

@@ -36,6 +36,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case externalViewEditorDoneMsg:
+		m.applyExternalViewEditorResult(msg)
+		return m, nil
+
 	case attachmentOpenDoneMsg:
 		if msg.err != nil {
 			m.showMinibuffer("Open failed: " + msg.err.Error())
@@ -124,6 +128,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Best-effort: if the capture targeted this workspace, reload so the new items appear immediately.
 		if strings.TrimSpace(msg.result.Dir) != "" && strings.TrimSpace(msg.result.Dir) == strings.TrimSpace(m.dir) {
 			_ = m.reloadFromDisk()
+			if id != "" {
+				m.recordRecentCapturedItem(id)
+			}
 		}
 		return m, nil
 
@@ -312,18 +319,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				if m.hasReturnView {
-					m.view = m.returnView
-					m.hasReturnView = false
-					m.openItemID = ""
-					m.itemArchivedReadOnly = false
-					m.showPreview = false
-					m.pane = paneOutline
-					if m.view == viewAgenda {
-						m.refreshAgenda()
-					}
-					if m.view == viewArchived {
-						m.refreshArchived()
-					}
+					(&m).returnFromItemView()
 				} else {
 					m.view = viewOutline
 					m.openItemID = ""
@@ -437,18 +433,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				if m.hasReturnView {
-					m.view = m.returnView
-					m.hasReturnView = false
-					m.openItemID = ""
-					m.itemArchivedReadOnly = false
-					m.showPreview = false
-					m.pane = paneOutline
-					if m.view == viewAgenda {
-						m.refreshAgenda()
-					}
-					if m.view == viewArchived {
-						m.refreshArchived()
-					}
+					(&m).returnFromItemView()
 				} else {
 					m.view = viewOutline
 					m.openItemID = ""
@@ -1003,6 +988,11 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "shift+tab", "backtab":
 			m.itemFocus = m.itemFocus.prevForItem(hasParent)
 			return m, nil
+		case "V":
+			if _, err := (&m).duplicateItem(activeID, true); err != nil {
+				return m, m.reportError(activeID, err)
+			}
+			return m, nil
 		case "enter":
 			// Archived view is read-only: allow opening children, but block mutations.
 			if readOnly {
@@ -1041,7 +1031,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				c := commentRows[idx].Comment
 				title := fmt.Sprintf("Comment — %s — %s", fmtTS(c.CreatedAt), actorLabel(m.db, c.AuthorID))
-				(&m).openViewEntryModal(title, strings.TrimSpace(c.Body))
+				(&m).openViewEntryModal(title, commentMarkdownWithAttachments(m.db, c))
 				return m, nil
 			case itemFocusWorklog:
 				if len(worklog) == 0 || m.db == nil {
@@ -1055,7 +1045,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 					idx = len(worklog) - 1
 				}
 				w := worklog[idx]
-				title := fmt.Sprintf("Worklog — %s — %s", fmtTS(w.CreatedAt), actorLabel(m.db, w.AuthorID))
+				title := fmt.Sprintf("My worklog — %s — %s", fmtTS(w.CreatedAt), actorLabel(m.db, w.AuthorID))
 				(&m).openViewEntryModal(title, strings.TrimSpace(w.Body))
 				return m, nil
 			case itemFocusHistory:
@@ -1167,7 +1157,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if idx >= len(commentRows) {
 					idx = len(commentRows) - 1
 				}
-				md = strings.TrimSpace(commentRows[idx].Comment.Body)
+				md = commentMarkdownWithAttachments(m.db, commentRows[idx].Comment)
 				loc = "comment"
 			case itemFocusWorklog:
 				if len(worklog) == 0 {
@@ -1426,7 +1416,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.itemChildIdx = 0
 				m.itemChildOff = 0
 			}
-			// Add worklog entry (keep the side panel open by focusing Worklog).
+			// Add worklog entry (keep the side panel open by focusing My worklog).
 			m.itemFocus = itemFocusWorklog
 			m.itemWorklogIdx = 0
 			m.itemSideScroll = 0

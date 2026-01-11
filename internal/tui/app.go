@@ -30,6 +30,99 @@ type itemNavEntry struct {
 	toID string
 }
 
+type returnSnapshot struct {
+	view              view
+	selectedProjectID string
+	selectedOutlineID string
+	openItemID        string
+}
+
+func (m appModel) captureReturnSnapshot() returnSnapshot {
+	return returnSnapshot{
+		view:              m.view,
+		selectedProjectID: strings.TrimSpace(m.selectedProjectID),
+		selectedOutlineID: strings.TrimSpace(m.selectedOutlineID),
+		openItemID:        strings.TrimSpace(m.openItemID),
+	}
+}
+
+func (m *appModel) applyReturnSnapshot(s returnSnapshot) {
+	if m == nil {
+		return
+	}
+	m.hasReturnView = true
+	m.returnView = s.view
+	m.returnSelectedProjectID = strings.TrimSpace(s.selectedProjectID)
+	m.returnSelectedOutlineID = strings.TrimSpace(s.selectedOutlineID)
+	m.returnOpenItemID = strings.TrimSpace(s.openItemID)
+}
+
+func (m *appModel) returnFromItemView() {
+	if m == nil {
+		return
+	}
+
+	rv := m.returnView
+	retProj := strings.TrimSpace(m.returnSelectedProjectID)
+	retOutline := strings.TrimSpace(m.returnSelectedOutlineID)
+	retOpen := strings.TrimSpace(m.returnOpenItemID)
+
+	m.hasReturnView = false
+	m.returnSelectedProjectID = ""
+	m.returnSelectedOutlineID = ""
+	m.returnOpenItemID = ""
+
+	m.openItemID = ""
+	m.itemArchivedReadOnly = false
+	m.showPreview = false
+	m.pane = paneOutline
+
+	if retProj != "" {
+		m.selectedProjectID = retProj
+	}
+	if retOutline != "" {
+		m.selectedOutlineID = retOutline
+		if m.db != nil {
+			if o, ok := m.db.FindOutline(retOutline); ok && o != nil {
+				m.selectedOutline = o
+			}
+		}
+	}
+
+	switch rv {
+	case viewProjects:
+		m.view = viewProjects
+		m.refreshProjects()
+	case viewOutlines:
+		m.view = viewOutlines
+		m.refreshOutlines(m.selectedProjectID)
+	case viewProjectAttachments:
+		m.view = viewProjectAttachments
+		m.refreshProjectAttachments(m.selectedProjectID)
+	case viewAgenda:
+		m.view = viewAgenda
+		m.refreshAgenda()
+	case viewArchived:
+		m.view = viewArchived
+		m.refreshArchived()
+	case viewItem:
+		// Return to the previous item (best-effort).
+		if retOpen != "" {
+			_ = m.jumpToItemByID(retOpen)
+			return
+		}
+		fallthrough
+	default:
+		// Default: return to the outline view (best-effort).
+		m.view = viewOutline
+		if m.db != nil {
+			if o, ok := m.db.FindOutline(m.selectedOutlineID); ok && o != nil {
+				m.refreshItems(*o)
+			}
+		}
+	}
+}
+
 func (m *appModel) currentWriteActorID() string {
 	if m == nil || m.db == nil {
 		return ""
@@ -48,7 +141,10 @@ func (m *appModel) currentWriteActorID() string {
 	return cur
 }
 
-const maxRecentItems = 5
+const (
+	maxRecentItems    = 5
+	maxRecentCaptures = 4
+)
 
 func (m *appModel) recordRecentItemVisit(itemID string) {
 	if m == nil {
@@ -79,6 +175,38 @@ func (m *appModel) recordRecentItemVisit(itemID string) {
 		}
 	}
 	m.recentItemIDs = next
+}
+
+func (m *appModel) recordRecentCapturedItem(itemID string) {
+	if m == nil {
+		return
+	}
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return
+	}
+	// Best-effort validation: only skip if the item is known to be archived.
+	// (At capture-finish time, the in-memory DB may not yet include the newly written item.)
+	if m.db != nil {
+		if it, ok := m.db.FindItem(itemID); ok && it != nil && it.Archived {
+			return
+		}
+	}
+
+	// De-dupe (preserve existing relative order) and cap.
+	next := make([]string, 0, maxRecentCaptures)
+	next = append(next, itemID)
+	for _, id := range m.recentCapturedItemIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || id == itemID {
+			continue
+		}
+		next = append(next, id)
+		if len(next) >= maxRecentCaptures {
+			break
+		}
+	}
+	m.recentCapturedItemIDs = next
 }
 
 type outlineViewMode int
@@ -453,10 +581,52 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 					label: label,
 					kind:  actionPanelActionExec,
 					handler: func(mm appModel) (appModel, tea.Cmd) {
+						snap := mm.captureReturnSnapshot()
 						if err := (&mm).jumpToItemByID(itemID); err != nil {
 							mm.showMinibuffer("Jump: " + err.Error())
 							return mm, nil
 						}
+						(&mm).applyReturnSnapshot(snap)
+						return mm, nil
+					},
+				}
+			}
+		}
+
+		// Recent captures (created via Capture), with digit shortcuts.
+		// 6 = most recent, 9 = least recent (within the shown set).
+		if m.db != nil {
+			for i := 0; i < len(m.recentCapturedItemIDs) && i < maxRecentCaptures; i++ {
+				id := strings.TrimSpace(m.recentCapturedItemIDs[i])
+				if id == "" {
+					continue
+				}
+				it, ok := m.db.FindItem(id)
+				if !ok || it == nil || it.Archived {
+					continue
+				}
+
+				key := strconv.Itoa(i + 6)
+				itemID := id
+
+				// Label is best-effort and mainly used for "entries" bookkeeping; rendering
+				// is handled by the special full-width Recently captured section.
+				title := strings.TrimSpace(it.Title)
+				if title == "" {
+					title = "(untitled)"
+				}
+				label := title
+
+				actions[key] = actionPanelAction{
+					label: label,
+					kind:  actionPanelActionExec,
+					handler: func(mm appModel) (appModel, tea.Cmd) {
+						snap := mm.captureReturnSnapshot()
+						if err := (&mm).jumpToItemByID(itemID); err != nil {
+							mm.showMinibuffer("Jump: " + err.Error())
+							return mm, nil
+						}
+						(&mm).applyReturnSnapshot(snap)
 						return mm, nil
 					},
 				}
@@ -731,6 +901,18 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 				}
 			}
 			if readOnly {
+				actions["l"] = actionPanelAction{
+					label: "Open links…",
+					kind:  actionPanelActionExec,
+					handler: func(mm appModel) (appModel, tea.Cmd) {
+						mmAny, cmd := mm.updateItem(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+						if m2, ok := mmAny.(appModel); ok {
+							return m2, cmd
+						}
+						return mm, cmd
+					},
+				}
+				actions["V"] = actionPanelAction{label: "Duplicate item", kind: actionPanelActionExec}
 				actions["y"] = actionPanelAction{label: "Copy item ref (includes --workspace)", kind: actionPanelActionExec}
 				actions["Y"] = actionPanelAction{label: "Copy CLI show command (includes --workspace)", kind: actionPanelActionExec}
 				actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
@@ -779,7 +961,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 				actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
 				actions["y"] = actionPanelAction{label: "Copy item ref (includes --workspace)", kind: actionPanelActionExec}
 				actions["Y"] = actionPanelAction{label: "Copy CLI show command (includes --workspace)", kind: actionPanelActionExec}
-				actions["m"] = actionPanelAction{label: "Move to outline…", kind: actionPanelActionExec}
+				actions["V"] = actionPanelAction{label: "Duplicate item", kind: actionPanelActionExec}
+				actions["m"] = actionPanelAction{label: "Move…", kind: actionPanelActionExec}
 				actions["r"] = actionPanelAction{label: "Archive item", kind: actionPanelActionExec}
 				actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
 			}
@@ -826,7 +1009,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 				actions[" "] = actionPanelAction{label: "Change status", kind: actionPanelActionExec}
 				actions["shift+left"] = actionPanelAction{label: "Cycle status (prev)", kind: actionPanelActionExec}
 				actions["shift+right"] = actionPanelAction{label: "Cycle status (next)", kind: actionPanelActionExec}
-				actions["m"] = actionPanelAction{label: "Move to outline…", kind: actionPanelActionExec}
+				actions["V"] = actionPanelAction{label: "Duplicate item", kind: actionPanelActionExec}
+				actions["m"] = actionPanelAction{label: "Move…", kind: actionPanelActionExec}
 			}
 		}
 	}
@@ -978,6 +1162,9 @@ func (m appModel) snapshotTUIState() *store.TUIState {
 	if len(m.recentItemIDs) > 0 {
 		st.RecentItemIDs = append([]string(nil), m.recentItemIDs...)
 	}
+	if len(m.recentCapturedItemIDs) > 0 {
+		st.RecentCapturedItemIDs = append([]string(nil), m.recentCapturedItemIDs...)
+	}
 
 	if m.hasReturnView {
 		st.ReturnView = viewToString(m.returnView)
@@ -1049,6 +1236,36 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
 			}
 			m.recentItemIDs = append(m.recentItemIDs, id)
 			if len(m.recentItemIDs) >= maxRecentItems {
+				break
+			}
+		}
+	}
+
+	// Restore recent captures (best-effort; drop missing/archived ids).
+	if len(st.RecentCapturedItemIDs) > 0 {
+		m.recentCapturedItemIDs = nil
+		for _, id := range st.RecentCapturedItemIDs {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			it, ok := m.db.FindItem(id)
+			if !ok || it == nil || it.Archived {
+				continue
+			}
+			// Preserve stored order while de-duping/capping.
+			already := false
+			for _, cur := range m.recentCapturedItemIDs {
+				if cur == id {
+					already = true
+					break
+				}
+			}
+			if already {
+				continue
+			}
+			m.recentCapturedItemIDs = append(m.recentCapturedItemIDs, id)
+			if len(m.recentCapturedItemIDs) >= maxRecentCaptures {
 				break
 			}
 		}
@@ -1925,9 +2142,9 @@ func (m appModel) renderActionPanel() string {
 	// - In the Go to panel, show destinations explicitly.
 	if m.curActionPanelKind() == actionPanelNav {
 		addSection("Destinations", []string{"p", "A", "o", "l", "i"})
-		// Note: "Recent items" are rendered as a special full-width block at the bottom.
+		// Note: "Recently visited/captured" are rendered as special full-width blocks at the bottom.
 		// Mark them as seen so they don't fall into "Other".
-		for _, k := range []string{"1", "2", "3", "4", "5"} {
+		for _, k := range []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"} {
 			seen[k] = true
 		}
 	} else if !isFocusedItemContext {
@@ -1959,7 +2176,7 @@ func (m appModel) renderActionPanel() string {
 		switch m.view {
 		case viewItem:
 			// Full-screen item page: show item work + global entrypoints.
-			addSection("Item", []string{"e", "D", "p", "o", "u", "t", "d", "s", " ", "C", "w", "m", "y", "Y", "r"})
+			addSection("Item", []string{"e", "D", "p", "o", "u", "t", "d", "s", " ", "C", "w", "V", "m", "y", "Y", "r"})
 
 			globalKeys := []string{}
 			for _, k := range []string{"g", "a", "c"} {
@@ -1983,7 +2200,7 @@ func (m appModel) renderActionPanel() string {
 
 			// Item work: all changes + notes/comments, and related helpers.
 			addSection("Item", []string{
-				"e", "n", "N", // title/new items
+				"e", "V", "n", "N", // title/new items
 				" ", "shift+left", "shift+right", // status
 				"p", "o", "u", "t", "d", "s", "D", // priority/on-hold/assign/tags/due/schedule/description
 				"m",      // move
@@ -2120,13 +2337,12 @@ func (m appModel) renderActionPanel() string {
 		lines = lines[:len(lines)-1]
 	}
 
-	// Special full-width section at the bottom: recent items (Go to panel only).
+	// Special full-width section(s) at the bottom (Go to panel only).
 	if m.curActionPanelKind() == actionPanelNav {
-		// Build recent item rows in an outline-like layout. Important: the modal uses a
+		// Build rows in an outline-like layout. Important: the modal uses a
 		// background style wrapper (renderModalBox), but any nested lipgloss rendering
 		// emits ANSI resets. To prevent "holes" where the terminal background shows
 		// through, we explicitly render most segments with the modal's surface bg.
-		rec := make([]string, 0, maxRecentItems+1)
 		if m.db != nil {
 			const keyColW = 3
 			rowW := contentW - keyColW
@@ -2134,9 +2350,32 @@ func (m appModel) renderActionPanel() string {
 				rowW = 8
 			}
 
-			renderRecentRow := func(outline model.Outline, it model.Item, doneChildren, totalChildren int, width int) string {
+			renderRecentRow := func(projectName string, outline model.Outline, it model.Item, doneChildren, totalChildren int, width int) string {
 				// Base style: force modal surface background.
 				base := lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorSurfaceBg)
+
+				projectName = strings.TrimSpace(projectName)
+				outlineName := ""
+				if outline.Name != nil {
+					outlineName = strings.TrimSpace(*outline.Name)
+				}
+				if outlineName == "" {
+					outlineName = strings.TrimSpace(outline.ID)
+				}
+				ctxLabel := ""
+				if projectName != "" {
+					ctxLabel = projectName
+				}
+				if outlineName != "" {
+					if ctxLabel != "" {
+						ctxLabel += " / "
+					}
+					ctxLabel += outlineName
+				}
+				ctxRaw := ""
+				if ctxLabel != "" {
+					ctxRaw = " · " + ctxLabel
+				}
 
 				twisty := " "
 				if totalChildren > 0 {
@@ -2203,6 +2442,22 @@ func (m appModel) renderActionPanel() string {
 					availTitle = 0
 				}
 
+				ctxSeg := ""
+				if ctxRaw != "" && availTitle >= 18 {
+					// Keep the title as the primary signal; only show context if we have room.
+					// Ensure we leave at least ~8 chars for the title.
+					maxCtx := availTitle - 8
+					if maxCtx >= 6 {
+						ctxTrunc := truncateText(ctxRaw, maxCtx)
+						ctxStyle := faintIfDark(base.Copy()).Foreground(colorMuted)
+						ctxSeg = ctxStyle.Render(ctxTrunc)
+						availTitle -= xansi.StringWidth(ctxTrunc)
+						if availTitle < 0 {
+							availTitle = 0
+						}
+					}
+				}
+
 				titleTrunc := truncateText(title, availTitle)
 				titleStyle := base
 				if isEndState(outline, statusID) {
@@ -2217,7 +2472,7 @@ func (m appModel) renderActionPanel() string {
 					metaSpacer = base.Render(" ")
 				}
 
-				out := leadSeg + statusSeg + titleSeg + progressCookie + metaSpacer + inlineMetaSeg
+				out := leadSeg + statusSeg + titleSeg + ctxSeg + progressCookie + metaSpacer + inlineMetaSeg
 				// Ensure full-width fill uses surface bg.
 				curW := xansi.StringWidth(out)
 				if curW < width {
@@ -2228,35 +2483,58 @@ func (m appModel) renderActionPanel() string {
 				return out
 			}
 
-			for i := 0; i < len(m.recentItemIDs) && i < maxRecentItems; i++ {
-				id := strings.TrimSpace(m.recentItemIDs[i])
-				if id == "" {
-					continue
-				}
-				it, ok := m.db.FindItem(id)
-				if !ok || it == nil || it.Archived {
-					continue
-				}
-				ol, ok := m.db.FindOutline(strings.TrimSpace(it.OutlineID))
-				if !ok || ol == nil || ol.Archived {
-					continue
-				}
+			buildRows := func(ids []string, max int, keyStart int) []string {
+				out := make([]string, 0, max)
+				for i := 0; i < len(ids) && i < max; i++ {
+					id := strings.TrimSpace(ids[i])
+					if id == "" {
+						continue
+					}
+					it, ok := m.db.FindItem(id)
+					if !ok || it == nil || it.Archived {
+						continue
+					}
+					ol, ok := m.db.FindOutline(strings.TrimSpace(it.OutlineID))
+					if !ok || ol == nil || ol.Archived {
+						continue
+					}
 
-				children := m.db.ChildrenOf(it.ID)
-				doneChildren, totalChildren := countProgressChildren(*ol, children)
+					projectName := ""
+					if p, ok := m.db.FindProject(strings.TrimSpace(it.ProjectID)); ok && p != nil {
+						projectName = strings.TrimSpace(p.Name)
+					}
+					if projectName == "" {
+						projectName = strings.TrimSpace(it.ProjectID)
+					}
 
-				rendered := renderRecentRow(*ol, *it, doneChildren, totalChildren, rowW)
-				key := strconv.Itoa(i + 1)
-				line := fmt.Sprintf("%-3s%s", actionPanelDisplayKey(key), rendered)
-				rec = append(rec, cutToWidth(line, contentW))
+					children := m.db.ChildrenOf(it.ID)
+					doneChildren, totalChildren := countProgressChildren(*ol, children)
+
+					rendered := renderRecentRow(projectName, *ol, *it, doneChildren, totalChildren, rowW)
+					key := strconv.Itoa(i + keyStart)
+					line := fmt.Sprintf("%-3s%s", actionPanelDisplayKey(key), rendered)
+					out = append(out, cutToWidth(line, contentW))
+				}
+				return out
 			}
-		}
-		if len(rec) > 0 {
-			if len(lines) > 0 {
-				lines = append(lines, "")
+
+			visited := buildRows(m.recentItemIDs, maxRecentItems, 1)
+			captured := buildRows(m.recentCapturedItemIDs, maxRecentCaptures, 6)
+
+			if len(visited) > 0 {
+				if len(lines) > 0 {
+					lines = append(lines, "")
+				}
+				lines = append(lines, "RECENTLY VISITED")
+				lines = append(lines, visited...)
 			}
-			lines = append(lines, "RECENT ITEMS")
-			lines = append(lines, rec...)
+			if len(captured) > 0 {
+				if len(lines) > 0 {
+					lines = append(lines, "")
+				}
+				lines = append(lines, "RECENTLY CAPTURED")
+				lines = append(lines, captured...)
+			}
 		}
 	}
 
@@ -3573,7 +3851,7 @@ func (m *appModel) renderModal() string {
 	case modalPickStatus:
 		return renderModalBox(m.width, "Set status", m.statusList.View()+"\n\nenter: set   esc/ctrl+g: cancel")
 	case modalPickOutline:
-		return renderModalBox(m.width, "Move to outline", m.outlinePickList.View()+"\n\nenter: move   esc/ctrl+g: cancel")
+		return renderModalBox(m.width, "Move", m.outlinePickList.View()+"\n\nenter: move   esc/ctrl+g: cancel")
 	case modalPickAssignee:
 		return renderModalBox(m.width, "Assign", m.assigneeList.View()+"\n\nenter: set   esc/ctrl+g: cancel")
 	case modalEditTags:
@@ -3824,9 +4102,9 @@ func (m *appModel) renderTextAreaModal(title string) string {
 		"",
 		func() string {
 			if m.modal == modalAddComment || m.modal == modalReplyComment {
-				return "ctrl+o: editor   ctrl+u: attach file   ctrl+s: save   tab: focus   esc/ctrl+g: cancel"
+				return "ctrl+y: copy   ctrl+o: editor   ctrl+u: attach file   ctrl+s: save   tab: focus   esc/ctrl+g: cancel"
 			}
-			return "ctrl+o: editor    ctrl+s: save    tab: focus    esc/ctrl+g: cancel"
+			return "ctrl+y: copy    ctrl+o: editor    ctrl+s: save    tab: focus    esc/ctrl+g: cancel"
 		}(),
 	}, "\n")
 	return renderModalBox(m.width, title, body)
@@ -3992,7 +4270,7 @@ func (m *appModel) renderViewEntryModal() string {
 		lines[i] = fixedWidthLine(lines[i], bodyW)
 	}
 
-	controls := styleMuted().Render("up/down: scroll  pgup/pgdown: page  esc/ctrl+g: close") + "\x1b[0m"
+	controls := styleMuted().Render("up/down: scroll  pgup/pgdown: page  l: links  ctrl+y: copy  ctrl+o: editor  esc/ctrl+g: close") + "\x1b[0m"
 	window := windowLinesWithIndicators(lines, max(1, h-2), m.viewModalScroll, styleMuted())
 	content := strings.Join(append(window, "", controls), "\n")
 	return renderModalBox(m.width, title, content)
@@ -4995,6 +5273,28 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.viewModalBody = ""
 					m.viewModalScroll = 0
 					return m, nil
+				case "ctrl+y":
+					if err := copyToClipboard(m.viewModalBody); err != nil {
+						m.showMinibuffer("Clipboard error: " + err.Error())
+					} else {
+						m.showMinibuffer("Copied entry")
+					}
+					return m, nil
+				case "ctrl+o":
+					cmd, err := m.openExternalEditorForViewBody(m.viewModalBody)
+					if err != nil {
+						m.showMinibuffer("Editor open failed: " + err.Error())
+						return m, nil
+					}
+					return m, cmd
+				case "l":
+					targets := m.targetsForMarkdownLinks(m.viewModalBody)
+					if len(targets) == 0 {
+						m.showMinibuffer("Links: none")
+						return m, nil
+					}
+					m.startTargetPicker("Links", targets)
+					return m, nil
 				case "up", "k", "ctrl+p":
 					m.viewModalScroll--
 					if m.viewModalScroll < 0 {
@@ -5033,6 +5333,16 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.commentDraftAttachments = nil
 					m.textarea.Blur()
 					m.textFocus = textFocusBody
+					return m, nil
+				case "ctrl+y":
+					if m.textFocus != textFocusBody {
+						return m, nil
+					}
+					if err := copyToClipboard(m.textarea.Value()); err != nil {
+						m.showMinibuffer("Clipboard error: " + err.Error())
+					} else {
+						m.showMinibuffer("Copied body")
+					}
 					return m, nil
 				case "ctrl+u":
 					// Queue attachments while composing a comment/reply. They will be attached to the
@@ -5208,33 +5518,86 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch km.String() {
 				case "esc":
 					m.pendingMoveOutlineTo = ""
+					m.pendingMoveParentTo = ""
 					m.modal = modalNone
 					m.modalForID = ""
 					return m, nil
 				case "enter":
 					itemID := strings.TrimSpace(m.modalForID)
-					to := ""
-					if it, ok := m.outlinePickList.SelectedItem().(outlineMoveOptionItem); ok {
-						to = strings.TrimSpace(it.outline.ID)
+					toOutlineID := ""
+					toParentID := ""
+					switch it := m.outlinePickList.SelectedItem().(type) {
+					case outlineMoveOptionItem:
+						toOutlineID = strings.TrimSpace(it.outline.ID)
+					case moveUnderItemOptionItem:
+						toParentID = strings.TrimSpace(it.item.ID)
+						toOutlineID = strings.TrimSpace(it.item.OutlineID)
 					}
 
 					// Close the outline picker; we may reopen a status picker.
 					m.modal = modalNone
 					m.modalForID = ""
 
-					if itemID == "" || to == "" || m.db == nil {
+					if itemID == "" || toOutlineID == "" || m.db == nil {
 						return m, nil
 					}
 					curItem, ok := m.db.FindItem(itemID)
 					if !ok {
 						return m, nil
 					}
-					if strings.TrimSpace(curItem.OutlineID) == strings.TrimSpace(to) {
-						m.showMinibuffer("Already in that outline")
+					if strings.TrimSpace(toParentID) == "" {
+						// Move to an outline (top-level).
+						if strings.TrimSpace(curItem.OutlineID) == strings.TrimSpace(toOutlineID) {
+							m.showMinibuffer("Already in that outline")
+							return m, nil
+						}
+						o, ok := m.db.FindOutline(toOutlineID)
+						if !ok {
+							m.showMinibuffer("Error: outline not found")
+							return m, nil
+						}
+
+						// If any status in the subtree isn't valid in the target outline, prompt for one.
+						if subtreeHasInvalidStatusInOutline(m.db, curItem.ID, o.ID) {
+							m.pendingMoveOutlineTo = o.ID
+							m.pendingMoveParentTo = ""
+							// No "(no status)" option: moved items must have a valid status in the target outline.
+							m.openStatusPickerForOutline(*o, curItem.StatusID, false)
+							m.modal = modalPickStatus
+							m.modalForID = itemID
+							return m, nil
+						}
+
+						if err := m.moveItemToOutline(itemID, o.ID, "", false); err != nil {
+							return m, m.reportError(itemID, err)
+						}
 						return m, nil
 					}
-					o, ok := m.db.FindOutline(to)
-					if !ok {
+
+					// Move under a specific item (become its child).
+					if strings.TrimSpace(toParentID) == strings.TrimSpace(curItem.ID) {
+						m.showMinibuffer("Cannot move under itself")
+						return m, nil
+					}
+					if curItem.ParentID != nil && strings.TrimSpace(*curItem.ParentID) == strings.TrimSpace(toParentID) && strings.TrimSpace(curItem.OutlineID) == strings.TrimSpace(toOutlineID) {
+						m.showMinibuffer("Already under that item")
+						return m, nil
+					}
+					parent, ok := m.db.FindItem(toParentID)
+					if !ok || parent == nil {
+						m.showMinibuffer("Error: target item not found")
+						return m, nil
+					}
+					if parent.Archived {
+						m.showMinibuffer("Target item is archived")
+						return m, nil
+					}
+					if isAncestor(m.db, parent.ID, curItem.ID) {
+						m.showMinibuffer("Cannot move under a descendant")
+						return m, nil
+					}
+					o, ok := m.db.FindOutline(strings.TrimSpace(parent.OutlineID))
+					if !ok || o == nil {
 						m.showMinibuffer("Error: outline not found")
 						return m, nil
 					}
@@ -5242,6 +5605,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// If any status in the subtree isn't valid in the target outline, prompt for one.
 					if subtreeHasInvalidStatusInOutline(m.db, curItem.ID, o.ID) {
 						m.pendingMoveOutlineTo = o.ID
+						m.pendingMoveParentTo = parent.ID
 						// No "(no status)" option: moved items must have a valid status in the target outline.
 						m.openStatusPickerForOutline(*o, curItem.StatusID, false)
 						m.modal = modalPickStatus
@@ -5249,7 +5613,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 
-					if err := m.moveItemToOutline(itemID, o.ID, "", false); err != nil {
+					if err := m.moveItemUnderItem(itemID, parent.ID, "", false); err != nil {
 						return m, m.reportError(itemID, err)
 					}
 					return m, nil
@@ -5265,6 +5629,8 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.KeyMsg:
 				switch km.String() {
 				case "esc":
+					m.pendingMoveOutlineTo = ""
+					m.pendingMoveParentTo = ""
 					m.modal = modalNone
 					m.modalForID = ""
 					return m, nil
@@ -5273,7 +5639,17 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 						itemID := strings.TrimSpace(m.modalForID)
 						if strings.TrimSpace(m.pendingMoveOutlineTo) != "" {
 							to := strings.TrimSpace(m.pendingMoveOutlineTo)
+							parentID := strings.TrimSpace(m.pendingMoveParentTo)
 							m.pendingMoveOutlineTo = ""
+							m.pendingMoveParentTo = ""
+							if parentID != "" {
+								if err := m.moveItemUnderItem(itemID, parentID, it.id, true); err != nil {
+									return m, m.reportError(itemID, err)
+								}
+								m.modal = modalNone
+								m.modalForID = ""
+								return m, nil
+							}
 							if err := m.moveItemToOutline(itemID, to, it.id, true); err != nil {
 								return m, m.reportError(itemID, err)
 							}
@@ -5993,10 +6369,12 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if val == "" {
 						return m, nil
 					}
+					snap := m.captureReturnSnapshot()
 					if err := (&m).jumpToItemByID(val); err != nil {
 						m.showMinibuffer("Jump: " + err.Error())
 						return m, nil
 					}
+					(&m).applyReturnSnapshot(snap)
 				case modalNewProject:
 					if val == "" {
 						return m, nil
@@ -6259,6 +6637,14 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Open item / create items.
 		switch msg.String() {
+		case "V":
+			// Duplicate selected item.
+			if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+				if _, err := (&m).duplicateItem(it.row.item.ID, false); err != nil {
+					return m, m.reportError(it.row.item.ID, err)
+				}
+				return m, nil
+			}
 		case "y":
 			// Copy selected item ID.
 			if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
@@ -6350,7 +6736,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "m":
-			// Move selected item to another outline (outline pane only).
+			// Move selected item to another outline or under another item (outline pane only).
 			if m.pane == paneOutline {
 				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
 					m.openMoveOutlinePicker(it.row.item.ID)
@@ -6607,6 +6993,11 @@ func (m *appModel) updateOutlineColumns(msg tea.KeyMsg) (bool, tea.Cmd) {
 			m.showMinibuffer("Clipboard error: " + err.Error())
 		} else {
 			m.showMinibuffer("Copied: " + cmd)
+		}
+		return true, nil
+	case "V":
+		if _, err := m.duplicateItem(it.Item.ID, false); err != nil {
+			return true, m.reportError(it.Item.ID, err)
 		}
 		return true, nil
 	case "C":
@@ -8070,6 +8461,138 @@ func (m *appModel) createItemFromModal(title string) error {
 	return nil
 }
 
+func (m *appModel) duplicateItem(itemID string, openInItemView bool) (string, error) {
+	itemID = strings.TrimSpace(itemID)
+	if m == nil || itemID == "" {
+		return "", nil
+	}
+
+	actorID := m.editActorID()
+	if actorID == "" {
+		return "", errors.New("no current actor")
+	}
+
+	db, err := m.store.Load()
+	if err != nil {
+		return "", err
+	}
+	m.db = db
+
+	src, ok := m.db.FindItem(itemID)
+	if !ok || src == nil {
+		return "", nil
+	}
+	outline, ok := m.db.FindOutline(strings.TrimSpace(src.OutlineID))
+	if !ok || outline == nil {
+		return "", errors.New("outline not found")
+	}
+
+	var parentID *string
+	if src.ParentID != nil && strings.TrimSpace(*src.ParentID) != "" {
+		tmp := strings.TrimSpace(*src.ParentID)
+		parentID = &tmp
+	}
+
+	rank := nextSiblingRank(m.db, outline.ID, parentID)
+	sibs := siblingItems(m.db, outline.ID, parentID)
+	sibs = filterItems(sibs, func(x *model.Item) bool { return !x.Archived })
+	store.SortItemsByRankOrder(sibs)
+	idx := indexOfItem(sibs, src.ID)
+	if idx >= 0 {
+		lower := strings.TrimSpace(src.Rank)
+		upper := findNextRankGreaterThan(sibs, idx, lower)
+		existing := map[string]bool{}
+		for _, s := range sibs {
+			rn := strings.ToLower(strings.TrimSpace(s.Rank))
+			if rn != "" {
+				existing[rn] = true
+			}
+		}
+		if r, err := store.RankBetweenUnique(existing, lower, upper); err == nil {
+			rank = r
+		}
+	}
+
+	var tags []string
+	if len(src.Tags) > 0 {
+		tags = append([]string(nil), src.Tags...)
+	}
+
+	assigned := defaultAssignedActorID(m.db, actorID)
+	now := time.Now().UTC()
+	newID := m.store.NextID(m.db, "item")
+	newItem := model.Item{
+		ID:                 newID,
+		ProjectID:          src.ProjectID,
+		OutlineID:          outline.ID,
+		ParentID:           parentID,
+		Rank:               rank,
+		Title:              strings.TrimSpace(src.Title),
+		Description:        src.Description,
+		StatusID:           store.FirstStatusID(outline.StatusDefs),
+		Priority:           false,
+		OnHold:             false,
+		Due:                nil,
+		Schedule:           nil,
+		LegacyDueAt:        nil,
+		LegacyScheduledAt:  nil,
+		Tags:               tags,
+		Archived:           false,
+		OwnerActorID:       actorID,
+		AssignedActorID:    assigned,
+		OwnerDelegatedFrom: nil,
+		OwnerDelegatedAt:   nil,
+		CreatedBy:          actorID,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	m.db.Items = append(m.db.Items, newItem)
+
+	if err := m.appendEvent(actorID, "item.create", newItem.ID, newItem); err != nil {
+		if len(m.db.Items) > 0 && m.db.Items[len(m.db.Items)-1].ID == newItem.ID {
+			m.db.Items = m.db.Items[:len(m.db.Items)-1]
+		}
+		return "", err
+	}
+	if err := m.store.Save(m.db); err != nil {
+		if len(m.db.Items) > 0 && m.db.Items[len(m.db.Items)-1].ID == newItem.ID {
+			m.db.Items = m.db.Items[:len(m.db.Items)-1]
+		}
+		return "", err
+	}
+
+	m.refreshEventsTail()
+	m.captureStoreModTimes()
+	m.showMinibuffer("Duplicated to " + newItem.ID)
+
+	if m.view == viewOutline && m.selectedOutline != nil && strings.TrimSpace(m.selectedOutline.ID) == strings.TrimSpace(newItem.OutlineID) {
+		m.refreshItems(*m.selectedOutline)
+		selectListItemByID(&m.itemsList, newItem.ID)
+		if m.curOutlineViewMode() == outlineViewModeColumns && strings.TrimSpace(m.selectedOutlineID) != "" {
+			if m.columnsSel == nil {
+				m.columnsSel = map[string]outlineColumnsSelection{}
+			}
+			sel := m.columnsSel[strings.TrimSpace(m.selectedOutlineID)]
+			sel.ItemID = strings.TrimSpace(newItem.ID)
+			m.columnsSel[strings.TrimSpace(m.selectedOutlineID)] = sel
+		}
+	}
+
+	if openInItemView {
+		if m.view == viewItem {
+			from := strings.TrimSpace(m.openItemID)
+			if from != "" && from != newItem.ID {
+				m.itemNavStack = append(m.itemNavStack, itemNavEntry{fromID: from, toID: newItem.ID})
+			}
+		}
+		if err := m.jumpToItemByID(newItem.ID); err != nil {
+			return newItem.ID, err
+		}
+	}
+
+	return newItem.ID, nil
+}
+
 type itemMutationResult struct {
 	eventType    string
 	eventPayload map[string]any
@@ -9385,7 +9908,11 @@ func (m *appModel) openMoveOutlinePicker(itemID string) {
 	if !ok {
 		return
 	}
-	opts := []list.Item{}
+
+	// Build a mixed target list:
+	// - outlines (move to top-level)
+	// - items (move under item, become child)
+	outlineOpts := []list.Item{}
 	for _, o := range m.db.Outlines {
 		if o.Archived {
 			continue
@@ -9394,10 +9921,40 @@ func (m *appModel) openMoveOutlinePicker(itemID string) {
 		if p, ok := m.db.FindProject(strings.TrimSpace(o.ProjectID)); ok && p != nil {
 			projectName = strings.TrimSpace(p.Name)
 		}
-		opts = append(opts, outlineMoveOptionItem{outline: o, projectName: projectName})
+		outlineOpts = append(outlineOpts, outlineMoveOptionItem{outline: o, projectName: projectName})
 	}
-	if len(opts) <= 1 {
-		m.showMinibuffer("No other outlines")
+
+	// Exclude the item itself and its descendants as "move under" targets (cycle prevention).
+	excluded := map[string]bool{}
+	for _, id := range collectSubtreeItemIDs(m.db, it.ID) {
+		excluded[id] = true
+	}
+
+	underOpts := []list.Item{}
+	for i := range m.db.Items {
+		cand := m.db.Items[i]
+		if cand.Archived {
+			continue
+		}
+		if excluded[strings.TrimSpace(cand.ID)] {
+			continue
+		}
+		o, ok := m.db.FindOutline(strings.TrimSpace(cand.OutlineID))
+		if !ok || o == nil || o.Archived {
+			continue
+		}
+		projectName := ""
+		if p, ok := m.db.FindProject(strings.TrimSpace(o.ProjectID)); ok && p != nil {
+			projectName = strings.TrimSpace(p.Name)
+		}
+		underOpts = append(underOpts, moveUnderItemOptionItem{item: cand, outline: *o, projectName: projectName})
+	}
+
+	sort.Slice(outlineOpts, func(i, j int) bool { return outlineOpts[i].FilterValue() < outlineOpts[j].FilterValue() })
+	sort.Slice(underOpts, func(i, j int) bool { return underOpts[i].FilterValue() < underOpts[j].FilterValue() })
+	opts := append(outlineOpts, underOpts...)
+	if len(opts) == 0 {
+		m.showMinibuffer("No move targets")
 		return
 	}
 
@@ -9435,8 +9992,158 @@ func (m *appModel) openMoveOutlinePicker(itemID string) {
 	m.outlinePickList.Select(selected)
 
 	m.pendingMoveOutlineTo = ""
+	m.pendingMoveParentTo = ""
 	m.modal = modalPickOutline
 	m.modalForID = itemID
+}
+
+func (m *appModel) moveItemUnderItem(itemID, parentItemID, statusOverride string, applyStatusToInvalidSubtree bool) error {
+	itemID = strings.TrimSpace(itemID)
+	parentItemID = strings.TrimSpace(parentItemID)
+	statusOverride = strings.TrimSpace(statusOverride)
+	if itemID == "" || parentItemID == "" || m == nil || m.db == nil {
+		return nil
+	}
+
+	err := m.mutateItem(itemID, func(db *store.DB, it *model.Item) (bool, itemMutationResult, error) {
+		parent, ok := db.FindItem(parentItemID)
+		if !ok || parent == nil {
+			return false, itemMutationResult{}, errors.New("target item not found")
+		}
+		if parent.Archived {
+			return false, itemMutationResult{}, errors.New("target item is archived")
+		}
+		if strings.TrimSpace(parent.ID) == strings.TrimSpace(it.ID) {
+			return false, itemMutationResult{}, errors.New("cannot move under itself")
+		}
+		if isAncestor(db, parent.ID, it.ID) {
+			return false, itemMutationResult{}, errors.New("cannot move under a descendant")
+		}
+
+		o, ok := db.FindOutline(strings.TrimSpace(parent.OutlineID))
+		if !ok || o == nil {
+			return false, itemMutationResult{}, errors.New("outline not found")
+		}
+
+		actorID := m.editActorID()
+		if actorID == "" {
+			return false, itemMutationResult{}, errors.New("no current actor")
+		}
+
+		// If the caller wants to apply a chosen status to invalid subtree items, validate it first.
+		if applyStatusToInvalidSubtree {
+			if statusOverride == "" {
+				return false, itemMutationResult{}, errors.New("missing status")
+			}
+			if !statusutil.ValidateStatusID(*o, statusOverride) {
+				return false, itemMutationResult{}, errors.New("invalid status id for target outline")
+			}
+		}
+
+		// Collect the subtree (root + descendants). We must move children too to avoid cross-outline parent links.
+		ids := collectSubtreeItemIDs(db, it.ID)
+		if len(ids) == 0 {
+			return false, itemMutationResult{}, nil
+		}
+
+		// Permission check: all items in the subtree must be editable by the current actor.
+		for _, id := range ids {
+			x, ok := db.FindItem(id)
+			if !ok {
+				continue
+			}
+			if !canEditItem(db, actorID, x) {
+				return false, itemMutationResult{}, errors.New("permission denied")
+			}
+		}
+
+		changed := false
+		now := time.Now().UTC()
+
+		// Move every item in the subtree to the target outline/project if needed.
+		for _, id := range ids {
+			x, ok := db.FindItem(id)
+			if !ok {
+				continue
+			}
+
+			// Determine status to use:
+			// - root item: use override if provided, else keep.
+			// - descendants: keep current unless invalid; if invalid and applyStatusToInvalidSubtree=true, apply override.
+			nextStatus := strings.TrimSpace(x.StatusID)
+			if id == it.ID && statusOverride != "" {
+				nextStatus = statusOverride
+			}
+			if nextStatus == "" || !statusutil.ValidateStatusID(*o, nextStatus) {
+				if applyStatusToInvalidSubtree {
+					nextStatus = statusOverride
+				} else {
+					return false, itemMutationResult{}, errors.New("invalid status id for target outline; pick a compatible status")
+				}
+			}
+
+			if strings.TrimSpace(x.OutlineID) != strings.TrimSpace(o.ID) {
+				x.OutlineID = o.ID
+				changed = true
+			}
+			if strings.TrimSpace(x.ProjectID) != strings.TrimSpace(o.ProjectID) {
+				x.ProjectID = o.ProjectID
+				changed = true
+			}
+			if strings.TrimSpace(x.StatusID) != strings.TrimSpace(nextStatus) {
+				x.StatusID = nextStatus
+				changed = true
+			}
+			if !x.UpdatedAt.Equal(now) {
+				x.UpdatedAt = now
+				changed = true
+			}
+		}
+
+		// Root-specific adjustments: become a child of the target item (and append to end of its children).
+		tmp := strings.TrimSpace(parent.ID)
+		if it.ParentID == nil || strings.TrimSpace(*it.ParentID) != tmp {
+			it.ParentID = &tmp
+			changed = true
+		}
+		nextRank := nextSiblingRank(db, o.ID, it.ParentID)
+		if strings.TrimSpace(it.Rank) != strings.TrimSpace(nextRank) {
+			it.Rank = nextRank
+			changed = true
+		}
+
+		if !changed {
+			return false, itemMutationResult{}, nil
+		}
+
+		parentTitle := strings.TrimSpace(parent.Title)
+		if parentTitle == "" {
+			parentTitle = parent.ID
+		}
+
+		return true, itemMutationResult{
+			eventType:    "item.move_under",
+			eventPayload: map[string]any{"parent": parent.ID, "outline": o.ID, "status": it.StatusID},
+			minibuffer:   fmt.Sprintf("Moved %d item(s) under: %s", len(ids), parentTitle),
+		}, nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// If the moved item is currently open, keep the item-view context consistent.
+	if m.view == viewItem && strings.TrimSpace(m.openItemID) == itemID {
+		if m.db != nil {
+			if parent, ok := m.db.FindItem(parentItemID); ok && parent != nil {
+				m.selectedOutlineID = strings.TrimSpace(parent.OutlineID)
+				if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
+					m.selectedOutline = o
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func (m *appModel) moveItemToOutline(itemID, toOutlineID, statusOverride string, applyStatusToInvalidSubtree bool) error {
@@ -10376,6 +11083,6 @@ func (m *appModel) addWorklog(itemID, body string) error {
 		m.refreshItems(*m.selectedOutline)
 		selectListItemByID(&m.itemsList, itemID)
 	}
-	m.showMinibuffer("Worklog added")
+	m.showMinibuffer("My worklog entry added")
 	return nil
 }

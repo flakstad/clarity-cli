@@ -46,6 +46,10 @@ type TUIState struct {
 	// RecentItemIDs stores most-recently-visited item ids (full item view only), newest first.
 	// This powers the Go to panel "Recent items" shortcuts.
 	RecentItemIDs []string `json:"recentItemIds,omitempty"`
+
+	// RecentCapturedItemIDs stores most-recently-captured item ids (created via Capture), newest first.
+	// This powers the Go to panel "Recently captured" shortcuts.
+	RecentCapturedItemIDs []string `json:"recentCapturedItemIds,omitempty"`
 }
 
 func (s Store) tuiStatePath() string {
