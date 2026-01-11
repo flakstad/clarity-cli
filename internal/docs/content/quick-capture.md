@@ -71,7 +71,7 @@ Example:
 
 Notes:
 - `target` is stored as `(workspace name, outline id)` for stability, but the TUI shows outline names (users shouldn’t need to think about ids).
-- During capture you can change the target outline (move) before saving; if the destination outline has different status definitions, capture will prompt you to pick a valid status.
+- During capture you can change the target outline (move) before saving; if the destination outline has different status definitions, capture will prompt you to pick a compatible status (or no status).
 
 ### Prefix group labels (v4)
 

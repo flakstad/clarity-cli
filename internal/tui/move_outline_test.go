@@ -230,8 +230,8 @@ func TestMoveOutlinePicker_WhenStatusInvalid_PromptsForStatusThenMoves(t *testin
 		t.Fatalf("expected pendingMoveOutlineTo out-b; got %q", got)
 	}
 
-	// Only option should be BACKLOG (no "(no status)" in this flow).
-	m4.statusList.Select(0)
+	// Pick a compatible status in the destination outline.
+	selectStatusOption(t, &m4, "backlog")
 	mmAny, _ = m4.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
 	_ = mmAny.(appModel)
 
@@ -251,6 +251,110 @@ func TestMoveOutlinePicker_WhenStatusInvalid_PromptsForStatusThenMoves(t *testin
 	}
 	if it2.ParentID != nil {
 		t.Fatalf("expected parent to be nil after move; got %v", *it2.ParentID)
+	}
+}
+
+func TestMoveOutlinePicker_ToOutlineWithNoStatusDefs_AllowsNoStatusAndMoves(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+
+	humanID := "act-human"
+	agentID := "act-agent"
+
+	db := &store.DB{
+		CurrentActorID: agentID,
+		Actors: []model.Actor{
+			{ID: humanID, Kind: model.ActorKindHuman, Name: "human"},
+			{ID: agentID, Kind: model.ActorKindAgent, Name: "agent", UserID: &humanID},
+		},
+		Projects: []model.Project{{ID: "proj-a", Name: "P", CreatedBy: humanID, CreatedAt: now}},
+		Outlines: []model.Outline{
+			{
+				ID:        "out-a",
+				ProjectID: "proj-a",
+				StatusDefs: []model.OutlineStatusDef{
+					{ID: "todo", Label: "TODO", IsEndState: false},
+				},
+				CreatedBy: humanID,
+				CreatedAt: now,
+			},
+			{
+				ID:         "out-b",
+				ProjectID:  "proj-a",
+				StatusDefs: []model.OutlineStatusDef{
+					// Intentionally empty.
+				},
+				CreatedBy: humanID,
+				CreatedAt: now,
+			},
+		},
+		Items: []model.Item{{
+			ID:           "item-a",
+			ProjectID:    "proj-a",
+			OutlineID:    "out-a",
+			Rank:         "h",
+			Title:        "A",
+			StatusID:     "todo",
+			OwnerActorID: humanID,
+			CreatedBy:    humanID,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}},
+	}
+
+	s := store.Store{Dir: dir}
+	if err := s.Save(db); err != nil {
+		t.Fatalf("save db: %v", err)
+	}
+
+	m := newAppModel(dir, db)
+	m.view = viewOutline
+	m.selectedProjectID = "proj-a"
+	m.selectedOutlineID = "out-a"
+	m.selectedOutline = &db.Outlines[0]
+	m.collapsed = map[string]bool{}
+	m.refreshItems(db.Outlines[0])
+	selectListItemByID(&m.itemsList, "item-a")
+
+	// Open outline picker.
+	mmAny, _ := m.updateOutline(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	m2 := mmAny.(appModel)
+	if m2.modal != modalPickOutline {
+		t.Fatalf("expected modalPickOutline; got %v", m2.modal)
+	}
+
+	// Choose out-b and confirm: should open the move-mode picker.
+	selectOutlineOption(t, &m2, "out-b")
+	mmAny, _ = m2.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
+	m3 := mmAny.(appModel)
+	if m3.modal != modalPickMoveMode {
+		t.Fatalf("expected modalPickMoveMode; got %v", m3.modal)
+	}
+
+	// Confirm "Add to outline": should now prompt for status, and allow choosing "(no status)".
+	mmAny, _ = m3.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
+	m4 := mmAny.(appModel)
+	if m4.modal != modalPickStatus {
+		t.Fatalf("expected modalPickStatus; got %v", m4.modal)
+	}
+
+	selectStatusOption(t, &m4, "")
+	mmAny, _ = m4.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
+	_ = mmAny.(appModel)
+
+	db2, err := s.Load()
+	if err != nil {
+		t.Fatalf("load db: %v", err)
+	}
+	it2, ok := db2.FindItem("item-a")
+	if !ok {
+		t.Fatalf("expected item-a to exist")
+	}
+	if it2.OutlineID != "out-b" {
+		t.Fatalf("expected outline to be out-b; got %q", it2.OutlineID)
+	}
+	if it2.StatusID != "" {
+		t.Fatalf("expected status to be cleared; got %q", it2.StatusID)
 	}
 }
 
@@ -639,4 +743,19 @@ func selectOutlineOption(t *testing.T, m *appModel, outlineID string) {
 		}
 	}
 	t.Fatalf("expected outline option %q to exist", outlineID)
+}
+
+func selectStatusOption(t *testing.T, m *appModel, statusID string) {
+	t.Helper()
+	for i, it := range m.statusList.Items() {
+		si, ok := it.(statusOptionItem)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(si.id) == strings.TrimSpace(statusID) {
+			m.statusList.Select(i)
+			return
+		}
+	}
+	t.Fatalf("expected status option %q to exist", statusID)
 }

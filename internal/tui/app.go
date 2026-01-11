@@ -5586,8 +5586,8 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if subtreeHasInvalidStatusInOutline(m.db, curItem.ID, o.ID) {
 							m.pendingMoveOutlineTo = o.ID
 							m.pendingMoveParentTo = ""
-							// No "(no status)" option: moved items must have a valid status in the target outline.
-							m.openStatusPickerForOutline(*o, curItem.StatusID, false)
+							// Allow choosing "(no status)" so moves are possible even when the target outline has no status defs.
+							m.openStatusPickerForOutline(*o, curItem.StatusID, true)
 							m.modal = modalPickStatus
 							m.modalForID = itemID
 							m.modalForKey = ""
@@ -5657,8 +5657,8 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if subtreeHasInvalidStatusInOutline(m.db, curItem.ID, o.ID) {
 						m.pendingMoveOutlineTo = o.ID
 						m.pendingMoveParentTo = parentID
-						// No "(no status)" option: moved items must have a valid status in the target outline.
-						m.openStatusPickerForOutline(*o, curItem.StatusID, false)
+						// Allow choosing "(no status)" so moves are possible even when the target outline has no status defs.
+						m.openStatusPickerForOutline(*o, curItem.StatusID, true)
 						m.modal = modalPickStatus
 						m.modalForID = itemID
 						m.modalForKey = ""
@@ -10238,10 +10238,7 @@ func (m *appModel) moveItemUnderItem(itemID, parentItemID, statusOverride string
 
 		// If the caller wants to apply a chosen status to invalid subtree items, validate it first.
 		if applyStatusToInvalidSubtree {
-			if statusOverride == "" {
-				return false, itemMutationResult{}, errors.New("missing status")
-			}
-			if !statusutil.ValidateStatusID(*o, statusOverride) {
+			if statusOverride != "" && !statusutil.ValidateStatusID(*o, statusOverride) {
 				return false, itemMutationResult{}, errors.New("invalid status id for target outline")
 			}
 		}
@@ -10277,10 +10274,10 @@ func (m *appModel) moveItemUnderItem(itemID, parentItemID, statusOverride string
 			// - root item: use override if provided, else keep.
 			// - descendants: keep current unless invalid; if invalid and applyStatusToInvalidSubtree=true, apply override.
 			nextStatus := strings.TrimSpace(x.StatusID)
-			if id == it.ID && statusOverride != "" {
+			if id == it.ID && (applyStatusToInvalidSubtree || statusOverride != "") {
 				nextStatus = statusOverride
 			}
-			if nextStatus == "" || !statusutil.ValidateStatusID(*o, nextStatus) {
+			if nextStatus != "" && !statusutil.ValidateStatusID(*o, nextStatus) {
 				if applyStatusToInvalidSubtree {
 					nextStatus = statusOverride
 				} else {
@@ -10373,10 +10370,7 @@ func (m *appModel) moveItemToOutline(itemID, toOutlineID, statusOverride string,
 
 		// If the caller wants to apply a chosen status to invalid subtree items, validate it first.
 		if applyStatusToInvalidSubtree {
-			if statusOverride == "" {
-				return false, itemMutationResult{}, errors.New("missing status")
-			}
-			if !statusutil.ValidateStatusID(*o, statusOverride) {
+			if statusOverride != "" && !statusutil.ValidateStatusID(*o, statusOverride) {
 				return false, itemMutationResult{}, errors.New("invalid status id for target outline")
 			}
 		}
@@ -10412,10 +10406,10 @@ func (m *appModel) moveItemToOutline(itemID, toOutlineID, statusOverride string,
 			// - root item: use override if provided, else keep.
 			// - descendants: keep current unless invalid; if invalid and applyStatusToInvalidSubtree=true, apply override.
 			nextStatus := strings.TrimSpace(x.StatusID)
-			if id == it.ID && statusOverride != "" {
+			if id == it.ID && (applyStatusToInvalidSubtree || statusOverride != "") {
 				nextStatus = statusOverride
 			}
-			if nextStatus == "" || !statusutil.ValidateStatusID(*o, nextStatus) {
+			if nextStatus != "" && !statusutil.ValidateStatusID(*o, nextStatus) {
 				if applyStatusToInvalidSubtree {
 					nextStatus = statusOverride
 				} else {
@@ -10524,7 +10518,7 @@ func subtreeHasInvalidStatusInOutline(db *store.DB, rootID, outlineID string) bo
 			continue
 		}
 		sid := strings.TrimSpace(it.StatusID)
-		if sid == "" || !statusutil.ValidateStatusID(*o, sid) {
+		if sid != "" && !statusutil.ValidateStatusID(*o, sid) {
 			return true
 		}
 	}
