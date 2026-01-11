@@ -3062,7 +3062,7 @@ func (m *appModel) refreshOutlines(projectID string) {
 				continue
 			}
 			meta := metas[strings.TrimSpace(o.ID)]
-			items = append(items, outlineItem{outline: o, meta: meta})
+			items = append(items, outlineItem{outline: o, current: o.ID == m.selectedOutlineID, meta: meta})
 		}
 	}
 	m.outlinesList.SetItems(items)
@@ -7724,6 +7724,11 @@ func subtreeItemIDs(db *store.DB, rootID string) []string {
 func overlayCenter(bg, fg string, w, h int) string {
 	bgLines := splitLinesN(bg, h)
 	fgLines := strings.Split(fg, "\n")
+	// Ensure any foreground ANSI styling is terminated per line so background colors
+	// don't "bleed" into the surrounding screen when we stitch strings together.
+	for i := range fgLines {
+		fgLines[i] = terminateANSILine(fgLines[i])
+	}
 	fgH := len(fgLines)
 	fgW := 0
 	for _, ln := range fgLines {
@@ -7750,14 +7755,7 @@ func overlayCenter(bg, fg string, w, h int) string {
 		y = 0
 	}
 
-	// Shadow to give the modal depth.
-	shadowStyle := lipgloss.NewStyle().Background(colorShadow)
-	shadowLine := shadowStyle.Render(strings.Repeat(" ", fgW))
-	shadow := make([]string, 0, fgH)
-	for i := 0; i < fgH; i++ {
-		shadow = append(shadow, shadowLine)
-	}
-	overlayAt(bgLines, shadow, w, x+1, y+1, fgW)
+	// No drop-shadow: keep modals flat (no 3D).
 	overlayAt(bgLines, fgLines, w, x, y, fgW)
 	return strings.Join(bgLines, "\n")
 }
@@ -7788,6 +7786,40 @@ func overlayAt(bgLines []string, fgLines []string, w, x, y, fgW int) {
 	}
 }
 
+func terminateANSILine(s string) string {
+	// If there's ANSI styling and it doesn't end with a reset, add one so any open
+	// background color doesn't affect the rest of the line after concatenation.
+	if strings.Contains(s, "\x1b[") && !strings.HasSuffix(s, "\x1b[0m") {
+		return s + "\x1b[0m"
+	}
+	return s
+}
+
+func modalSurfaceANSI() string {
+	// Render a marker to obtain the ANSI prefix that sets the modal surface fg/bg.
+	// This is used to re-apply surface styling after any inner "\x1b[0m" resets.
+	const marker = "X"
+	st := lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorSurfaceBg)
+	rendered := st.Render(marker)
+	if rendered == "" {
+		return ""
+	}
+	if idx := strings.Index(rendered, marker); idx >= 0 {
+		return rendered[:idx]
+	}
+	return ""
+}
+
+func reapplyModalSurfaceAfterResets(s string) string {
+	prefix := modalSurfaceANSI()
+	if prefix == "" || !strings.Contains(s, "\x1b[0m") {
+		return s
+	}
+	// Ensure that any inner reset (often emitted by nested lipgloss rendering)
+	// doesn't "punch a hole" in the modal surface styling.
+	return strings.ReplaceAll(s, "\x1b[0m", "\x1b[0m"+prefix)
+}
+
 func dimBackground(s string) string {
 	// Many TUI components render with their own ANSI styles. If we just wrap the
 	// full string in a "dim" style, any inner ANSI resets will cancel the effect
@@ -7810,15 +7842,19 @@ func renderModalBox(screenWidth int, title, body string) string {
 	w := modalBoxWidth(screenWidth)
 
 	header := lipgloss.NewStyle().Bold(true).Render(title)
-	content := header + "\n\n" + body
+	content := header
+	if strings.TrimSpace(body) != "" {
+		content += "\n" + body
+	}
+	content = reapplyModalSurfaceAfterResets(content)
 
+	// Flat modal: no outer border. Keep the background and the "perfect" padding.
 	box := lipgloss.NewStyle().
 		Width(w).
-		Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorAccent).
+		Padding(1, 2, 1, 2).
 		Foreground(colorSurfaceFg).
 		Background(colorSurfaceBg)
+
 	return box.Render(content)
 }
 
@@ -7838,7 +7874,8 @@ func modalBoxWidth(screenWidth int) int {
 
 func modalBodyWidth(screenWidth int) int {
 	w := modalBoxWidth(screenWidth)
-	bodyW := w - 6 // renderModalBox has padding 1,2 and a border.
+	// renderModalBox has padding (L/R=2).
+	bodyW := w - 4
 	if bodyW < 10 {
 		bodyW = 10
 	}
@@ -10990,9 +11027,16 @@ func (m *appModel) openTextModal(kind modalKind, itemID, placeholder, initial st
 		m.commentDraftAttachments = nil
 	}
 
-	h := m.height - 12
-	if h < 6 {
-		h = 6
+	// Size the textarea so the full modal (title + padding + controls/help) fits in the frame.
+	// If we let the textarea consume most of the screen height, the bottom controls can get
+	// clipped by overlayCenter.
+	frameH := m.frameHeight()
+	h := frameH - 10 // modal frame (border+padding) + title + controls/help spacer
+	if h < 3 {
+		h = 3
+	}
+	if h > 22 {
+		h = 22
 	}
 
 	m.textarea.Placeholder = placeholder

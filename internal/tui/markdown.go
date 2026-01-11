@@ -225,7 +225,12 @@ func markdownStyle() string {
 			return "dark"
 		}
 	}
-	return "dark"
+	// Final fallback: align markdown with Lip Gloss's current background detection so
+	// description text doesn't end up using a dark palette on light terminals (or vice versa).
+	if lipgloss.HasDarkBackground() {
+		return "dark"
+	}
+	return "light"
 }
 
 func applyClarityMarkdownPalette(cfg *ansi.StyleConfig, styleName string) {

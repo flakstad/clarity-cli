@@ -21,7 +21,7 @@ type projectItem struct {
 func (i projectItem) FilterValue() string { return i.project.Name }
 func (i projectItem) Title() string {
 	if i.current {
-		return "• " + i.project.Name
+		return i.project.Name + " •"
 	}
 	return i.project.Name
 }
@@ -42,6 +42,7 @@ type projectCardMeta struct {
 
 type outlineItem struct {
 	outline model.Outline
+	current bool
 	meta    outlineCardMeta
 }
 
@@ -59,7 +60,11 @@ func (i outlineItem) FilterValue() string {
 	return ""
 }
 func (i outlineItem) Title() string {
-	return outlineDisplayName(i.outline)
+	t := outlineDisplayName(i.outline)
+	if i.current {
+		return t + " •"
+	}
+	return t
 }
 func (i outlineItem) Description() string { return i.outline.ID }
 
@@ -133,7 +138,7 @@ func (i workspaceItem) Title() string {
 		n = n + " (archived)"
 	}
 	if i.current {
-		return "• " + n
+		return n + " •"
 	}
 	return n
 }
