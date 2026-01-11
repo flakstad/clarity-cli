@@ -447,9 +447,10 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
 	m.textarea = textarea.New()
 	m.textarea.Placeholder = "Write…"
 	m.textarea.CharLimit = 0
+	m.textarea.MaxHeight = 0
 	m.textarea.SetWidth(72)
 	m.textarea.SetHeight(10)
-	m.textarea.ShowLineNumbers = false
+	m.textarea.ShowLineNumbers = true
 
 	m.refreshProjects()
 

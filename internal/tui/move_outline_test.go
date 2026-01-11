@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -95,10 +96,16 @@ func TestMoveOutlinePicker_Enter_MovesItem_WhenStatusValidInTargetOutline(t *tes
 		t.Fatalf("expected modalPickOutline; got %v", m2.modal)
 	}
 
-	// Select out-b and confirm.
-	m2.outlinePickList.Select(1)
+	// Select out-b and confirm: should open the move-mode picker.
+	selectOutlineOption(t, &m2, "out-b")
 	mmAny, _ = m2.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
 	m3 := mmAny.(appModel)
+	if m3.modal != modalPickMoveMode {
+		t.Fatalf("expected modalPickMoveMode; got %v", m3.modal)
+	}
+	// Default selection is "Add to outline" (move to outline root).
+	mmAny, _ = m3.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
+	m4 := mmAny.(appModel)
 
 	db2, err := s.Load()
 	if err != nil {
@@ -115,7 +122,7 @@ func TestMoveOutlinePicker_Enter_MovesItem_WhenStatusValidInTargetOutline(t *tes
 		t.Fatalf("expected parent to be nil after move; got %v", *it2.ParentID)
 	}
 	if it2.StatusID != "todo" {
-		t.Fatalf("expected status to remain todo; got %q (minibuffer=%q)", it2.StatusID, m3.minibufferText)
+		t.Fatalf("expected status to remain todo; got %q (minibuffer=%q)", it2.StatusID, m4.minibufferText)
 	}
 
 	// Child should move too (and keep its parent link).
@@ -205,22 +212,27 @@ func TestMoveOutlinePicker_WhenStatusInvalid_PromptsForStatusThenMoves(t *testin
 		t.Fatalf("expected modalPickOutline; got %v", m2.modal)
 	}
 
-	// Choose out-b.
-	m2.outlinePickList.Select(1)
+	// Choose out-b and confirm: should open the move-mode picker.
+	selectOutlineOption(t, &m2, "out-b")
 	mmAny, _ = m2.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
 	m3 := mmAny.(appModel)
-
-	// Should now be prompting for a valid status to complete the move.
-	if m3.modal != modalPickStatus {
-		t.Fatalf("expected modalPickStatus; got %v", m3.modal)
+	if m3.modal != modalPickMoveMode {
+		t.Fatalf("expected modalPickMoveMode; got %v", m3.modal)
 	}
-	if got := m3.pendingMoveOutlineTo; got != "out-b" {
+
+	// Confirm "Add to outline": should now prompt for a valid status to complete the move.
+	mmAny, _ = m3.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
+	m4 := mmAny.(appModel)
+	if m4.modal != modalPickStatus {
+		t.Fatalf("expected modalPickStatus; got %v", m4.modal)
+	}
+	if got := m4.pendingMoveOutlineTo; got != "out-b" {
 		t.Fatalf("expected pendingMoveOutlineTo out-b; got %q", got)
 	}
 
 	// Only option should be BACKLOG (no "(no status)" in this flow).
-	m3.statusList.Select(0)
-	mmAny, _ = m3.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
+	m4.statusList.Select(0)
+	mmAny, _ = m4.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
 	_ = mmAny.(appModel)
 
 	db2, err := s.Load()
@@ -331,9 +343,15 @@ func TestMoveOutlinePicker_AllowsMovingToOutlineInAnotherProject(t *testing.T) {
 		t.Fatalf("expected modalPickOutline; got %v", m2.modal)
 	}
 
-	// Select out-b (in proj-b) and confirm.
-	m2.outlinePickList.Select(1)
+	// Select out-b (in proj-b) and confirm: should open the move-mode picker.
+	selectOutlineOption(t, &m2, "out-b")
 	mmAny, _ = m2.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
+	m3 := mmAny.(appModel)
+	if m3.modal != modalPickMoveMode {
+		t.Fatalf("expected modalPickMoveMode; got %v", m3.modal)
+	}
+	// Confirm "Add to outline" to move to outline root.
+	mmAny, _ = m3.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
 	_ = mmAny.(appModel)
 
 	db2, err := s.Load()
@@ -361,6 +379,157 @@ func TestMoveOutlinePicker_AllowsMovingToOutlineInAnotherProject(t *testing.T) {
 	}
 	if ch2.ProjectID != "proj-b" {
 		t.Fatalf("expected child project to be proj-b; got %q", ch2.ProjectID)
+	}
+	if ch2.OutlineID != "out-b" {
+		t.Fatalf("expected child outline to be out-b; got %q", ch2.OutlineID)
+	}
+	if ch2.ParentID == nil || *ch2.ParentID != "item-a" {
+		got := "<nil>"
+		if ch2.ParentID != nil {
+			got = *ch2.ParentID
+		}
+		t.Fatalf("expected child parent to remain item-a; got %s", got)
+	}
+}
+
+func TestMoveOutlinePicker_SelectItemInOutline_ShowsTopLevelItemsAndMovesUnder(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+
+	humanID := "act-human"
+	agentID := "act-agent"
+
+	db := &store.DB{
+		CurrentActorID: agentID,
+		Actors: []model.Actor{
+			{ID: humanID, Kind: model.ActorKindHuman, Name: "human"},
+			{ID: agentID, Kind: model.ActorKindAgent, Name: "agent", UserID: &humanID},
+		},
+		Projects: []model.Project{{ID: "proj-a", Name: "P", CreatedBy: humanID, CreatedAt: now}},
+		Outlines: []model.Outline{
+			{ID: "out-a", ProjectID: "proj-a", StatusDefs: store.DefaultOutlineStatusDefs(), CreatedBy: humanID, CreatedAt: now},
+			{ID: "out-b", ProjectID: "proj-a", StatusDefs: store.DefaultOutlineStatusDefs(), CreatedBy: humanID, CreatedAt: now},
+		},
+		Items: []model.Item{
+			{
+				ID:           "item-a",
+				ProjectID:    "proj-a",
+				OutlineID:    "out-a",
+				Rank:         "h",
+				Title:        "A",
+				StatusID:     "todo",
+				OwnerActorID: humanID,
+				CreatedBy:    humanID,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			},
+			{
+				ID:           "item-child",
+				ProjectID:    "proj-a",
+				OutlineID:    "out-a",
+				ParentID:     strPtr("item-a"),
+				Rank:         "i",
+				Title:        "child",
+				StatusID:     "todo",
+				OwnerActorID: humanID,
+				CreatedBy:    humanID,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			},
+			// Destination outline top-level parents.
+			{ID: "parent-1", ProjectID: "proj-a", OutlineID: "out-b", Rank: "h", Title: "P1", StatusID: "todo", OwnerActorID: humanID, CreatedBy: humanID, CreatedAt: now, UpdatedAt: now},
+			{ID: "child-of-parent-1", ProjectID: "proj-a", OutlineID: "out-b", ParentID: strPtr("parent-1"), Rank: "i", Title: "c", StatusID: "todo", OwnerActorID: humanID, CreatedBy: humanID, CreatedAt: now, UpdatedAt: now},
+			{ID: "parent-2", ProjectID: "proj-a", OutlineID: "out-b", Rank: "j", Title: "P2", StatusID: "todo", OwnerActorID: humanID, CreatedBy: humanID, CreatedAt: now, UpdatedAt: now},
+		},
+	}
+
+	s := store.Store{Dir: dir}
+	if err := s.Save(db); err != nil {
+		t.Fatalf("save db: %v", err)
+	}
+
+	m := newAppModel(dir, db)
+	m.view = viewOutline
+	m.selectedProjectID = "proj-a"
+	m.selectedOutlineID = "out-a"
+	m.selectedOutline = &db.Outlines[0]
+	m.collapsed = map[string]bool{}
+	m.refreshItems(db.Outlines[0])
+	selectListItemByID(&m.itemsList, "item-a")
+
+	// Open the outline picker.
+	mmAny, _ := m.updateOutline(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	m2 := mmAny.(appModel)
+	if m2.modal != modalPickOutline {
+		t.Fatalf("expected modalPickOutline; got %v", m2.modal)
+	}
+
+	// Pick out-b -> mode picker.
+	selectOutlineOption(t, &m2, "out-b")
+	mmAny, _ = m2.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
+	m3 := mmAny.(appModel)
+	if m3.modal != modalPickMoveMode {
+		t.Fatalf("expected modalPickMoveMode; got %v", m3.modal)
+	}
+
+	// Choose "select item in outline…" (second option).
+	m3.outlinePickList.Select(1)
+	mmAny, _ = m3.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
+	m4 := mmAny.(appModel)
+	if m4.modal != modalPickMoveParent {
+		t.Fatalf("expected modalPickMoveParent; got %v", m4.modal)
+	}
+
+	items := m4.outlinePickList.Items()
+	if got := len(items); got != 2 {
+		t.Fatalf("expected 2 top-level parent options; got %d", got)
+	}
+	for _, it := range items {
+		ri, ok := it.(outlineRowItem)
+		if !ok {
+			t.Fatalf("expected outlineRowItem; got %T", it)
+		}
+		if ri.row.item.ParentID != nil && strings.TrimSpace(*ri.row.item.ParentID) != "" {
+			t.Fatalf("expected top-level items only; got parent %q for item %q", *ri.row.item.ParentID, ri.row.item.ID)
+		}
+		if strings.TrimSpace(ri.row.item.OutlineID) != "out-b" {
+			t.Fatalf("expected items in out-b; got %q", ri.row.item.OutlineID)
+		}
+	}
+
+	// Select parent-2.
+	for i, it := range items {
+		ri := it.(outlineRowItem)
+		if ri.row.item.ID == "parent-2" {
+			m4.outlinePickList.Select(i)
+		}
+	}
+	mmAny, _ = m4.updateOutline(tea.KeyMsg{Type: tea.KeyEnter})
+	_ = mmAny.(appModel)
+
+	db2, err := s.Load()
+	if err != nil {
+		t.Fatalf("load db: %v", err)
+	}
+	it2, ok := db2.FindItem("item-a")
+	if !ok {
+		t.Fatalf("expected item-a to exist")
+	}
+	if it2.OutlineID != "out-b" {
+		t.Fatalf("expected outline to be out-b; got %q", it2.OutlineID)
+	}
+	if it2.ParentID == nil || *it2.ParentID != "parent-2" {
+		got := "<nil>"
+		if it2.ParentID != nil {
+			got = *it2.ParentID
+		}
+		t.Fatalf("expected parent to be parent-2; got %s", got)
+	}
+
+	// Child should move too (and keep its parent link).
+	ch2, ok := db2.FindItem("item-child")
+	if !ok {
+		t.Fatalf("expected item-child to exist")
 	}
 	if ch2.OutlineID != "out-b" {
 		t.Fatalf("expected child outline to be out-b; got %q", ch2.OutlineID)
@@ -456,3 +625,18 @@ func TestMoveOutlinePicker_ShowsProjectAndOutlineName(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+func selectOutlineOption(t *testing.T, m *appModel, outlineID string) {
+	t.Helper()
+	for i, it := range m.outlinePickList.Items() {
+		oi, ok := it.(outlineMoveOptionItem)
+		if !ok {
+			continue
+		}
+		if oi.outline.ID == outlineID {
+			m.outlinePickList.Select(i)
+			return
+		}
+	}
+	t.Fatalf("expected outline option %q to exist", outlineID)
+}

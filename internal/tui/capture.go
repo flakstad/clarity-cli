@@ -361,7 +361,13 @@ func newCaptureModel(cfg *store.GlobalConfig, actorOverride string) (captureMode
 	m.minuteInput.Width = 4
 
 	m.textarea = textarea.New()
-	m.textarea.ShowLineNumbers = false
+	// No size limits: capture descriptions/prompts should be able to exceed the
+	// textarea defaults (bubbles v0.20 has a small default CharLimit).
+	m.textarea.CharLimit = 0
+	// Avoid the default line-count cap (MaxHeight governs newline insertion).
+	m.textarea.MaxHeight = 0
+	// Prefer line numbers for editing longer content.
+	m.textarea.ShowLineNumbers = true
 	m.textarea.FocusedStyle.CursorLine = m.textarea.BlurredStyle.CursorLine
 
 	m.refreshTemplateList()
@@ -2014,29 +2020,35 @@ func (m *captureModel) resizeLists() {
 	// Render capture like a centered modal rather than full-screen UI.
 	// Keep a consistent (bounded) size so hotkey capture feels focused.
 	w := modalBodyWidth(m.width)
-	h := m.height - 10
-	if h > 20 {
-		h = 20
+	listH := m.height - 10
+	if listH > 20 {
+		listH = 20
 	}
 	if w < 20 {
 		w = 20
 	}
-	if h < 6 {
-		h = 6
+	if listH < 6 {
+		listH = 6
 	}
-	m.templateList.SetSize(w, h)
-	m.templateSearchList.SetSize(w, h)
-	m.promptList.SetSize(w, h)
-	m.outlinePickList.SetSize(w, h)
-	m.statusPickList.SetSize(w, h)
-	m.assigneeList.SetSize(w, h)
-	m.draftList.SetSize(w, h)
+	m.templateList.SetSize(w, listH)
+	m.templateSearchList.SetSize(w, listH)
+	m.promptList.SetSize(w, listH)
+	m.outlinePickList.SetSize(w, listH)
+	m.statusPickList.SetSize(w, listH)
+	m.assigneeList.SetSize(w, listH)
+	m.draftList.SetSize(w, listH)
 
 	// Text editor modals use a smaller area.
 	m.titleInput.Width = w - 4
 	m.input.Width = w - 4
 	m.textarea.SetWidth(w - 4)
-	m.textarea.SetHeight(h - 4)
+
+	// For multiline editing, use as much vertical space as is available (no arbitrary cap).
+	textH := m.height - 12
+	if textH < 6 {
+		textH = 6
+	}
+	m.textarea.SetHeight(textH - 4)
 }
 
 func (m captureModel) View() string {

@@ -3851,7 +3851,11 @@ func (m *appModel) renderModal() string {
 	case modalPickStatus:
 		return renderModalBox(m.width, "Set status", m.statusList.View()+"\n\nenter: set   esc/ctrl+g: cancel")
 	case modalPickOutline:
-		return renderModalBox(m.width, "Move", m.outlinePickList.View()+"\n\nenter: move   esc/ctrl+g: cancel")
+		return renderModalBox(m.width, "Move: pick outline", m.outlinePickList.View()+"\n\nenter: next   esc/ctrl+g: cancel")
+	case modalPickMoveMode:
+		return renderModalBox(m.width, "Move: pick mode", m.outlinePickList.View()+"\n\nenter: next   backspace/h: outline   esc/ctrl+g: cancel")
+	case modalPickMoveParent:
+		return renderModalBox(m.width, "Move: pick item", m.outlinePickList.View()+"\n\nenter: move   backspace/h: mode   esc/ctrl+g: cancel")
 	case modalPickAssignee:
 		return renderModalBox(m.width, "Assign", m.assigneeList.View()+"\n\nenter: set   esc/ctrl+g: cancel")
 	case modalEditTags:
@@ -5521,42 +5525,63 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.pendingMoveParentTo = ""
 					m.modal = modalNone
 					m.modalForID = ""
+					m.modalForKey = ""
 					return m, nil
 				case "enter":
 					itemID := strings.TrimSpace(m.modalForID)
 					toOutlineID := ""
-					toParentID := ""
-					switch it := m.outlinePickList.SelectedItem().(type) {
-					case outlineMoveOptionItem:
+					if it, ok := m.outlinePickList.SelectedItem().(outlineMoveOptionItem); ok {
 						toOutlineID = strings.TrimSpace(it.outline.ID)
-					case moveUnderItemOptionItem:
-						toParentID = strings.TrimSpace(it.item.ID)
-						toOutlineID = strings.TrimSpace(it.item.OutlineID)
 					}
+					if itemID == "" || toOutlineID == "" || m.db == nil {
+						return m, nil
+					}
+					(&m).openMoveModePicker(itemID, toOutlineID)
+					return m, nil
+				}
+			}
+			var cmd tea.Cmd
+			m.outlinePickList, cmd = m.outlinePickList.Update(msg)
+			return m, cmd
+		}
 
-					// Close the outline picker; we may reopen a status picker.
+		if m.modal == modalPickMoveMode {
+			switch km := msg.(type) {
+			case tea.KeyMsg:
+				switch km.String() {
+				case "esc":
+					m.pendingMoveOutlineTo = ""
+					m.pendingMoveParentTo = ""
 					m.modal = modalNone
 					m.modalForID = ""
-
+					m.modalForKey = ""
+					return m, nil
+				case "backspace", "h":
+					itemID := strings.TrimSpace(m.modalForID)
+					(&m).openMoveOutlinePicker(itemID)
+					return m, nil
+				case "enter":
+					itemID := strings.TrimSpace(m.modalForID)
+					toOutlineID := strings.TrimSpace(m.modalForKey)
 					if itemID == "" || toOutlineID == "" || m.db == nil {
 						return m, nil
 					}
 					curItem, ok := m.db.FindItem(itemID)
-					if !ok {
+					if !ok || curItem == nil {
 						return m, nil
 					}
-					if strings.TrimSpace(toParentID) == "" {
-						// Move to an outline (top-level).
-						if strings.TrimSpace(curItem.OutlineID) == strings.TrimSpace(toOutlineID) {
-							m.showMinibuffer("Already in that outline")
-							return m, nil
-						}
-						o, ok := m.db.FindOutline(toOutlineID)
-						if !ok {
-							m.showMinibuffer("Error: outline not found")
-							return m, nil
-						}
+					o, ok := m.db.FindOutline(toOutlineID)
+					if !ok || o == nil {
+						m.showMinibuffer("Error: outline not found")
+						return m, nil
+					}
 
+					mode := ""
+					if it, ok := m.outlinePickList.SelectedItem().(moveModeOptionItem); ok {
+						mode = strings.TrimSpace(it.mode)
+					}
+					switch mode {
+					case "outline":
 						// If any status in the subtree isn't valid in the target outline, prompt for one.
 						if subtreeHasInvalidStatusInOutline(m.db, curItem.ID, o.ID) {
 							m.pendingMoveOutlineTo = o.ID
@@ -5565,57 +5590,87 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.openStatusPickerForOutline(*o, curItem.StatusID, false)
 							m.modal = modalPickStatus
 							m.modalForID = itemID
+							m.modalForKey = ""
 							return m, nil
 						}
-
 						if err := m.moveItemToOutline(itemID, o.ID, "", false); err != nil {
 							return m, m.reportError(itemID, err)
 						}
+						m.modal = modalNone
+						m.modalForID = ""
+						m.modalForKey = ""
+						return m, nil
+					case "item":
+						(&m).openMoveParentPicker(itemID, o.ID)
+						return m, nil
+					default:
+						return m, nil
+					}
+				}
+			}
+			var cmd tea.Cmd
+			m.outlinePickList, cmd = m.outlinePickList.Update(msg)
+			return m, cmd
+		}
+
+		if m.modal == modalPickMoveParent {
+			switch km := msg.(type) {
+			case tea.KeyMsg:
+				switch km.String() {
+				case "esc":
+					m.pendingMoveOutlineTo = ""
+					m.pendingMoveParentTo = ""
+					m.modal = modalNone
+					m.modalForID = ""
+					m.modalForKey = ""
+					return m, nil
+				case "backspace", "h":
+					itemID := strings.TrimSpace(m.modalForID)
+					toOutlineID := strings.TrimSpace(m.modalForKey)
+					(&m).openMoveModePicker(itemID, toOutlineID)
+					return m, nil
+				case "enter":
+					itemID := strings.TrimSpace(m.modalForID)
+					toOutlineID := strings.TrimSpace(m.modalForKey)
+					if itemID == "" || toOutlineID == "" || m.db == nil {
+						return m, nil
+					}
+					curItem, ok := m.db.FindItem(itemID)
+					if !ok || curItem == nil {
+						return m, nil
+					}
+					o, ok := m.db.FindOutline(toOutlineID)
+					if !ok || o == nil {
+						m.showMinibuffer("Error: outline not found")
 						return m, nil
 					}
 
-					// Move under a specific item (become its child).
-					if strings.TrimSpace(toParentID) == strings.TrimSpace(curItem.ID) {
-						m.showMinibuffer("Cannot move under itself")
-						return m, nil
+					parentID := ""
+					if it, ok := m.outlinePickList.SelectedItem().(outlineRowItem); ok {
+						parentID = strings.TrimSpace(it.row.item.ID)
 					}
-					if curItem.ParentID != nil && strings.TrimSpace(*curItem.ParentID) == strings.TrimSpace(toParentID) && strings.TrimSpace(curItem.OutlineID) == strings.TrimSpace(toOutlineID) {
-						m.showMinibuffer("Already under that item")
-						return m, nil
-					}
-					parent, ok := m.db.FindItem(toParentID)
-					if !ok || parent == nil {
-						m.showMinibuffer("Error: target item not found")
-						return m, nil
-					}
-					if parent.Archived {
-						m.showMinibuffer("Target item is archived")
-						return m, nil
-					}
-					if isAncestor(m.db, parent.ID, curItem.ID) {
-						m.showMinibuffer("Cannot move under a descendant")
-						return m, nil
-					}
-					o, ok := m.db.FindOutline(strings.TrimSpace(parent.OutlineID))
-					if !ok || o == nil {
-						m.showMinibuffer("Error: outline not found")
+					if parentID == "" {
 						return m, nil
 					}
 
 					// If any status in the subtree isn't valid in the target outline, prompt for one.
 					if subtreeHasInvalidStatusInOutline(m.db, curItem.ID, o.ID) {
 						m.pendingMoveOutlineTo = o.ID
-						m.pendingMoveParentTo = parent.ID
+						m.pendingMoveParentTo = parentID
 						// No "(no status)" option: moved items must have a valid status in the target outline.
 						m.openStatusPickerForOutline(*o, curItem.StatusID, false)
 						m.modal = modalPickStatus
 						m.modalForID = itemID
+						m.modalForKey = ""
 						return m, nil
 					}
 
-					if err := m.moveItemUnderItem(itemID, parent.ID, "", false); err != nil {
+					if err := m.moveItemUnderItem(itemID, parentID, "", false); err != nil {
 						return m, m.reportError(itemID, err)
 					}
+					m.modal = modalNone
+					m.modalForID = ""
+					m.modalForKey = ""
 					return m, nil
 				}
 			}
@@ -5633,6 +5688,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.pendingMoveParentTo = ""
 					m.modal = modalNone
 					m.modalForID = ""
+					m.modalForKey = ""
 					return m, nil
 				case "enter":
 					if it, ok := m.statusList.SelectedItem().(statusOptionItem); ok {
@@ -5648,6 +5704,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 								}
 								m.modal = modalNone
 								m.modalForID = ""
+								m.modalForKey = ""
 								return m, nil
 							}
 							if err := m.moveItemToOutline(itemID, to, it.id, true); err != nil {
@@ -5655,6 +5712,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 							}
 							m.modal = modalNone
 							m.modalForID = ""
+							m.modalForKey = ""
 							return m, nil
 						}
 
@@ -9909,10 +9967,8 @@ func (m *appModel) openMoveOutlinePicker(itemID string) {
 		return
 	}
 
-	// Build a mixed target list:
-	// - outlines (move to top-level)
-	// - items (move under item, become child)
-	outlineOpts := []list.Item{}
+	// Step 1: pick the destination outline.
+	opts := []list.Item{}
 	for _, o := range m.db.Outlines {
 		if o.Archived {
 			continue
@@ -9921,38 +9977,10 @@ func (m *appModel) openMoveOutlinePicker(itemID string) {
 		if p, ok := m.db.FindProject(strings.TrimSpace(o.ProjectID)); ok && p != nil {
 			projectName = strings.TrimSpace(p.Name)
 		}
-		outlineOpts = append(outlineOpts, outlineMoveOptionItem{outline: o, projectName: projectName})
+		opts = append(opts, outlineMoveOptionItem{outline: o, projectName: projectName})
 	}
 
-	// Exclude the item itself and its descendants as "move under" targets (cycle prevention).
-	excluded := map[string]bool{}
-	for _, id := range collectSubtreeItemIDs(m.db, it.ID) {
-		excluded[id] = true
-	}
-
-	underOpts := []list.Item{}
-	for i := range m.db.Items {
-		cand := m.db.Items[i]
-		if cand.Archived {
-			continue
-		}
-		if excluded[strings.TrimSpace(cand.ID)] {
-			continue
-		}
-		o, ok := m.db.FindOutline(strings.TrimSpace(cand.OutlineID))
-		if !ok || o == nil || o.Archived {
-			continue
-		}
-		projectName := ""
-		if p, ok := m.db.FindProject(strings.TrimSpace(o.ProjectID)); ok && p != nil {
-			projectName = strings.TrimSpace(p.Name)
-		}
-		underOpts = append(underOpts, moveUnderItemOptionItem{item: cand, outline: *o, projectName: projectName})
-	}
-
-	sort.Slice(outlineOpts, func(i, j int) bool { return outlineOpts[i].FilterValue() < outlineOpts[j].FilterValue() })
-	sort.Slice(underOpts, func(i, j int) bool { return underOpts[i].FilterValue() < underOpts[j].FilterValue() })
-	opts := append(outlineOpts, underOpts...)
+	sort.Slice(opts, func(i, j int) bool { return opts[i].FilterValue() < opts[j].FilterValue() })
 	if len(opts) == 0 {
 		m.showMinibuffer("No move targets")
 		return
@@ -9995,6 +10023,147 @@ func (m *appModel) openMoveOutlinePicker(itemID string) {
 	m.pendingMoveParentTo = ""
 	m.modal = modalPickOutline
 	m.modalForID = itemID
+	m.modalForKey = ""
+}
+
+func (m *appModel) openMoveModePicker(itemID, toOutlineID string) {
+	itemID = strings.TrimSpace(itemID)
+	toOutlineID = strings.TrimSpace(toOutlineID)
+	if itemID == "" || toOutlineID == "" || m == nil || m.db == nil {
+		return
+	}
+	if _, ok := m.db.FindItem(itemID); !ok {
+		return
+	}
+	if _, ok := m.db.FindOutline(toOutlineID); !ok {
+		return
+	}
+
+	opts := []list.Item{
+		moveModeOptionItem{
+			mode:  "outline",
+			title: "1) Add to outline",
+			desc:  "Move to the outline root (top level)",
+		},
+		moveModeOptionItem{
+			mode:  "item",
+			title: "2) Select item in outline…",
+			desc:  "Pick a top-level item to become the new parent",
+		},
+	}
+	m.outlinePickList.Title = ""
+	m.outlinePickList.SetItems(opts)
+
+	modalW := m.width - 12
+	if modalW > m.width-4 {
+		modalW = m.width - 4
+	}
+	if modalW < 20 {
+		modalW = 20
+	}
+	if modalW > 96 {
+		modalW = 96
+	}
+	h := len(opts) + 2
+	if h < 6 {
+		h = 6
+	}
+	m.outlinePickList.SetSize(modalW-6, h)
+	m.outlinePickList.Select(0)
+
+	m.pendingMoveOutlineTo = ""
+	m.pendingMoveParentTo = ""
+	m.modal = modalPickMoveMode
+	m.modalForID = itemID
+	m.modalForKey = toOutlineID
+}
+
+func (m *appModel) openMoveParentPicker(itemID, toOutlineID string) {
+	itemID = strings.TrimSpace(itemID)
+	toOutlineID = strings.TrimSpace(toOutlineID)
+	if itemID == "" || toOutlineID == "" || m == nil || m.db == nil {
+		return
+	}
+	root, ok := m.db.FindItem(itemID)
+	if !ok || root == nil {
+		return
+	}
+	o, ok := m.db.FindOutline(toOutlineID)
+	if !ok || o == nil {
+		return
+	}
+
+	// Exclude the item itself and its descendants as "move under" targets (cycle prevention).
+	excluded := map[string]bool{}
+	for _, id := range collectSubtreeItemIDs(m.db, root.ID) {
+		excluded[strings.TrimSpace(id)] = true
+	}
+
+	opts := []list.Item{}
+	for i := range m.db.Items {
+		cand := m.db.Items[i]
+		if cand.Archived {
+			continue
+		}
+		if strings.TrimSpace(cand.OutlineID) != strings.TrimSpace(o.ID) {
+			continue
+		}
+		if cand.ParentID != nil && strings.TrimSpace(*cand.ParentID) != "" {
+			continue
+		}
+		if excluded[strings.TrimSpace(cand.ID)] {
+			continue
+		}
+
+		children := m.db.ChildrenOf(cand.ID)
+		doneChildren, totalChildren := countProgressChildren(*o, children)
+		opts = append(opts, outlineRowItem{
+			row: outlineRow{
+				item:           cand,
+				depth:          0,
+				hasChildren:    len(children) > 0,
+				hasDescription: strings.TrimSpace(cand.Description) != "",
+				collapsed:      false,
+				doneChildren:   doneChildren,
+				totalChildren:  totalChildren,
+			},
+			outline: *o,
+		})
+	}
+	if len(opts) == 0 {
+		m.showMinibuffer("No top-level items in outline")
+		return
+	}
+	sort.Slice(opts, func(i, j int) bool { return opts[i].FilterValue() < opts[j].FilterValue() })
+
+	m.outlinePickList.Title = ""
+	m.outlinePickList.SetItems(opts)
+
+	modalW := m.width - 12
+	if modalW > m.width-4 {
+		modalW = m.width - 4
+	}
+	if modalW < 20 {
+		modalW = 20
+	}
+	if modalW > 96 {
+		modalW = 96
+	}
+	h := len(opts) + 2
+	if h > 18 {
+		h = 18
+	}
+	if h < 6 {
+		h = 6
+	}
+	m.outlinePickList.SetSize(modalW-6, h)
+	m.outlinePickList.Select(0)
+
+	m.pendingMoveOutlineTo = ""
+	m.pendingMoveParentTo = ""
+	m.modal = modalPickMoveParent
+	m.modalForID = itemID
+	m.modalForKey = toOutlineID
 }
 
 func (m *appModel) moveItemUnderItem(itemID, parentItemID, statusOverride string, applyStatusToInvalidSubtree bool) error {
@@ -10824,9 +10993,6 @@ func (m *appModel) openTextModal(kind modalKind, itemID, placeholder, initial st
 	h := m.height - 12
 	if h < 6 {
 		h = 6
-	}
-	if h > 16 {
-		h = 16
 	}
 
 	m.textarea.Placeholder = placeholder

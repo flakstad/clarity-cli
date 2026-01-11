@@ -120,6 +120,8 @@ const (
 	modalSetSchedule
 	modalPickStatus
 	modalPickOutline
+	modalPickMoveMode
+	modalPickMoveParent
 	modalPickAssignee
 	modalEditTags
 	modalPickWorkspace

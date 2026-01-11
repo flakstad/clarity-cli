@@ -24,7 +24,7 @@ Key bindings:
 - `backspace` or `esc`: go back (from item view → outline; from outline → previous screen)
 - `x` (or `?`): open the actions menu (context-aware; includes item actions from outline focus, details pane, and item view)
 - `r`: archive selected item (with confirm)
-- `m`: move selected/open item to another outline, or under another item (make it a child; can be in a different project)
+- `m`: move selected/open item (pick outline → pick mode → optionally pick a top-level item in that outline to become the new parent)
 - `y`: copy selected item ID to clipboard
 - `Y`: copy `clarity items show <id>` to clipboard
 - `V`: duplicate selected/open item
