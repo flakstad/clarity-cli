@@ -2127,21 +2127,17 @@ func (m captureModel) renderModal() string {
 		return renderModalBox(m.width, "Capture: template search", m.templateSearchList.View()+"\n\nenter: select   esc/ctrl+g: cancel")
 	case captureModalEditTitle:
 		bodyW := modalBodyWidth(m.width)
-		expHelp := styleMuted().Width(bodyW).Render("Expansions: {{date}} {{time}} {{now}} {{clipboard}} {{url}} {{selection}} (+ prompt vars like {{project}})")
 		inputLine := renderInputLine(bodyW, m.titleInput.View())
 		body := strings.Join([]string{
 			inputLine,
-			"",
-			expHelp,
 			"",
 			"enter/ctrl+s: save   esc/ctrl+g: cancel",
 		}, "\n")
 		return renderModalBox(m.width, "Capture: title", body)
 	case captureModalEditDescription:
 		bodyW := modalBodyWidth(m.width)
-		expHelp := styleMuted().Width(bodyW).Render("Expansions: {{date}} {{time}} {{now}} {{clipboard}} {{url}} {{selection}} (+ prompt vars like {{project}})")
 		srcHelp := styleMuted().Width(bodyW).Render("{{url}}: --url or $CLARITY_CAPTURE_URL    {{selection}}: --selection or $CLARITY_CAPTURE_SELECTION")
-		return renderModalBox(m.width, "Capture: description", m.textarea.View()+"\n\n"+expHelp+"\n"+srcHelp+"\n\nctrl+s: save   esc/ctrl+g: cancel")
+		return renderModalBox(m.width, "Capture: description", m.textarea.View()+"\n\n"+srcHelp+"\n\nctrl+s: save   esc/ctrl+g: cancel")
 	case captureModalPromptInput:
 		p, ok := m.currentPrompt()
 		if !ok {
