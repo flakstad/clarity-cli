@@ -249,12 +249,8 @@ func applyClarityMarkdownPalette(cfg *ansi.StyleConfig, styleName string) {
 	cfg.H5.Color = headingColor
 	cfg.H6.Color = headingColor
 
-	// Links: avoid red; use Clarity accent with underline.
-	linkColor := mdColor(colorAccent, styleName)
-	cfg.Link.Color = linkColor
-	cfg.Link.Underline = mdBoolPtr(true)
-	cfg.LinkText.Color = linkColor
-	cfg.LinkText.Underline = mdBoolPtr(true)
+	// Links: keep Glamour defaults. (Outline description rendering uses this style config;
+	// overriding link colors here can make URLs too low-contrast on dark terminals.)
 
 	// Inline code: avoid bright red; keep readable and distinct.
 	cfg.Code.Color = mdColor(colorSurfaceFg, styleName)
