@@ -451,6 +451,8 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
 	m.textarea.SetWidth(72)
 	m.textarea.SetHeight(10)
 	m.textarea.ShowLineNumbers = true
+	// Avoid highlighting the full current line; the cursor is enough for focus.
+	m.textarea.FocusedStyle.CursorLine = m.textarea.BlurredStyle.CursorLine
 
 	m.refreshProjects()
 
