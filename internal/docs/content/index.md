@@ -18,6 +18,7 @@ Recommended starting topics:
 - `output-contract`
 - `identity-ownership`
 - `items-outlines`
+- `keybindings`
 - `doctor-reindex`
 - `sync`
 - `web`

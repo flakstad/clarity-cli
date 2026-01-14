@@ -31,6 +31,25 @@ Use Clarity to:
 - Formats: `--format json|edn` (or `CLARITY_FORMAT`)
 - Use `--pretty` only for human debugging; do not rely on it in scripts/agents
 
+## Shell quoting for `--body` / `--description` (avoid backtick hiccups)
+When passing freeform text to `--body` / `--description`, avoid unescaped shell metacharacters (especially in `zsh`):
+- Avoid Markdown inline code backticks (`` `like this` ``) in command arguments; backticks trigger command substitution in many shells.
+- Prefer plain text (e.g. `clarity worklog add ... --body "Deployed X; next: Y"`).
+
+Safe patterns:
+
+```bash
+# Option A: single quotes (safest for literal backticks and $() text)
+clarity worklog add <item-id> --body 'Ran `go test ./...`; fixed failing test'
+
+# Option B: here-doc (best for long multi-line updates)
+clarity comments add <item-id> --body "$(cat <<'EOF'
+Implemented X.
+Next: Y.
+EOF
+)"
+```
+
 ## Identity model (hard requirement)
 All writes are attributed to an **actor**:
 - Actors are either `human` or `agent`

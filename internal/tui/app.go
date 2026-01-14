@@ -932,7 +932,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 				actions["D"] = actionPanelAction{label: "Edit description", kind: actionPanelActionExec}
 				actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
 				actions["o"] = actionPanelAction{label: "Toggle on hold", kind: actionPanelActionExec}
-				actions["u"] = actionPanelAction{
+				actions["A"] = actionPanelAction{
 					label: "Assign…",
 					kind:  actionPanelActionExec,
 					handler: func(mm appModel) (appModel, tea.Cmd) {
@@ -982,9 +982,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
 			actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
 			actions["o"] = actionPanelAction{label: "Toggle on hold", kind: actionPanelActionExec}
-			// Use "u" (like "user") in the action panel to avoid shadowing the global "a: agenda"
-			// entrypoint in context menus.
-			actions["u"] = actionPanelAction{
+			actions["A"] = actionPanelAction{
 				label: "Assign…",
 				kind:  actionPanelActionExec,
 				handler: func(mm appModel) (appModel, tea.Cmd) {
@@ -2176,7 +2174,7 @@ func (m appModel) renderActionPanel() string {
 		switch m.view {
 		case viewItem:
 			// Full-screen item page: show item work + global entrypoints.
-			addSection("Item", []string{"e", "D", "p", "o", "u", "t", "d", "s", " ", "C", "w", "V", "m", "y", "Y", "r"})
+			addSection("Item", []string{"e", "D", "p", "o", "A", "t", "d", "s", " ", "C", "w", "V", "m", "y", "Y", "r"})
 
 			globalKeys := []string{}
 			for _, k := range []string{"g", "a", "c"} {
@@ -2202,7 +2200,7 @@ func (m appModel) renderActionPanel() string {
 			addSection("Item", []string{
 				"e", "V", "n", "N", // title/new items
 				" ", "shift+left", "shift+right", // status
-				"p", "o", "u", "t", "d", "s", "D", // priority/on-hold/assign/tags/due/schedule/description
+				"p", "o", "A", "t", "d", "s", "D", // priority/on-hold/assign/tags/due/schedule/description
 				"m",      // move
 				"C", "w", // comment/worklog
 				"y", "Y", // copy helpers (still item-scoped)
@@ -4322,13 +4320,7 @@ func (m *appModel) renderInputModal(title string) string {
 		inputW = 10
 	}
 	m.input.Width = inputW
-	inputLine := lipgloss.PlaceHorizontal(
-		bodyW,
-		lipgloss.Left,
-		" "+m.input.View()+" ",
-		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceBackground(colorInputBg),
-	)
+	inputLine := renderInputLine(bodyW, m.input.View())
 	body := strings.Join([]string{
 		inputLine,
 		"",
@@ -4367,13 +4359,7 @@ func (m *appModel) renderInputModalWithDescription(title, desc string) string {
 		inputW = 10
 	}
 	m.input.Width = inputW
-	inputLine := lipgloss.PlaceHorizontal(
-		bodyW,
-		lipgloss.Left,
-		" "+m.input.View()+" ",
-		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceBackground(colorInputBg),
-	)
+	inputLine := renderInputLine(bodyW, m.input.View())
 	descLine := lipgloss.NewStyle().Width(bodyW).Foreground(colorSurfaceFg).Render(strings.TrimSpace(desc))
 	body := strings.Join([]string{
 		descLine,
@@ -4395,13 +4381,7 @@ func (m *appModel) renderTagsModal() string {
 	}
 	m.input.Width = inputW
 
-	inputLine := lipgloss.PlaceHorizontal(
-		bodyW,
-		lipgloss.Left,
-		" "+m.input.View()+" ",
-		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceBackground(colorInputBg),
-	)
+	inputLine := renderInputLine(bodyW, m.input.View())
 	help := styleMuted().Width(bodyW).Render("tab: focus  enter (input): add  enter/space (list): toggle  esc/ctrl+g: close")
 	body := strings.Join([]string{
 		inputLine,
@@ -6753,7 +6733,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-		case "a":
+		case "A":
 			// Assign selected item.
 			if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
 				m.openAssigneePicker(it.row.item.ID)
@@ -7074,7 +7054,7 @@ func (m *appModel) updateOutlineColumns(msg tea.KeyMsg) (bool, tea.Cmd) {
 			return true, m.reportError(it.Item.ID, err)
 		}
 		return true, nil
-	case "a":
+	case "A":
 		m.openAssigneePicker(it.Item.ID)
 		return true, nil
 	case "t":

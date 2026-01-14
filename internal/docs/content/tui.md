@@ -23,6 +23,7 @@ Key bindings:
 - `D` (on outlines screen): edit selected outline description
 - `backspace` or `esc`: go back (from item view → outline; from outline → previous screen)
 - `x` (or `?`): open the actions menu (context-aware; includes item actions from outline focus, details pane, and item view)
+- For the keybinding contract + a more complete reference, see `clarity docs keybindings`.
 - `r`: archive selected item (with confirm)
 - `m`: move selected/open item (pick outline → pick mode → optionally pick a top-level item in that outline to become the new parent)
 - `y`: copy selected item ID to clipboard

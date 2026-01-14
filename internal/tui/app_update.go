@@ -223,20 +223,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.openActionPanel(actionPanelNav)
 			return m, nil
 		case "a":
-			// Org-style agenda flow: open the agenda commands panel, then choose a command (e.g. 't').
-			//
-			// In outline view, "a" is reserved for item assignment (outline.js parity), so we only
-			// treat it as a global agenda shortcut outside the outline (and item view).
-			if m.view == viewOutline {
-				return m.updateOutline(msg)
-			}
-			if m.view == viewItem {
-				return m.updateItem(msg)
-			}
-			m.openActionPanel(actionPanelAgenda)
-			return m, nil
-		case "A":
-			// Always-available agenda alias (useful when "a" is used for assignment in outline view).
+			// Agenda dispatcher: open the agenda commands panel, then choose a command (e.g. 't').
 			m.openActionPanel(actionPanelAgenda)
 			return m, nil
 		case "c":
@@ -1287,7 +1274,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.reportError(activeID, err)
 			}
 			return m, nil
-		case "a":
+		case "A":
 			if readOnly {
 				m.showMinibuffer("Archived item: read-only")
 				return m, nil

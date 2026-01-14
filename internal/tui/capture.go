@@ -1190,7 +1190,7 @@ func (m captureModel) updateDraft(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.openDescriptionModal(active.Description)
 		}
 		return m, nil
-	case "a":
+	case "A":
 		m.modal = captureModalPickAssignee
 		m.modalForDraftID = strings.TrimSpace(activeID)
 		m.openAssigneePicker(active)
@@ -1771,6 +1771,12 @@ func (m *captureModel) openTitleModal(forDraftID string, initial string) {
 	m.modalForDraftID = strings.TrimSpace(forDraftID)
 	m.titleInput.SetValue(strings.TrimSpace(initial))
 	m.titleInput.Placeholder = "Title"
+	bodyW := modalBodyWidth(m.width)
+	inputW := bodyW - 2 // one space padding on each side
+	if inputW < 10 {
+		inputW = 10
+	}
+	m.titleInput.Width = inputW
 	m.titleInput.Focus()
 }
 
@@ -2105,7 +2111,7 @@ func (m captureModel) renderDraftSummary() string {
 
 	bodyW := modalBodyWidth(m.width)
 	header := styleMuted().Width(bodyW).Render("Target: " + outLabel)
-	help := styleMuted().Width(bodyW).Render("Keys: e title  D desc  a assign  t tags  s schedule  d due  p priority  o hold  SPACE status  m move  n sibling  N subitem  ENTER/CTRL+S save  esc/ctrl+g exit")
+	help := styleMuted().Width(bodyW).Render("Keys: e title  D desc  A assign  t tags  s schedule  d due  p priority  o hold  SPACE status  m move  n sibling  N subitem  ENTER/CTRL+S save  esc/ctrl+g exit")
 	return strings.Join([]string{
 		header,
 		"",
@@ -2122,7 +2128,15 @@ func (m captureModel) renderModal() string {
 	case captureModalEditTitle:
 		bodyW := modalBodyWidth(m.width)
 		expHelp := styleMuted().Width(bodyW).Render("Expansions: {{date}} {{time}} {{now}} {{clipboard}} {{url}} {{selection}} (+ prompt vars like {{project}})")
-		return renderModalBox(m.width, "Capture: title", m.titleInput.View()+"\n\n"+expHelp+"\n\nenter/ctrl+s: save   esc/ctrl+g: cancel")
+		inputLine := renderInputLine(bodyW, m.titleInput.View())
+		body := strings.Join([]string{
+			inputLine,
+			"",
+			expHelp,
+			"",
+			"enter/ctrl+s: save   esc/ctrl+g: cancel",
+		}, "\n")
+		return renderModalBox(m.width, "Capture: title", body)
 	case captureModalEditDescription:
 		bodyW := modalBodyWidth(m.width)
 		expHelp := styleMuted().Width(bodyW).Render("Expansions: {{date}} {{time}} {{now}} {{clipboard}} {{url}} {{selection}} (+ prompt vars like {{project}})")
