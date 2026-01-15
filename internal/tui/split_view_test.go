@@ -79,7 +79,7 @@ func TestViewOutline_SplitPreview_RendersNoDetailPane(t *testing.T) {
 	})
 
 	out := m.viewOutline()
-	if strings.Contains(out, "Description") || strings.Contains(out, "Owner: ") {
+	if strings.Contains(out, "Description") || strings.Contains(out, "Created by: ") {
 		t.Fatalf("did not expect detail pane content in outline view; got: %q", out)
 	}
 }

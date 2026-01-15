@@ -35,6 +35,10 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
 		Padding(0, padX)
 
 	status := renderStatus(outline, it.StatusID)
+	createdBy := "-"
+	if strings.TrimSpace(it.CreatedBy) != "" {
+		createdBy = "@" + actorDetailLabel(db, it.CreatedBy)
+	}
 	assigned := "-"
 	if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) != "" {
 		assigned = "@" + actorDetailLabel(db, *it.AssignedActorID)
@@ -124,7 +128,7 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
 		titleStyle.Render(it.Title),
 		"",
 		labelStyle.Render("ID: ") + it.ID,
-		labelStyle.Render("Owner: ") + it.OwnerActorID,
+		labelStyle.Render("Created by: ") + createdBy,
 		labelStyle.Render("Assigned: ") + assigned,
 		labelStyle.Render("Tags: ") + tags,
 		labelStyle.Render("Priority: ") + fmt.Sprintf("%v", it.Priority),
@@ -208,6 +212,10 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
 	}
 
 	status := renderStatus(outline, it.StatusID)
+	createdBy := "-"
+	if strings.TrimSpace(it.CreatedBy) != "" {
+		createdBy = "@" + actorDetailLabel(db, it.CreatedBy)
+	}
 	assigned := "-"
 	if it.AssignedActorID != nil && strings.TrimSpace(*it.AssignedActorID) != "" {
 		assigned = "@" + actorDetailLabel(db, *it.AssignedActorID)
@@ -291,7 +299,7 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
 		titleBtn,
 		"",
 		labelStyle.Render("ID: ") + it.ID,
-		labelStyle.Render("Owner: ") + it.OwnerActorID,
+		labelStyle.Render("Created by: ") + createdBy,
 		labelStyle.Render("Assigned: ") + btn(focus == itemFocusAssigned).Render(assigned),
 		labelStyle.Render("Tags: ") + btn(focus == itemFocusTags).Render(tags),
 		labelStyle.Render("Priority: ") + btn(focus == itemFocusPriority).Render(fmt.Sprintf("%v", it.Priority)),
