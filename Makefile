@@ -4,10 +4,21 @@ BINARY_NAME=clarity
 
 ROOT_DIR := $(shell pwd)
 
-# Keep Go caches inside the repo (ignored by git) but in paths that `go test ./...`
-# will *not* try to treat as packages (Go ignores dirs starting with '.' or '_').
-export GOMODCACHE := $(ROOT_DIR)/.gomodcache
-export GOCACHE := $(ROOT_DIR)/.gocache
+# Go caches:
+# - Default is to use a shared per-user cache dir so isolated agent dirs (worktrees/copies)
+#   do not "redownload the world" on each build/test.
+# - Override by setting GO_CACHE_DIR (or pre-setting GOMODCACHE/GOCACHE).
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+	DEFAULT_GO_CACHE_DIR := $(HOME)/Library/Caches/clarity-cli-go
+else
+	DEFAULT_GO_CACHE_DIR := $(HOME)/.cache/clarity-cli-go
+endif
+
+GO_CACHE_DIR ?= $(DEFAULT_GO_CACHE_DIR)
+
+export GOMODCACHE ?= $(GO_CACHE_DIR)/gomodcache
+export GOCACHE ?= $(GO_CACHE_DIR)/gocache
 
 prep-cache:
 	@mkdir -p "$(GOMODCACHE)" "$(GOCACHE)"

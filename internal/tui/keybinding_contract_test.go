@@ -131,3 +131,14 @@ func TestKeybindingContract_ActionPanel_Shows_A_Assign_And_a_Agenda(t *testing.T
 	}
 }
 
+func TestKeybindingContract_ActionPanel_ItemView_Shows_AttachFile(t *testing.T) {
+	_, m := newKeybindingContractModel(t)
+	m.view = viewItem
+	m.openItemID = "item-a"
+	m.openActionPanel(actionPanelContext)
+
+	out := m.renderActionPanel()
+	if !strings.Contains(out, "Attach file") {
+		t.Fatalf("expected action panel to contain Attach file; got:\n%s", out)
+	}
+}

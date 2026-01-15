@@ -901,69 +901,11 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 				}
 			}
 			if readOnly {
-				actions["l"] = actionPanelAction{
-					label: "Open links…",
-					kind:  actionPanelActionExec,
-					handler: func(mm appModel) (appModel, tea.Cmd) {
-						mmAny, cmd := mm.updateItem(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-						if m2, ok := mmAny.(appModel); ok {
-							return m2, cmd
-						}
-						return mm, cmd
-					},
-				}
-				actions["V"] = actionPanelAction{label: "Duplicate item", kind: actionPanelActionExec}
-				actions["y"] = actionPanelAction{label: "Copy item ref (includes --workspace)", kind: actionPanelActionExec}
-				actions["Y"] = actionPanelAction{label: "Copy CLI show command (includes --workspace)", kind: actionPanelActionExec}
+				addActionSpecs(actions, itemActionsItemViewReadOnlySpecs)
 				actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
 			} else {
-				actions["l"] = actionPanelAction{
-					label: "Open links…",
-					kind:  actionPanelActionExec,
-					handler: func(mm appModel) (appModel, tea.Cmd) {
-						mmAny, cmd := mm.updateItem(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-						if m2, ok := mmAny.(appModel); ok {
-							return m2, cmd
-						}
-						return mm, cmd
-					},
-				}
-				actions["e"] = actionPanelAction{label: "Edit title", kind: actionPanelActionExec}
-				actions["D"] = actionPanelAction{label: "Edit description", kind: actionPanelActionExec}
-				actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
-				actions["o"] = actionPanelAction{label: "Toggle on hold", kind: actionPanelActionExec}
-				actions["A"] = actionPanelAction{
-					label: "Assign…",
-					kind:  actionPanelActionExec,
-					handler: func(mm appModel) (appModel, tea.Cmd) {
-						id := strings.TrimSpace(mm.openItemID)
-						if id != "" {
-							(&mm).openAssigneePicker(id)
-						}
-						return mm, nil
-					},
-				}
-				actions["t"] = actionPanelAction{
-					label: "Tags…",
-					kind:  actionPanelActionExec,
-					handler: func(mm appModel) (appModel, tea.Cmd) {
-						id := strings.TrimSpace(mm.openItemID)
-						if id != "" {
-							(&mm).openTagsEditor(id)
-						}
-						return mm, nil
-					},
-				}
-				actions["d"] = actionPanelAction{label: "Set due", kind: actionPanelActionExec}
-				actions["s"] = actionPanelAction{label: "Set schedule", kind: actionPanelActionExec}
-				actions[" "] = actionPanelAction{label: "Change status", kind: actionPanelActionExec}
-				actions["C"] = actionPanelAction{label: "Add comment", kind: actionPanelActionExec}
-				actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
-				actions["y"] = actionPanelAction{label: "Copy item ref (includes --workspace)", kind: actionPanelActionExec}
-				actions["Y"] = actionPanelAction{label: "Copy CLI show command (includes --workspace)", kind: actionPanelActionExec}
-				actions["V"] = actionPanelAction{label: "Duplicate item", kind: actionPanelActionExec}
-				actions["m"] = actionPanelAction{label: "Move…", kind: actionPanelActionExec}
-				actions["r"] = actionPanelAction{label: "Archive item", kind: actionPanelActionExec}
+				addActionSpecs(actions, itemActionsItemViewExtrasSpecs)
+				addActionSpecs(actions, itemActionsCoreSpecs)
 				actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
 			}
 		case viewOutline:
@@ -2174,7 +2116,7 @@ func (m appModel) renderActionPanel() string {
 		switch m.view {
 		case viewItem:
 			// Full-screen item page: show item work + global entrypoints.
-			addSection("Item", []string{"e", "D", "p", "o", "A", "t", "d", "s", " ", "C", "w", "V", "m", "y", "Y", "r"})
+			addSection("Item", []string{"e", "D", "p", "o", "A", "u", "t", "d", "s", " ", "C", "w", "V", "m", "y", "Y", "r"})
 
 			globalKeys := []string{}
 			for _, k := range []string{"g", "a", "c"} {

@@ -39,6 +39,39 @@ From `clarity-cli/`:
 - Format: `make fmt` (or `gofmt -w .`)
 - Tidy deps: `make tidy`
 
+## Concurrent Agent Workflow (Hard Requirement)
+When multiple agents work in the same repo concurrently, **never** switch branches or do destructive git operations (e.g. `git reset --hard`, `git clean -fdx`) in the shared checkout. Instead, each agent must work in its **own git worktree + branch**.
+
+Reference:
+- Workflow details: `docs/agents/worktrees.md`
+- Base template (optional): `docs/agents/AGENTS.base.md`
+
+Use this pattern:
+
+```bash
+# Prefer a stable per-agent id when available.
+AGENT_ID="${CLARITY_AGENT_SESSION:-${AGENT_SESSION:-agent}}"
+ITEM_ID="${CLARITY_ITEM_ID:-item-task}" # typically item-xxx
+ITEM_SUFFIX="${ITEM_ID#item-}"          # prefer using just xxx in branch names
+
+BRANCH="agent/${AGENT_ID}/${ITEM_SUFFIX}"
+WT_BASE="${WORKTREE_BASE:-$PWD/.worktrees}"
+WORKTREE_DIR="$WT_BASE/${AGENT_ID}-${ITEM_ID}"
+
+mkdir -p "$(dirname "$WORKTREE_DIR")"
+git worktree add -b "$BRANCH" "$WORKTREE_DIR" HEAD
+cd "$WORKTREE_DIR"
+```
+
+Rules:
+- Do all edits/tests/formatting inside the worktree directory.
+- Treat the shared checkout as read-only.
+- Test early and often; set up a tight feedback loop (run targeted tests/builds after each small change, then broader checks before handoff).
+- Agents may commit freely to their own branch/worktree; prefer small, standalone commits and commit frequently.
+- When finished, open a PR or hand off the branch name; do not merge to `main` unless explicitly asked.
+- Humans merge from the shared checkout on `main` by merging the remote agent branch (example: `git merge --no-ff origin/agent/<agent-id>/<item-suffix>`).
+- Cleanup (only after handoff): `git worktree remove "$WORKTREE_DIR"` (optional) and delete the branch if requested.
+
 ## Local Store & Workspace Resolution
 Clarity is workspace-first; workspaces are resolved in this order:
 1) `--dir` / `CLARITY_DIR` (advanced override; points at a workspace root that contains `.clarity/`, or at a legacy `.clarity/` dir itself)
