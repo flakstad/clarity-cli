@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -398,47 +399,518 @@ func (m *appModel) ensureActionPanelSelection() {
 	if m == nil || m.modal != modalActionPanel {
 		return
 	}
-	entries := m.actionPanelEntries()
-	if len(entries) == 0 {
+	layout := m.actionPanelKeyLayout()
+	keys := layout.rowMajorKeys
+	if len(keys) == 0 {
 		m.actionPanelSelectedKey = ""
 		return
 	}
 	cur := strings.TrimSpace(m.actionPanelSelectedKey)
-	if cur != "" {
-		for _, e := range entries {
-			if e.key == cur {
-				return
-			}
-		}
+	if cur != "" && slices.Contains(keys, cur) {
+		return
 	}
-	m.actionPanelSelectedKey = entries[0].key
+	m.actionPanelSelectedKey = keys[0]
 }
 
 func (m *appModel) moveActionPanelSelection(delta int) {
 	if m == nil || m.modal != modalActionPanel {
 		return
 	}
-	entries := m.actionPanelEntries()
-	if len(entries) == 0 {
+	layout := m.actionPanelKeyLayout()
+	keys := layout.rowMajorKeys
+	if len(keys) == 0 {
 		m.actionPanelSelectedKey = ""
 		return
 	}
 	cur := strings.TrimSpace(m.actionPanelSelectedKey)
-	idx := 0
-	for i, e := range entries {
-		if e.key == cur {
-			idx = i
-			break
-		}
+	idx := slices.Index(keys, cur)
+	if idx < 0 {
+		m.actionPanelSelectedKey = keys[0]
+		return
 	}
 	next := idx + delta
 	for next < 0 {
-		next += len(entries)
+		next += len(keys)
 	}
-	for next >= len(entries) {
-		next -= len(entries)
+	for next >= len(keys) {
+		next -= len(keys)
 	}
-	m.actionPanelSelectedKey = entries[next].key
+	m.actionPanelSelectedKey = keys[next]
+}
+
+type actionPanelKeyLayout struct {
+	useTwoCols bool
+
+	// Left/right include non-selectable rows (headers and blank lines) as empty keys ("").
+	leftRows  []string
+	rightRows []string
+
+	// Grid keys in row-major order (left-to-right per row), excluding tail keys.
+	gridRowMajorKeys []string
+
+	// Tail keys appended after the grid (Go-to panel only): digit shortcuts for recent items/captures.
+	tailKeys []string
+
+	// All selectable keys in row-major order, including tail keys.
+	rowMajorKeys []string
+}
+
+func actionPanelContentWidth(termW int) int {
+	// Mirrors renderActionPanel's sizing logic.
+	w := termW
+	if w < 0 {
+		w = 0
+	}
+
+	modalW := w - 12
+	if modalW > w-4 {
+		modalW = w - 4
+	}
+	if modalW < 20 {
+		modalW = 20
+	}
+	if modalW > 96 {
+		modalW = 96
+	}
+
+	contentW := modalW - 4 // Padding(1,2) => 2 columns of padding on each side.
+	if contentW < 20 {
+		contentW = 20
+	}
+	return contentW
+}
+
+func actionPanelEntriesFromActions(actions map[string]actionPanelAction) []actionPanelEntry {
+	entries := make([]actionPanelEntry, 0, len(actions))
+	for k, a := range actions {
+		entries = append(entries, actionPanelEntry{key: k, label: a.label})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].key < entries[j].key })
+	return entries
+}
+
+type actionPanelKeySection struct {
+	header string
+	keys   []string
+}
+
+func (m appModel) actionPanelKeyLayout() actionPanelKeyLayout {
+	if m.modal != modalActionPanel || m.curActionPanelKind() == actionPanelCapture {
+		return actionPanelKeyLayout{}
+	}
+
+	actions := m.actionPanelActions()
+	if len(actions) == 0 {
+		return actionPanelKeyLayout{}
+	}
+
+	entries := actionPanelEntriesFromActions(actions)
+	seen := map[string]bool{}
+
+	isFocusedItemContext := m.curActionPanelKind() == actionPanelContext &&
+		((m.view == viewOutline && (m.pane == paneOutline || (m.pane == paneDetail && m.splitPreviewVisible()))) ||
+			m.view == viewItem)
+
+	addKey := func(k string, keys *[]string) bool {
+		if seen[k] {
+			return false
+		}
+		if _, ok := actions[k]; !ok {
+			return false
+		}
+		seen[k] = true
+		*keys = append(*keys, k)
+		return true
+	}
+
+	sections := []actionPanelKeySection{}
+	addSection := func(header string, keys []string) {
+		got := []string{}
+		for _, k := range keys {
+			addKey(k, &got)
+		}
+		if len(got) == 0 {
+			return
+		}
+		sections = append(sections, actionPanelKeySection{header: header, keys: got})
+	}
+
+	// Navigation group:
+	// - In the context panel, only include actions that actually navigate to a subpanel.
+	//   (We don't want to "steal" exec actions like "v" Cycle view mode from the View section.)
+	// - In the Go to panel, show destinations explicitly.
+	if m.curActionPanelKind() == actionPanelNav {
+		addSection("Destinations", []string{"p", "o", "l", "i", "A", "W", "/", "s"})
+		// Recent digits are rendered in a special full-width block below; mark them as seen so
+		// they don't fall into "Other".
+		for _, k := range []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"} {
+			seen[k] = true
+		}
+	} else if !isFocusedItemContext {
+		navKeys := []string{}
+		// Stable "nice" order first.
+		for _, k := range []string{"g", "a", "c"} {
+			if a, ok := actions[k]; ok && a.kind == actionPanelActionNav {
+				navKeys = append(navKeys, k)
+			}
+		}
+		// Any other nav actions (sorted).
+		other := []string{}
+		for k, a := range actions {
+			if a.kind != actionPanelActionNav {
+				continue
+			}
+			if k == "g" || k == "a" || k == "c" {
+				continue
+			}
+			other = append(other, k)
+		}
+		sort.Strings(other)
+		navKeys = append(navKeys, other...)
+		addSection("Go to", navKeys)
+	}
+
+	// When focused on an item, present clearer grouped actions.
+	if isFocusedItemContext {
+		switch m.view {
+		case viewItem:
+			addSection("Item", []string{"e", "D", "p", "o", "A", "u", "t", "d", "s", " ", "C", "w", "V", "m", "y", "Y", "r"})
+
+			globalKeys := []string{}
+			for _, k := range []string{"g", "a", "c"} {
+				if a, ok := actions[k]; ok && a.kind == actionPanelActionNav {
+					globalKeys = append(globalKeys, k)
+				}
+			}
+			if _, ok := actions["q"]; ok {
+				globalKeys = append(globalKeys, "q")
+			}
+			addSection("Global", globalKeys)
+
+		default:
+			// Regroup by "what you're operating on", matching renderActionPanel().
+			addSection("Outline View", []string{"enter", "v", "O", "S", "tab", "z", "Z"})
+			addSection("Item", []string{
+				"e", "V", "n", "N", // title/new items
+				" ", "shift+left", "shift+right", // status
+				"p", "o", "A", "t", "d", "s", "D", // priority/on-hold/assign/tags/due/schedule/description
+				"m",      // move
+				"C", "w", // comment/worklog
+				"y", "Y", // copy helpers (still item-scoped)
+				"r", // archive
+			})
+
+			globalKeys := []string{}
+			for _, k := range []string{"g", "a", "c"} {
+				if a, ok := actions[k]; ok && a.kind == actionPanelActionNav {
+					globalKeys = append(globalKeys, k)
+				}
+			}
+			if _, ok := actions["q"]; ok {
+				globalKeys = append(globalKeys, "q")
+			}
+			addSection("Global", globalKeys)
+		}
+	} else {
+		// Default: show remaining actions in sorted order.
+		rest := make([]string, 0, len(entries))
+		for _, e := range entries {
+			if seen[e.key] {
+				continue
+			}
+			rest = append(rest, e.key)
+		}
+		sort.Strings(rest)
+		got := []string{}
+		for _, k := range rest {
+			addKey(k, &got)
+		}
+		if len(got) > 0 {
+			sections = append(sections, actionPanelKeySection{header: "Other", keys: got})
+		}
+	}
+
+	// Render blocks: prefer two columns of whole sections when there's room.
+	const colGap = 4
+	const minColW = 34
+	contentW := actionPanelContentWidth(m.width)
+	useTwoCols := len(sections) > 1 && contentW >= (minColW*2+colGap)
+
+	type col struct {
+		rows   []string
+		height int
+		blocks int
+	}
+
+	colHeight := func(c col) int {
+		n := len(c.rows)
+		for n > 0 && strings.TrimSpace(c.rows[n-1]) == "" {
+			n--
+		}
+		return n
+	}
+
+	appendSectionRows := func(rows *[]string, s actionPanelKeySection) {
+		*rows = append(*rows, "") // header row (non-selectable)
+		*rows = append(*rows, s.keys...)
+		*rows = append(*rows, "") // blank separator
+	}
+
+	left := col{}
+	right := col{}
+
+	if !useTwoCols {
+		for _, s := range sections {
+			appendSectionRows(&left.rows, s)
+		}
+	} else {
+		// Greedy balance by height, keeping each section as atomic.
+		for _, s := range sections {
+			h := 1 + len(s.keys) // header + keys (no trailing blank)
+			if colHeight(left) <= colHeight(right) {
+				if left.blocks > 0 {
+					left.height++ // blank between sections
+				}
+				left.height += h
+				left.blocks++
+				appendSectionRows(&left.rows, s)
+			} else {
+				if right.blocks > 0 {
+					right.height++
+				}
+				right.height += h
+				right.blocks++
+				appendSectionRows(&right.rows, s)
+			}
+		}
+	}
+
+	trimTrailingBlanks := func(rows []string) []string {
+		for len(rows) > 0 && strings.TrimSpace(rows[len(rows)-1]) == "" {
+			rows = rows[:len(rows)-1]
+		}
+		return rows
+	}
+	left.rows = trimTrailingBlanks(left.rows)
+	right.rows = trimTrailingBlanks(right.rows)
+
+	maxRows := len(left.rows)
+	if len(right.rows) > maxRows {
+		maxRows = len(right.rows)
+	}
+	gridRowMajor := []string{}
+	for i := 0; i < maxRows; i++ {
+		if i < len(left.rows) && strings.TrimSpace(left.rows[i]) != "" {
+			gridRowMajor = append(gridRowMajor, left.rows[i])
+		}
+		if i < len(right.rows) && strings.TrimSpace(right.rows[i]) != "" {
+			gridRowMajor = append(gridRowMajor, right.rows[i])
+		}
+	}
+
+	// Tail keys (Go-to only): digit shortcuts for recent items/captures.
+	tail := []string{}
+	if m.curActionPanelKind() == actionPanelNav {
+		for i := 0; i < maxRecentItems; i++ {
+			k := strconv.Itoa(i + 1)
+			if _, ok := actions[k]; ok {
+				tail = append(tail, k)
+			}
+		}
+		for i := 0; i < maxRecentCaptures; i++ {
+			k := strconv.Itoa(i + 6)
+			if _, ok := actions[k]; ok {
+				tail = append(tail, k)
+			}
+		}
+	}
+
+	all := append([]string{}, gridRowMajor...)
+	all = append(all, tail...)
+
+	return actionPanelKeyLayout{
+		useTwoCols:       useTwoCols,
+		leftRows:         left.rows,
+		rightRows:        right.rows,
+		gridRowMajorKeys: gridRowMajor,
+		tailKeys:         tail,
+		rowMajorKeys:     all,
+	}
+}
+
+func (m *appModel) moveActionPanelSelectionVertical(delta int) {
+	if m == nil || m.modal != modalActionPanel || delta == 0 {
+		return
+	}
+	layout := m.actionPanelKeyLayout()
+	cur := strings.TrimSpace(m.actionPanelSelectedKey)
+	if cur == "" || len(layout.rowMajorKeys) == 0 {
+		m.ensureActionPanelSelection()
+		return
+	}
+
+	// Tail navigation (Go-to recents).
+	if idx := slices.Index(layout.tailKeys, cur); idx >= 0 {
+		next := idx + delta
+		switch {
+		case next >= 0 && next < len(layout.tailKeys):
+			m.actionPanelSelectedKey = layout.tailKeys[next]
+			return
+		case next < 0:
+			if n := len(layout.gridRowMajorKeys); n > 0 {
+				m.actionPanelSelectedKey = layout.gridRowMajorKeys[n-1]
+				return
+			}
+			m.actionPanelSelectedKey = layout.tailKeys[len(layout.tailKeys)-1]
+			return
+		default: // next >= len(tail)
+			if n := len(layout.gridRowMajorKeys); n > 0 {
+				m.actionPanelSelectedKey = layout.gridRowMajorKeys[0]
+				return
+			}
+			m.actionPanelSelectedKey = layout.tailKeys[0]
+			return
+		}
+	}
+
+	findPos := func(rows []string) (int, bool) {
+		for i := 0; i < len(rows); i++ {
+			if rows[i] == cur {
+				return i, true
+			}
+		}
+		return 0, false
+	}
+
+	colRows := layout.leftRows
+	rowIdx, ok := findPos(colRows)
+	if !ok {
+		colRows = layout.rightRows
+		rowIdx, ok = findPos(colRows)
+	}
+	if !ok {
+		// Fallback to simple cycling.
+		m.moveActionPanelSelection(delta)
+		return
+	}
+
+	// Find next selectable within the column without wrapping.
+	if delta > 0 {
+		for r := rowIdx + 1; r < len(colRows); r++ {
+			if strings.TrimSpace(colRows[r]) != "" {
+				m.actionPanelSelectedKey = colRows[r]
+				return
+			}
+		}
+		// At bottom of grid: enter the tail if present, otherwise wrap within the grid.
+		if len(layout.tailKeys) > 0 {
+			m.actionPanelSelectedKey = layout.tailKeys[0]
+			return
+		}
+		// Wrap to the top.
+		for r := 0; r < len(colRows); r++ {
+			if strings.TrimSpace(colRows[r]) != "" {
+				m.actionPanelSelectedKey = colRows[r]
+				return
+			}
+		}
+		return
+	}
+
+	// delta < 0
+	for r := rowIdx - 1; r >= 0; r-- {
+		if strings.TrimSpace(colRows[r]) != "" {
+			m.actionPanelSelectedKey = colRows[r]
+			return
+		}
+	}
+	// At top of grid: jump to tail end if present, otherwise wrap to bottom.
+	if len(layout.tailKeys) > 0 {
+		m.actionPanelSelectedKey = layout.tailKeys[len(layout.tailKeys)-1]
+		return
+	}
+	for r := len(colRows) - 1; r >= 0; r-- {
+		if strings.TrimSpace(colRows[r]) != "" {
+			m.actionPanelSelectedKey = colRows[r]
+			return
+		}
+	}
+}
+
+func (m *appModel) moveActionPanelSelectionHorizontal(delta int) {
+	if m == nil || m.modal != modalActionPanel || delta == 0 {
+		return
+	}
+	layout := m.actionPanelKeyLayout()
+	if !layout.useTwoCols {
+		return
+	}
+	cur := strings.TrimSpace(m.actionPanelSelectedKey)
+	if cur == "" || len(layout.rowMajorKeys) == 0 {
+		m.ensureActionPanelSelection()
+		return
+	}
+	// Tail is full-width; horizontal movement doesn't apply.
+	if slices.Contains(layout.tailKeys, cur) {
+		return
+	}
+
+	findPos := func(rows []string) (int, bool) {
+		for i := 0; i < len(rows); i++ {
+			if rows[i] == cur {
+				return i, true
+			}
+		}
+		return 0, false
+	}
+
+	curIsLeft := true
+	curRows := layout.leftRows
+	curRow, ok := findPos(curRows)
+	if !ok {
+		curIsLeft = false
+		curRows = layout.rightRows
+		curRow, ok = findPos(curRows)
+	}
+	if !ok {
+		return
+	}
+
+	// Respect direction: left goes to left column, right goes to right column.
+	wantLeft := delta < 0
+	if curIsLeft == wantLeft {
+		return
+	}
+	otherRows := layout.leftRows
+	if !wantLeft {
+		otherRows = layout.rightRows
+	}
+
+	// Prefer the same row index; otherwise pick the nearest selectable row.
+	pickAt := func(r int) (string, bool) {
+		if r >= 0 && r < len(otherRows) && strings.TrimSpace(otherRows[r]) != "" {
+			return otherRows[r], true
+		}
+		return "", false
+	}
+
+	if k, ok := pickAt(curRow); ok {
+		m.actionPanelSelectedKey = k
+		return
+	}
+	for d := 1; d < 1000; d++ {
+		if k, ok := pickAt(curRow + d); ok {
+			m.actionPanelSelectedKey = k
+			return
+		}
+		if k, ok := pickAt(curRow - d); ok {
+			m.actionPanelSelectedKey = k
+			return
+		}
+		if curRow+d >= len(otherRows) && curRow-d < 0 {
+			break
+		}
+	}
 }
 
 func (m appModel) curActionPanelKind() actionPanelKind {
@@ -543,7 +1015,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			},
 		}
 		actions["s"] = actionPanelAction{label: "Sync…", kind: actionPanelActionNav, next: actionPanelSync}
-		actions["j"] = actionPanelAction{
+		actions["/"] = actionPanelAction{
 			label: "Jump to item by id…",
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
@@ -2061,7 +2533,7 @@ func (m appModel) renderActionPanel() string {
 	//   (We don't want to "steal" exec actions like "v" Cycle view mode from the View section.)
 	// - In the Go to panel, show destinations explicitly.
 	if m.curActionPanelKind() == actionPanelNav {
-		addSection("Destinations", []string{"p", "A", "o", "l", "i"})
+		addSection("Destinations", []string{"p", "o", "l", "i", "A", "W", "/", "s"})
 		// Note: "Recently visited/captured" are rendered as special full-width blocks at the bottom.
 		// Mark them as seen so they don't fall into "Other".
 		for _, k := range []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"} {
@@ -2270,9 +2742,16 @@ func (m appModel) renderActionPanel() string {
 				rowW = 8
 			}
 
-			renderRecentRow := func(projectName string, outline model.Outline, it model.Item, doneChildren, totalChildren int, width int) string {
-				// Base style: force modal surface background.
-				base := lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorSurfaceBg)
+			renderRecentRow := func(projectName string, outline model.Outline, it model.Item, doneChildren, totalChildren int, width int, selected bool) string {
+				bg := colorSurfaceBg
+				fg := colorSurfaceFg
+				if selected {
+					bg = colorSelectedBg
+					fg = colorSelectedFg
+				}
+
+				// Base style: force modal surface background (or selection highlight background).
+				base := lipgloss.NewStyle().Foreground(fg).Background(bg).Bold(selected)
 
 				projectName = strings.TrimSpace(projectName)
 				outlineName := ""
@@ -2313,7 +2792,7 @@ func (m appModel) renderActionPanel() string {
 					if isEndState(outline, statusID) {
 						style = statusEndStyle
 					}
-					style = style.Copy().Background(colorSurfaceBg)
+					style = style.Copy().Background(bg)
 					statusSeg = style.Render(statusTxt) + base.Render(" ")
 					statusRaw = statusTxt + " "
 				}
@@ -2334,11 +2813,11 @@ func (m appModel) renderActionPanel() string {
 				// Inline metadata (priority / on hold), matching outline semantics.
 				metaParts := make([]string, 0, 2)
 				if it.Priority {
-					st := metaPriorityStyle.Copy().Background(colorSurfaceBg)
+					st := metaPriorityStyle.Copy().Background(bg)
 					metaParts = append(metaParts, st.Render("priority"))
 				}
 				if it.OnHold {
-					st := metaOnHoldStyle.Copy().Background(colorSurfaceBg)
+					st := metaOnHoldStyle.Copy().Background(bg)
 					metaParts = append(metaParts, st.Render("on hold"))
 				}
 				inlineMetaSeg := strings.Join(metaParts, base.Render(" "))
@@ -2430,8 +2909,8 @@ func (m appModel) renderActionPanel() string {
 					children := m.db.ChildrenOf(it.ID)
 					doneChildren, totalChildren := countProgressChildren(*ol, children)
 
-					rendered := renderRecentRow(projectName, *ol, *it, doneChildren, totalChildren, rowW)
 					key := strconv.Itoa(i + keyStart)
+					rendered := renderRecentRow(projectName, *ol, *it, doneChildren, totalChildren, rowW, key == selectedKey)
 					line := fmt.Sprintf("%-3s%s", actionPanelDisplayKey(key), rendered)
 					out = append(out, cutToWidth(line, contentW))
 				}
@@ -4602,17 +5081,41 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					(&m).moveActionPanelSelection(-1)
 					return m, nil
 				case "up", "ctrl+p":
-					(&m).moveActionPanelSelection(-1)
+					(&m).moveActionPanelSelectionVertical(-1)
 					return m, nil
 				case "down", "ctrl+n":
-					(&m).moveActionPanelSelection(+1)
+					(&m).moveActionPanelSelectionVertical(+1)
 					return m, nil
+				case "left", "ctrl+b":
+					(&m).moveActionPanelSelectionHorizontal(-1)
+					return m, nil
+				case "right", "ctrl+f":
+					(&m).moveActionPanelSelectionHorizontal(+1)
+					return m, nil
+				case "h":
+					// Preserve vi-style horizontal movement in the action panel, but don't steal
+					// keys that are valid action keys (or typed capture keys).
+					if panelKind != actionPanelCapture {
+						if _, ok := actions["h"]; !ok {
+							(&m).moveActionPanelSelectionHorizontal(-1)
+							return m, nil
+						}
+					}
+				case "l":
+					// Preserve vi-style horizontal movement in the action panel, but don't steal
+					// keys that are valid action keys (or typed capture keys).
+					if panelKind != actionPanelCapture {
+						if _, ok := actions["l"]; !ok {
+							(&m).moveActionPanelSelectionHorizontal(+1)
+							return m, nil
+						}
+					}
 				case "k":
 					// Preserve vi-style movement in the action panel, but don't steal
 					// keys that are valid action keys (or typed capture keys).
 					if panelKind != actionPanelCapture {
 						if _, ok := actions["k"]; !ok {
-							(&m).moveActionPanelSelection(-1)
+							(&m).moveActionPanelSelectionVertical(-1)
 							return m, nil
 						}
 					}
@@ -4621,7 +5124,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// keys that are valid action keys (or typed capture keys).
 					if panelKind != actionPanelCapture {
 						if _, ok := actions["j"]; !ok {
-							(&m).moveActionPanelSelection(+1)
+							(&m).moveActionPanelSelectionVertical(+1)
 							return m, nil
 						}
 					}
