@@ -37,7 +37,7 @@ func sidePanelKindForFocus(f itemPageFocus) itemSidePanelKind {
 	}
 }
 
-func renderItemSidePanelWithEvents(db *store.DB, it model.Item, width, height int, kind itemSidePanelKind, attachmentIdx, commentIdx, worklogIdx, historyIdx int, scroll int, events []model.Event) string {
+func renderItemSidePanelWithEvents(db *store.DB, it model.Item, width, height int, kind itemSidePanelKind, focused bool, attachmentIdx, commentIdx, worklogIdx, historyIdx int, scroll int, events []model.Event) string {
 	if width < 0 {
 		width = 0
 	}
@@ -57,10 +57,14 @@ func renderItemSidePanelWithEvents(db *store.DB, it model.Item, width, height in
 
 	headerStyle := styleMuted()
 	// Match list selection highlight (outline + other lists): consistent fg/bg and a bit of weight.
-	focusRowStyle := lipgloss.NewStyle().
-		Foreground(colorSelectedFg).
-		Background(colorSelectedBg).
-		Bold(true)
+	// When the panel is unfocused, avoid a second "active" highlight.
+	focusRowStyle := lipgloss.NewStyle()
+	if focused {
+		focusRowStyle = lipgloss.NewStyle().
+			Foreground(colorSelectedFg).
+			Background(colorSelectedBg).
+			Bold(true)
+	}
 	moreStyle := styleMuted()
 
 	lines := []string{}
@@ -68,30 +72,117 @@ func renderItemSidePanelWithEvents(db *store.DB, it model.Item, width, height in
 	case itemSideAttachments:
 		rows := buildAttachmentPanelRows(db, it)
 		lines = append(lines, headerStyle.Render(fmt.Sprintf("Attachments (%d)", len(rows))))
-		lines = append(lines, headerStyle.Render("up/down, j/k, ctrl+n/p: select  enter: open  u: upload  e: edit  pgup/pgdown: scroll"))
 		lines = append(lines, "")
-		lines = append(lines, renderAttachmentPanelRows(rows, attachmentIdx, innerW, height-3, scroll, focusRowStyle, moreStyle)...)
+		lines = append(lines, renderAttachmentPanelRows(rows, attachmentIdx, innerW, height-2, scroll, focusRowStyle, moreStyle)...)
 	case itemSideComments:
 		comments := db.CommentsForItem(it.ID)
-		lines = append(lines, headerStyle.Render(fmt.Sprintf("Comments (%d)", len(comments))))
-		lines = append(lines, headerStyle.Render("up/down, j/k, ctrl+n/p: select  home/end: jump  enter: attachments  pgup/pgdown: scroll  R: reply  l: links"))
-		lines = append(lines, "")
-		lines = append(lines, renderThreadedComments(db, comments, commentIdx, innerW, height-3, scroll, focusRowStyle, moreStyle)...)
+		lines = append(lines, renderThreadedComments(db, comments, commentIdx, innerW, height, scroll, focusRowStyle, moreStyle)...)
 	case itemSideWorklog:
 		worklog := db.WorklogForItem(it.ID)
-		lines = append(lines, headerStyle.Render(fmt.Sprintf("My worklog (%d)", len(worklog))))
-		lines = append(lines, headerStyle.Render("up/down, j/k, ctrl+n/p: select  home/end: jump  pgup/pgdown: scroll  l: links"))
-		lines = append(lines, "")
-		lines = append(lines, renderAccordionWorklog(db, worklog, worklogIdx, innerW, height-3, scroll, focusRowStyle, moreStyle)...)
+		lines = append(lines, renderAccordionWorklog(db, worklog, worklogIdx, innerW, height, scroll, focusRowStyle, moreStyle)...)
 	case itemSideHistory:
-		evs := filterEventsForItem(db, events, it.ID)
-		lines = append(lines, headerStyle.Render(fmt.Sprintf("History (%d)", len(evs))))
-		lines = append(lines, headerStyle.Render("up/down, j/k, ctrl+n/p: select  home/end: jump  pgup/pgdown: scroll"))
-		lines = append(lines, "")
-		lines = append(lines, renderAccordionHistory(db, events, it.ID, historyIdx, innerW, height-3, scroll, focusRowStyle, moreStyle)...)
+		lines = append(lines, renderAccordionHistory(db, events, it.ID, historyIdx, innerW, height, scroll, focusRowStyle, moreStyle)...)
 	}
 
 	return normalizePane(box.Render(strings.Join(lines, "\n")), width, height)
+}
+
+func renderItemActivityColumns(db *store.DB, it model.Item, width, height int, focus itemPageFocus, commentIdx, worklogIdx, historyIdx int, scroll int, events []model.Event) string {
+	if width < 0 {
+		width = 0
+	}
+	if height < 0 {
+		height = 0
+	}
+
+	gap := 1
+	if width < 10 {
+		gap = 0
+	}
+	avail := width - 2*gap
+	if avail < 0 {
+		avail = 0
+	}
+	w1 := avail / 3
+	w2 := avail / 3
+	w3 := avail - w1 - w2
+	if w3 < 0 {
+		w3 = 0
+	}
+
+	// Default focus to Comments so the right side is useful immediately.
+	k := sidePanelKindForFocus(focus)
+	if k != itemSideComments && k != itemSideWorklog && k != itemSideHistory {
+		focus = itemFocusComments
+	}
+
+	comments := renderItemSidePanelWithEvents(db, it, w1, height, itemSideComments, focus == itemFocusComments, 0, commentIdx, 0, 0, scroll, events)
+	worklog := renderItemSidePanelWithEvents(db, it, w2, height, itemSideWorklog, focus == itemFocusWorklog, 0, 0, worklogIdx, 0, scroll, events)
+	history := renderItemSidePanelWithEvents(db, it, w3, height, itemSideHistory, focus == itemFocusHistory, 0, 0, 0, historyIdx, scroll, events)
+
+	// Join horizontally with stable spacing.
+	if gap > 0 {
+		sep := strings.Repeat(" ", gap)
+		return lipgloss.JoinHorizontal(lipgloss.Top, comments, sep, worklog, sep, history)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, comments, worklog, history)
+}
+
+func renderItemActivityTabbed(db *store.DB, it model.Item, width, height int, focus itemPageFocus, focused bool, commentIdx, worklogIdx, historyIdx int, scroll int, events []model.Event) string {
+	if width < 0 {
+		width = 0
+	}
+	if height < 0 {
+		height = 0
+	}
+	if db == nil {
+		return normalizePane(lipgloss.NewStyle().Width(width).Height(height).Render(""), width, height)
+	}
+
+	// Default to Comments.
+	k := sidePanelKindForFocus(focus)
+	if k != itemSideComments && k != itemSideWorklog && k != itemSideHistory {
+		k = itemSideComments
+	}
+
+	tab := func(label string, active bool) string {
+		st := styleMuted()
+		if active {
+			if focused {
+				st = lipgloss.NewStyle().Foreground(colorSelectedFg).Background(colorSelectedBg).Bold(true)
+			} else {
+				st = styleMuted().Bold(true)
+			}
+		}
+		return st.Render(" " + label + " ")
+	}
+
+	header := lipgloss.JoinHorizontal(lipgloss.Left,
+		tab("Comments", k == itemSideComments),
+		" ",
+		tab("My worklog", k == itemSideWorklog),
+		" ",
+		tab("History", k == itemSideHistory),
+	)
+	if xansi.StringWidth(header) > width {
+		header = xansi.Cut(header, 0, width)
+	}
+
+	bodyH := height - 1
+	if bodyH < 0 {
+		bodyH = 0
+	}
+	var body string
+	switch k {
+	case itemSideWorklog:
+		body = renderItemSidePanelWithEvents(db, it, width, bodyH, itemSideWorklog, focused && focus == itemFocusWorklog, 0, 0, worklogIdx, 0, scroll, events)
+	case itemSideHistory:
+		body = renderItemSidePanelWithEvents(db, it, width, bodyH, itemSideHistory, focused && focus == itemFocusHistory, 0, 0, 0, historyIdx, scroll, events)
+	default:
+		body = renderItemSidePanelWithEvents(db, it, width, bodyH, itemSideComments, focused && focus == itemFocusComments, 0, commentIdx, 0, 0, scroll, events)
+	}
+
+	return normalizePane(header+"\n"+body, width, height)
 }
 
 type attachmentPanelRow struct {
@@ -221,148 +312,116 @@ func renderThreadedComments(db *store.DB, comments []model.Comment, selected int
 		}
 	}
 
-	// Collapsed line (always rendered, even when selected).
-	lineFor := func(r commentThreadRow) string {
+	headerLineFor := func(r commentThreadRow) string {
 		indent := strings.Repeat("  ", r.Depth)
 		prefix := ""
 		if r.Depth > 0 {
 			prefix = "↳ "
 		}
 		actor := actorLabel(db, r.Comment.AuthorID)
-		snippetMax := maxInt(20, width-26-(2*r.Depth))
-		snippet := truncateInline(r.Comment.Body, snippetMax)
 		sfx := ""
 		if n := attachmentsCountByCommentID[strings.TrimSpace(r.Comment.ID)]; n > 0 {
 			sfx = fmt.Sprintf("  (%d att)", n)
 		}
-		return fmt.Sprintf("%s%s%s  %s  %s%s", indent, prefix, fmtTS(r.Comment.CreatedAt), actor, snippet, sfx)
+		return fmt.Sprintf("%s%s%s  %s%s", indent, prefix, fmtTS(r.Comment.CreatedAt), actor, sfx)
 	}
 
-	// Expanded markdown for selected comment: include inline quote if it's a reply.
-	c := rows[selected].Comment
-	md := strings.TrimSpace(c.Body)
-	if c.ReplyToCommentID != nil && strings.TrimSpace(*c.ReplyToCommentID) != "" {
-		parentID := strings.TrimSpace(*c.ReplyToCommentID)
-		if parent, ok := findCommentByID(comments, parentID); ok {
-			q := truncateInline(parent.Body, 280)
-			md = fmt.Sprintf("> %s  %s\n> %s\n\n%s",
-				fmtTS(parent.CreatedAt),
-				actorLabel(db, parent.AuthorID),
-				q,
-				strings.TrimSpace(c.Body),
-			)
-		}
-	}
+	// Render all comments expanded (no "collapsed preview" list).
+	all := make([]string, 0, maxInt(16, len(rows)*4))
+	startLineByRow := make([]int, len(rows))
 
-	mdLines := strings.Split(renderMarkdown(md, maxInt(10, width-2)), "\n")
-	if db != nil {
-		as := db.AttachmentsForComment(strings.TrimSpace(c.ID))
-		if len(as) > 0 {
-			mdLines = append(mdLines, "")
-			mdLines = append(mdLines, "Attachments:")
-			for _, a := range as {
-				name := strings.TrimSpace(a.Title)
-				if name == "" {
-					name = strings.TrimSpace(a.OriginalName)
-				}
-				if name == "" {
-					name = strings.TrimSpace(a.ID)
-				}
-				line := "- " + name + " (" + strings.TrimSpace(a.ID) + ")"
-				if xansi.StringWidth(line) > width-2 {
-					line = xansi.Cut(line, 0, maxInt(0, width-2))
-				}
-				mdLines = append(mdLines, line)
-			}
-		}
-	}
-	if scroll > len(mdLines) {
-		scroll = len(mdLines)
-	}
+	for i, r := range rows {
+		startLineByRow[i] = len(all)
 
-	// Fit expanded markdown into the available height. We dynamically account for the optional
-	// "more" indicator rows instead of permanently reserving space, so the expanded view uses
-	// the full pane height when possible.
-	mdH := height - 1 // 1 collapsed line + mdH lines
-	if mdH < 1 {
-		mdH = 1
-	}
-	var (
-		start int
-		end   int
-		mdWin []string
-	)
-	for iter := 0; iter < 6; iter++ {
-		if scroll > 0 && scroll > len(mdLines)-mdH {
-			scroll = maxInt(0, len(mdLines)-mdH)
-		}
-		mdWin = mdLines
-		if len(mdWin) > mdH {
-			mdEnd := scroll + mdH
-			if mdEnd > len(mdLines) {
-				mdEnd = len(mdLines)
-			}
-			mdWin = mdLines[scroll:mdEnd]
-		}
-
-		selectedBlockLen := 1 + len(mdWin)
-		remain := height - selectedBlockLen
-		if remain < 0 {
-			remain = 0
-		}
-		beforeN := remain / 2
-		afterN := remain - beforeN
-
-		start = selected - beforeN
-		if start < 0 {
-			start = 0
-		}
-		end = selected + 1 + afterN
-		if end > len(rows) {
-			end = len(rows)
-		}
-
-		outLen := (end - start - 1) + selectedBlockLen
-		if start > 0 {
-			outLen++
-		}
-		if end < len(rows) {
-			outLen++
-		}
-
-		overflow := outLen - height
-		if overflow <= 0 {
-			break
-		}
-		// Reduce markdown window to make room for indicators/neighbor rows.
-		mdH -= overflow
-		if mdH < 1 {
-			mdH = 1
-			break
-		}
-	}
-
-	selectedLine := focusRowStyle.Render(lineFor(commentThreadRow{Comment: c, Depth: rows[selected].Depth}))
-	selectedBlock := []string{selectedLine}
-	for _, ln := range mdWin {
-		selectedBlock = append(selectedBlock, "  "+ln)
-	}
-
-	out := []string{}
-	if start > 0 {
-		out = append(out, moreStyle.Render(fmt.Sprintf("↑ %d more", start)))
-	}
-	for i := start; i < end; i++ {
+		hdr := headerLineFor(r)
 		if i == selected {
-			out = append(out, selectedBlock...)
-			continue
+			hdr = focusRowStyle.Render(hdr)
 		}
-		out = append(out, lineFor(rows[i]))
+		all = append(all, hdr)
+
+		c := r.Comment
+		// Note: replies are stored as plain bodies; we keep the reply relationship via
+		// ReplyToCommentID, but we do not inline quoted parent text in the rendering.
+		md := strings.TrimSpace(c.Body)
+
+		mdLines := strings.Split(renderMarkdownComment(md, maxInt(10, width-2)), "\n")
+		filtered := make([]string, 0, len(mdLines))
+		for _, ln := range mdLines {
+			if strings.TrimSpace(stripANSIEscapes(ln)) == "" {
+				continue
+			}
+			filtered = append(filtered, ln)
+		}
+		mdLines = filtered
+
+		if db != nil {
+			as := db.AttachmentsForComment(strings.TrimSpace(c.ID))
+			if len(as) > 0 {
+				mdLines = append(mdLines, "")
+				mdLines = append(mdLines, "Attachments:")
+				for _, a := range as {
+					name := strings.TrimSpace(a.Title)
+					if name == "" {
+						name = strings.TrimSpace(a.OriginalName)
+					}
+					if name == "" {
+						name = strings.TrimSpace(a.ID)
+					}
+					line := "- " + name + " (" + strings.TrimSpace(a.ID) + ")"
+					if xansi.StringWidth(line) > width-2 {
+						line = xansi.Cut(line, 0, maxInt(0, width-2))
+					}
+					mdLines = append(mdLines, line)
+				}
+			}
+		}
+
+		indent := strings.Repeat("  ", r.Depth)
+		prefix := ""
+		if r.Depth > 0 {
+			prefix = "↳ "
+		}
+		// Align body with the header's date/author line by replacing the reply arrow with
+		// spaces on body lines (so the body doesn't show the arrow, but keeps alignment).
+		bodyPrefix := indent + strings.Repeat(" ", xansi.StringWidth(prefix))
+		for _, ln := range mdLines {
+			all = append(all, bodyPrefix+ln)
+		}
+		// Spacer between comments.
+		if i < len(rows)-1 {
+			all = append(all, "")
+		}
 	}
-	if end < len(rows) {
-		out = append(out, moreStyle.Render(fmt.Sprintf("↓ %d more", len(rows)-end)))
+
+	if len(all) == 0 {
+		return []string{"(no comments)"}
 	}
-	return out
+
+	// Keep the selected comment header visible.
+	selLine := startLineByRow[selected]
+	if selLine < scroll {
+		scroll = selLine
+	}
+	if selLine >= scroll+height {
+		scroll = selLine - height + 1
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	maxScroll := len(all) - height
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+
+	win := all[scroll:]
+	if len(win) > height {
+		win = win[:height]
+	}
+	_ = moreStyle // kept for signature compatibility; comments now scroll as a full list
+	return win
 }
 
 func findCommentByID(comments []model.Comment, id string) (model.Comment, bool) {
@@ -401,7 +460,7 @@ func renderAccordionWorklog(db *store.DB, worklog []model.WorklogEntry, selected
 		return fmt.Sprintf("%s  %s  %s", fmtTS(w.CreatedAt), actor, snippet)
 	}
 
-	mdLines := strings.Split(renderMarkdown(strings.TrimSpace(worklog[selected].Body), maxInt(10, width-2)), "\n")
+	mdLines := strings.Split(renderMarkdownComment(strings.TrimSpace(worklog[selected].Body), maxInt(10, width-2)), "\n")
 	// Glamour often emits "visually empty" spacer lines that contain only ANSI styling codes.
 	// Those consume vertical space without adding information; drop them so expanded bodies
 	// use available height for real content.
@@ -476,7 +535,7 @@ func renderAccordionWorklog(db *store.DB, worklog []model.WorklogEntry, selected
 
 	selectedBlock := []string{focusRowStyle.Render(lineFor(worklog[selected]))}
 	for _, ln := range mdWin {
-		selectedBlock = append(selectedBlock, "  "+ln)
+		selectedBlock = append(selectedBlock, ln)
 	}
 
 	out := []string{}
@@ -530,7 +589,7 @@ func renderAccordionHistory(db *store.DB, events []model.Event, itemID string, s
 	))
 
 	title := fmt.Sprintf("%s  %s  %s", fmtTS(ev.TS), actor, eventSummary(ev))
-	mdLines := strings.Split(renderMarkdown(md, maxInt(10, width-2)), "\n")
+	mdLines := strings.Split(renderMarkdownComment(md, maxInt(10, width-2)), "\n")
 	if scroll > len(mdLines) {
 		scroll = len(mdLines)
 	}
@@ -594,7 +653,7 @@ func renderAccordionHistory(db *store.DB, events []model.Event, itemID string, s
 
 	selectedBlock := []string{focusRowStyle.Render(truncateInline(title, maxInt(20, width-2)))}
 	for _, ln := range mdWin {
-		selectedBlock = append(selectedBlock, "  "+ln)
+		selectedBlock = append(selectedBlock, ln)
 	}
 
 	out := []string{}

@@ -171,6 +171,61 @@ func renderMarkdownCompact(md string, width int) string {
 	return strings.TrimRight(out, "\n")
 }
 
+// renderMarkdownComment renders markdown for comment/worklog bodies in dense panes where we
+// want no additional left indentation beyond what the caller provides.
+func renderMarkdownComment(md string, width int) string {
+	md = strings.TrimSpace(md)
+	if md == "" {
+		return ""
+	}
+	if width < 10 {
+		width = 10
+	}
+
+	mdRendererMu.Lock()
+	styleName := markdownStyle()
+	key := styleName + ":comment:" + fmtInt(width)
+	r := mdRenderers[key]
+	mdRendererMu.Unlock()
+
+	if r == nil {
+		cfg := markdownStyleConfig(styleName)
+		zero := uint(0)
+		cfg.Document.Margin = &zero
+		cfg.Paragraph.Margin = &zero
+		cfg.BlockQuote.Margin = &zero
+		cfg.List.Margin = &zero
+
+		// No automatic left indentation.
+		cfg.Document.Indent = &zero
+		cfg.Paragraph.Indent = &zero
+		cfg.BlockQuote.Indent = &zero
+		cfg.List.Indent = &zero
+
+		rr, err := glamour.NewTermRenderer(
+			glamour.WithStyles(cfg),
+			glamour.WithWordWrap(width),
+		)
+		if err != nil {
+			return md
+		}
+		mdRendererMu.Lock()
+		if existing := mdRenderers[key]; existing != nil {
+			r = existing
+		} else {
+			mdRenderers[key] = rr
+			r = rr
+		}
+		mdRendererMu.Unlock()
+	}
+
+	out, err := r.Render(md)
+	if err != nil {
+		return md
+	}
+	return strings.TrimRight(out, "\n")
+}
+
 func markdownStyleConfig(styleName string) ansi.StyleConfig {
 	switch strings.ToLower(strings.TrimSpace(styleName)) {
 	case "light":

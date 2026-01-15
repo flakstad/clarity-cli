@@ -124,33 +124,24 @@ Structure editing (outline pane only):
 
 ### Item view
 
-Focus + navigation:
-- `tab` / `shift+tab`: cycle focus across fields/panels
-- `↑/↓`, `j/k`, `ctrl+n/ctrl+p`: move selection inside the focused panel
-- `pgup/pgdown` (or `ctrl+u/ctrl+d`): scroll the focused body
-- `home`/`end`: jump to top/bottom in focused list panels (attachments/comments/worklog/history)
-- `enter`: activate the focused element (open/edit/view)
+The item view is a narrowed outline: it shows the selected item + descendants only, split 50/50 with an activity panel on the right.
 
-Direct actions:
-- `e`: edit title (or edit attachment metadata when **Attachments** is focused)
-- `D`: edit description
-- `space`: change status
-- `p`: toggle priority
-- `o`: toggle on-hold
-- `A`: assign
-- `t`: tags
-- `d`: due date
-- `s`: schedule date
-- `l`: open links picker for the focused body (description/comments/worklog)
+Navigation:
+- `enter`: narrow further to the selected row
+- `esc` / `backspace`: widen (pop the narrow stack) or return to the outline
+- `ctrl+x` then `o` (or `ctrl+o`, terminal-dependent): other window (focus left/right)
+- `tab` or `z` (left pane): toggle collapse for selected subtree
+- `shift+tab` / `backtab` or `Z`: toggle collapse for all
+
+Activity panel (Comments / Worklog / History):
+- `tab` / `shift+tab`: cycle section
+- `↑/↓`, `j/k`, `ctrl+n/ctrl+p`: move selection
+- `pgup/pgdown` (or `ctrl+u/ctrl+d`): scroll the selected entry preview
+- `enter`: view selected entry
 - `C`: add comment
-- `R`: reply to selected comment (when **Comments** is focused)
+- `R`: reply to selected comment (Comments)
 - `w`: add worklog entry
-- `u`: attach file (to item, or to selected comment when **Comments** is focused)
-- `m`: move
-- `r`: archive (with confirm)
-- `V`: duplicate
-- `y`: copy item ref
-- `Y`: copy CLI show command
+- `l`: open links picker (Comments/Worklog)
 
 ### Agenda view
 

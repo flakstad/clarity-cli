@@ -7,8 +7,7 @@ Current scope (early):
 - Breadcrumb at the top showing where you are (projects > project > outline > item)
 - Go to projects → outlines → items
 - Projects and outlines are shown as cards with basic metadata (counts + created/updated)
-- Optional preview pane for item details (outline on the left, preview on the right)
-- Full-screen item view (single pane)
+- Full-screen item view (subtree outline on the left, details on the right)
 - Auto-refresh when the local store changes (polls file mtimes)
 - Outline shows progress cookies for items with children (e.g. `1/2`)
 - Outline list shows item descriptions inline (collapsed by default; `z` toggles)
@@ -17,7 +16,7 @@ Current scope (early):
 - Reorder and restructure items (reorder, indent, outdent)
 
 Key bindings:
-- `enter`: open selected item (single-pane item view)
+- `enter`: open selected item (item view)
 - `v`: cycle outline view mode (`list` ↔ `columns`)
 - `O`: open outline actions menu (from outline screen; includes rename + description)
 - `D` (on outlines screen): edit selected outline description
@@ -44,9 +43,11 @@ Key bindings:
 - `q` or `ctrl+c`: quit
 
 Item view:
-- `tab` / `shift+tab`: cycle focus across fields (title/status/…/parent/children/description/attachments/comments/…)
-- When **Children** is focused: `↑/↓` selects a child; `enter` opens the selected child
-- `l`: open a picker for links in the focused body (Description/Comments/My worklog). Attachments (`att-...`) are supported for Description and Comments only.
+- The item view is a narrowed outline: selected item + descendants only.
+- `enter`: narrow further to the selected row
+- `backspace` / `esc`: widen (pop the narrow stack) or return to the outline
+- `ctrl+x` then `o` (or `ctrl+o`, terminal-dependent): other window (focus left/right)
+- Activity panel (Comments / My worklog / History): `tab` / `shift+tab` cycles section (when focused), `enter` views entry, `C` adds comment, `w` adds worklog, `R` replies, `l` opens links picker.
 
 Due/schedule modal:
 - Date is required (`YYYY-MM-DD`), time is optional (`HH:MM`)

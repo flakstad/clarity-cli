@@ -108,9 +108,9 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
 		lastHistory = fmtTS(history[0].TS)
 	}
 
-	desc := "(no description)"
+	desc := ""
 	if strings.TrimSpace(it.Description) != "" {
-		rendered := strings.TrimSpace(renderMarkdown(it.Description, innerW))
+		rendered := strings.TrimSpace(renderMarkdownComment(it.Description, innerW))
 		if rendered == "" {
 			rendered = strings.TrimSpace(it.Description)
 		}
@@ -133,10 +133,14 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
 		labelStyle.Render("Tags: ") + tags,
 		labelStyle.Render("Priority: ") + fmt.Sprintf("%v", it.Priority),
 		labelStyle.Render("On hold: ") + fmt.Sprintf("%v", it.OnHold),
-		"",
-		labelStyle.Render("Description"),
-		desc,
-		"",
+	}
+	if strings.TrimSpace(desc) != "" {
+		lines = append(lines,
+			"",
+			labelStyle.Render("Description"),
+			desc,
+			"",
+		)
 	}
 	if commentsCount > 0 {
 		if preview := commentThreadPreviewLines(db, comments, innerW, 1, 6); len(preview) > 0 {
@@ -313,16 +317,13 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
 		headerLines = append(headerLines[:4], append([]string{statusLine}, headerLines[4:]...)...)
 	}
 
-	descLines := []string{"(no description)"}
+	descLines := []string{}
 	if strings.TrimSpace(it.Description) != "" {
-		rendered := strings.TrimSpace(renderMarkdown(it.Description, innerW))
+		rendered := strings.TrimSpace(renderMarkdownComment(it.Description, innerW))
 		if rendered == "" {
 			rendered = strings.TrimSpace(it.Description)
 		}
 		descLines = strings.Split(rendered, "\n")
-		if len(descLines) == 0 {
-			descLines = []string{"(no description)"}
-		}
 		// Guardrails: avoid pathological render sizes.
 		if len(descLines) > 800 {
 			descLines = append(descLines[:799], "…")
@@ -475,9 +476,11 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
 	bodyLines = append(bodyLines, strings.Split(renderChildrenOutline(db, outline, children, innerW, focus == itemFocusChildren, childIdx, childOff, 8), "\n")...)
 	bodyLines = append(bodyLines, "")
 
-	bodyLines = append(bodyLines, btn(focus == itemFocusDescription).Render("Description (edit)"))
-	bodyLines = append(bodyLines, descLines...)
-	bodyLines = append(bodyLines, "")
+	if len(descLines) > 0 {
+		bodyLines = append(bodyLines, btn(focus == itemFocusDescription).Render("Description (edit)"))
+		bodyLines = append(bodyLines, descLines...)
+		bodyLines = append(bodyLines, "")
+	}
 
 	bodyLines = append(bodyLines, attachmentsBtn)
 	if len(attRows) == 0 {

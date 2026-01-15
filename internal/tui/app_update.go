@@ -3,11 +3,8 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
-
-	"clarity-cli/internal/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -177,12 +174,24 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case escTimeoutMsg:
-		if m.view == viewOutline && m.pendingEsc && m.modal == modalNone {
+		if m.pendingEsc && m.modal == modalNone {
 			// Treat a lone ESC as "back" in the outline view.
 			m.pendingEsc = false
-			m.view = viewOutlines
-			m.refreshOutlines(m.selectedProjectID)
-			return m, nil
+			if m.view == viewOutline {
+				m.view = viewOutlines
+				m.refreshOutlines(m.selectedProjectID)
+				return m, nil
+			}
+			if m.view == viewItem {
+				(&m).widenItemView()
+				return m, nil
+			}
+		}
+		return m, nil
+
+	case ctrlXTimeoutMsg:
+		if m.pendingCtrlX {
+			m.pendingCtrlX = false
 		}
 		return m, nil
 
@@ -230,7 +239,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return (&m).openCaptureModal()
 		case "y":
 			if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
-				id := strings.TrimSpace(m.openItemID)
+				id := selectedOutlineListItemID(&m.itemsList)
+				if strings.TrimSpace(id) == "" {
+					id = strings.TrimSpace(m.openItemID)
+				}
 				txt := m.clipboardItemRef(id)
 				if err := copyToClipboard(txt); err != nil {
 					m.showMinibuffer("Clipboard error: " + err.Error())
@@ -241,7 +253,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "Y":
 			if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
-				id := strings.TrimSpace(m.openItemID)
+				id := selectedOutlineListItemID(&m.itemsList)
+				if strings.TrimSpace(id) == "" {
+					id = strings.TrimSpace(m.openItemID)
+				}
 				cmd := m.clipboardShowCmd(id)
 				if err := copyToClipboard(cmd); err != nil {
 					m.showMinibuffer("Clipboard error: " + err.Error())
@@ -250,73 +265,18 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+		case "ctrl+x":
+			if m.view == viewItem && m.modal == modalNone && strings.TrimSpace(m.openItemID) != "" {
+				m.pendingCtrlX = true
+				return m, tea.Tick(600*time.Millisecond, func(time.Time) tea.Msg { return ctrlXTimeoutMsg{} })
+			}
 		case "backspace":
 			// While filtering the outline list, backspace edits the filter input.
 			if m.view == viewOutline && m.itemsList.SettingFilter() {
 				break
 			}
 			if m.view == viewItem {
-				// If we navigated within the item view (parent/child), pop back to the previous item.
-				if n := len(m.itemNavStack); n > 0 {
-					ent := m.itemNavStack[n-1]
-					m.itemNavStack = m.itemNavStack[:n-1]
-					prevID := strings.TrimSpace(ent.fromID)
-					if prevID != "" {
-						m.openItemID = prevID
-						(&m).recordRecentItemVisit(m.openItemID)
-						m.view = viewItem
-						m.itemFocus = itemFocusTitle
-						m.itemCommentIdx = 0
-						m.itemWorklogIdx = 0
-						m.itemHistoryIdx = 0
-						m.itemSideScroll = 0
-						m.itemDetailScroll = 0
-
-						// Restore focus/selection (best-effort).
-						toID := strings.TrimSpace(ent.toID)
-						m.itemChildIdx = 0
-						m.itemChildOff = 0
-
-						// If toID is one of prev's children, focus Children and select it.
-						children := m.db.ChildrenOf(prevID)
-						sort.Slice(children, func(i, j int) bool { return compareOutlineItems(children[i], children[j]) < 0 })
-						foundChild := false
-						if toID != "" && len(children) > 0 {
-							for i := range children {
-								if strings.TrimSpace(children[i].ID) == toID {
-									m.itemChildIdx = i
-									foundChild = true
-									break
-								}
-							}
-						}
-						if foundChild {
-							m.itemFocus = itemFocusChildren
-							const maxRows = 8
-							if m.itemChildIdx >= maxRows {
-								m.itemChildOff = m.itemChildIdx - maxRows + 1
-							}
-						} else if toID != "" {
-							// Otherwise, if prev's parent is toID, focus Parent.
-							if prev, ok := m.db.FindItem(prevID); ok && prev != nil && prev.ParentID != nil && strings.TrimSpace(*prev.ParentID) == toID {
-								m.itemFocus = itemFocusParent
-							}
-						}
-					}
-					return m, nil
-				}
-				if m.hasReturnView {
-					(&m).returnFromItemView()
-				} else {
-					m.view = viewOutline
-					m.openItemID = ""
-					m.itemArchivedReadOnly = false
-					m.showPreview = false
-					m.pane = paneOutline
-					if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
-						m.refreshItems(*o)
-					}
-				}
+				(&m).widenItemView()
 				return m, nil
 			}
 			switch m.view {
@@ -371,66 +331,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			if m.view == viewItem {
-				// If we navigated within the item view (parent/child), pop back to the previous item.
-				if n := len(m.itemNavStack); n > 0 {
-					ent := m.itemNavStack[n-1]
-					m.itemNavStack = m.itemNavStack[:n-1]
-					prevID := strings.TrimSpace(ent.fromID)
-					if prevID != "" {
-						m.openItemID = prevID
-						m.view = viewItem
-						m.itemFocus = itemFocusTitle
-						m.itemCommentIdx = 0
-						m.itemWorklogIdx = 0
-						m.itemHistoryIdx = 0
-						m.itemSideScroll = 0
-						m.itemDetailScroll = 0
-
-						// Restore focus/selection (best-effort).
-						toID := strings.TrimSpace(ent.toID)
-						m.itemChildIdx = 0
-						m.itemChildOff = 0
-
-						// If toID is one of prev's children, focus Children and select it.
-						children := m.db.ChildrenOf(prevID)
-						sort.Slice(children, func(i, j int) bool { return compareOutlineItems(children[i], children[j]) < 0 })
-						foundChild := false
-						if toID != "" && len(children) > 0 {
-							for i := range children {
-								if strings.TrimSpace(children[i].ID) == toID {
-									m.itemChildIdx = i
-									foundChild = true
-									break
-								}
-							}
-						}
-						if foundChild {
-							m.itemFocus = itemFocusChildren
-							const maxRows = 8
-							if m.itemChildIdx >= maxRows {
-								m.itemChildOff = m.itemChildIdx - maxRows + 1
-							}
-						} else if toID != "" {
-							// Otherwise, if prev's parent is toID, focus Parent.
-							if prev, ok := m.db.FindItem(prevID); ok && prev != nil && prev.ParentID != nil && strings.TrimSpace(*prev.ParentID) == toID {
-								m.itemFocus = itemFocusParent
-							}
-						}
-					}
-					return m, nil
+				// Delay treating ESC as "back" so we can interpret ESC+<key> as Alt+<key>.
+				if m.modal == modalNone && m.pane == paneOutline {
+					m.pendingEsc = true
+					return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return escTimeoutMsg{} })
 				}
-				if m.hasReturnView {
-					(&m).returnFromItemView()
-				} else {
-					m.view = viewOutline
-					m.openItemID = ""
-					m.itemArchivedReadOnly = false
-					m.showPreview = false
-					m.pane = paneOutline
-					if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
-						m.refreshItems(*o)
-					}
-				}
+				(&m).widenItemView()
 				return m, nil
 			}
 			if m.view == viewAgenda {
@@ -501,6 +407,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch it := m.outlinesList.SelectedItem().(type) {
 				case outlineItem:
 					m.selectedOutlineID = it.outline.ID
+					m.selectedOutline = &it.outline
 					m.view = viewOutline
 					// Apply per-outline view mode (includes preview state).
 					m.setOutlineViewMode(it.outline.ID, m.outlineViewModeForID(it.outline.ID))
@@ -530,16 +437,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					(&m).recordRecentItemVisit(m.openItemID)
 					m.view = viewItem
 					m.itemArchivedReadOnly = false
-					m.itemFocus = itemFocusTitle
+					m.itemFocus = itemFocusComments
 					m.itemCommentIdx = 0
 					m.itemWorklogIdx = 0
 					m.itemHistoryIdx = 0
 					m.itemSideScroll = 0
 					m.itemDetailScroll = 0
+					m.itemNavStack = nil
 					m.hasReturnView = true
 					m.returnView = viewAgenda
 					m.showPreview = false
 					m.pane = paneOutline
+					if m.itemsListActive != nil {
+						*m.itemsListActive = true
+					}
 					return m, nil
 				}
 			case viewArchived:
@@ -558,16 +469,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.openItemID = id
 					m.view = viewItem
 					m.itemArchivedReadOnly = true
-					m.itemFocus = itemFocusTitle
+					m.itemFocus = itemFocusComments
 					m.itemCommentIdx = 0
 					m.itemWorklogIdx = 0
 					m.itemHistoryIdx = 0
 					m.itemSideScroll = 0
 					m.itemDetailScroll = 0
+					m.itemNavStack = nil
 					m.hasReturnView = true
 					m.returnView = viewArchived
 					m.showPreview = false
 					m.pane = paneOutline
+					if m.itemsListActive != nil {
+						*m.itemsListActive = true
+					}
 					return m, nil
 				}
 			}
@@ -674,6 +589,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.returnView = viewProjectAttachments
 					m.showPreview = false
 					m.pane = paneOutline
+					if m.itemsListActive != nil {
+						*m.itemsListActive = true
+					}
 					return m, nil
 				}
 			}
@@ -786,241 +704,453 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch km := msg.(type) {
 	case tea.KeyMsg:
-		itemID := strings.TrimSpace(m.openItemID)
-		if itemID == "" {
+		rootID := strings.TrimSpace(m.openItemID)
+		if rootID == "" {
 			return m, nil
 		}
-		it, ok := m.db.FindItem(itemID)
-		if !ok {
+		outline, ok := m.db.FindOutline(m.selectedOutlineID)
+		if !ok || outline == nil {
 			return m, nil
 		}
-		readOnly := m.itemArchivedReadOnly || it.Archived
 
-		parentID := ""
-		hasParent := false
-		if it.ParentID != nil {
-			parentID = strings.TrimSpace(*it.ParentID)
-			if parentID != "" {
-				if _, ok := m.db.FindItem(parentID); ok {
-					hasParent = true
+		if m.itemsListActive != nil {
+			*m.itemsListActive = m.pane == paneOutline
+		}
+
+		if strings.TrimSpace(m.itemListRootID) != rootID {
+			(&m).refreshItemSubtree(*outline, rootID)
+			selectListItemByID(&m.itemsList, rootID)
+		}
+
+		// Handle ESC-prefix Alt sequences (ESC then key) for movement/indent/outdent.
+		if m.pendingEsc {
+			m.pendingEsc = false
+			if m.itemArchivedReadOnly {
+				m.showMinibuffer("Archived item: read-only")
+				return m, nil
+			}
+			switch km.String() {
+			case "up", "k", "p":
+				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+					if err := m.moveSelected("up"); err != nil {
+						return m, m.reportError(it.row.item.ID, err)
+					}
+					return m, nil
+				}
+			case "down", "j", "n":
+				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+					if err := m.moveSelected("down"); err != nil {
+						return m, m.reportError(it.row.item.ID, err)
+					}
+					return m, nil
+				}
+			case "right", "l", "f":
+				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+					if err := m.indentSelected(); err != nil {
+						return m, m.reportError(it.row.item.ID, err)
+					}
+					return m, nil
+				}
+			case "left", "h", "b":
+				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+					if err := m.outdentSelected(); err != nil {
+						return m, m.reportError(it.row.item.ID, err)
+					}
+					return m, nil
 				}
 			}
 		}
+
+		cycleItemViewFocus := func(delta int) {
+			// Order: outline pane -> comments -> worklog -> history -> outline pane.
+			pos := 0
+			if m.pane == paneDetail {
+				switch m.itemFocus {
+				case itemFocusWorklog:
+					pos = 2
+				case itemFocusHistory:
+					pos = 3
+				default:
+					pos = 1 // Comments (default)
+				}
+			}
+			pos = (pos + delta) % 4
+			if pos < 0 {
+				pos += 4
+			}
+
+			switch pos {
+			case 0:
+				m.pane = paneOutline
+				if m.itemsListActive != nil {
+					*m.itemsListActive = true
+				}
+			case 2:
+				m.pane = paneDetail
+				m.itemFocus = itemFocusWorklog
+				m.itemSideScroll = 0
+				if m.itemsListActive != nil {
+					*m.itemsListActive = false
+				}
+			case 3:
+				m.pane = paneDetail
+				m.itemFocus = itemFocusHistory
+				m.itemSideScroll = 0
+				if m.itemsListActive != nil {
+					*m.itemsListActive = false
+				}
+			default:
+				m.pane = paneDetail
+				m.itemFocus = itemFocusComments
+				m.itemSideScroll = 0
+				if m.itemsListActive != nil {
+					*m.itemsListActive = false
+				}
+			}
+		}
+
+		switch km.String() {
+		case "tab":
+			cycleItemViewFocus(+1)
+			return m, nil
+		case "shift+tab", "backtab":
+			cycleItemViewFocus(-1)
+			return m, nil
+		case "right", "ctrl+f":
+			cycleItemViewFocus(+1)
+			return m, nil
+		case "left", "ctrl+b", "h":
+			cycleItemViewFocus(-1)
+			return m, nil
+		case "l":
+			// Preserve `l` for "links" in Comments/My worklog; elsewhere it acts like →.
+			if m.pane == paneOutline || m.itemFocus == itemFocusHistory {
+				cycleItemViewFocus(+1)
+				return m, nil
+			}
+		}
+
+		// Emacs-style other-window fallback for terminals that swallow ctrl+o.
+		if m.pendingCtrlX {
+			m.pendingCtrlX = false
+			if km.String() == "o" {
+				if m.pane == paneOutline {
+					m.pane = paneDetail
+					if m.itemsListActive != nil {
+						*m.itemsListActive = false
+					}
+					if m.itemFocus != itemFocusComments && m.itemFocus != itemFocusWorklog && m.itemFocus != itemFocusHistory {
+						m.itemFocus = itemFocusComments
+					}
+				} else {
+					m.pane = paneOutline
+					if m.itemsListActive != nil {
+						*m.itemsListActive = true
+					}
+				}
+				return m, nil
+			}
+		}
+
+		if km.String() == "ctrl+o" {
+			// Other window (Emacs-like).
+			if m.pane == paneOutline {
+				m.pane = paneDetail
+				if m.itemsListActive != nil {
+					*m.itemsListActive = false
+				}
+				if m.itemFocus != itemFocusComments && m.itemFocus != itemFocusWorklog && m.itemFocus != itemFocusHistory {
+					m.itemFocus = itemFocusComments
+				}
+			} else {
+				m.pane = paneOutline
+				if m.itemsListActive != nil {
+					*m.itemsListActive = true
+				}
+			}
+			return m, nil
+		}
+
+		// Left pane: outline-style navigation within the current subtree.
+		if m.pane == paneOutline {
+			// Outline navigation keys (parent/child) should keep working.
+			if m.navOutline(km) {
+				return m, nil
+			}
+			if handled, cmd := m.mutateOutlineByKey(km); handled {
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				return m, cmd
+			}
+
+			rowID := strings.TrimSpace(selectedOutlineListItemID(&m.itemsList))
+			if rowID == "" {
+				rowID = rootID
+			}
+
+			switch km.String() {
+			case "enter":
+				// Narrow further to the selected row.
+				toID := rowID
+				if strings.TrimSpace(toID) == "" || strings.TrimSpace(toID) == rootID {
+					return m, nil
+				}
+				m.itemNavStack = append(m.itemNavStack, itemNavEntry{fromID: rootID, toID: strings.TrimSpace(toID)})
+				if len(m.itemNavStack) > 64 {
+					m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
+				}
+				m.openItemID = strings.TrimSpace(toID)
+				(&m).recordRecentItemVisit(m.openItemID)
+				m.itemListRootID = ""
+				m.refreshItemSubtree(*outline, m.openItemID)
+				selectListItemByID(&m.itemsList, m.openItemID)
+				return m, nil
+			case "e":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				if it, ok := m.db.FindItem(rowID); ok && it != nil {
+					m.openInputModal(modalEditTitle, rowID, "Title", it.Title)
+				}
+				return m, nil
+			case "D":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				if it, ok := m.db.FindItem(rowID); ok && it != nil {
+					m.openTextModal(modalEditDescription, rowID, "Markdown description…", it.Description)
+				}
+				return m, nil
+			case "p":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				if err := m.togglePriority(rowID); err != nil {
+					return m, m.reportError(rowID, err)
+				}
+				return m, nil
+			case "o":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				if err := m.toggleOnHold(rowID); err != nil {
+					return m, m.reportError(rowID, err)
+				}
+				return m, nil
+			case " ":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				cur := ""
+				if it, ok := m.db.FindItem(rowID); ok && it != nil {
+					cur = it.StatusID
+				}
+				m.openStatusPicker(*outline, rowID, cur)
+				m.modal = modalPickStatus
+				m.modalForID = rowID
+				return m, nil
+			case "shift+right":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				if err := m.cycleItemStatus(*outline, rowID, +1); err != nil {
+					return m, m.reportError(rowID, err)
+				}
+				return m, nil
+			case "shift+left":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				if err := m.cycleItemStatus(*outline, rowID, -1); err != nil {
+					return m, m.reportError(rowID, err)
+				}
+				return m, nil
+			case "n":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				m.openInputModal(modalNewSibling, rowID, "Title", "")
+				return m, nil
+			case "N":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				m.openInputModal(modalNewChild, rowID, "Title", "")
+				return m, nil
+			case "m":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				m.openMoveOutlinePicker(rowID)
+				return m, nil
+			case "r":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				m.modal = modalConfirmArchive
+				m.modalForID = rowID
+				m.archiveFor = archiveTargetItem
+				m.input.Blur()
+				return m, nil
+			case "V":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				if _, err := (&m).duplicateItem(rowID, true); err != nil {
+					return m, m.reportError(rowID, err)
+				}
+				m.pane = paneOutline
+				return m, nil
+			case "A":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				m.openAssigneePicker(rowID)
+				return m, nil
+			case "t":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				m.openTagsEditor(rowID)
+				return m, nil
+			case "d":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				if it, ok := m.db.FindItem(rowID); ok && it != nil {
+					m.openDateModal(modalSetDue, rowID, it.Due)
+				}
+				return m, nil
+			case "s":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				if it, ok := m.db.FindItem(rowID); ok && it != nil {
+					m.openDateModal(modalSetSchedule, rowID, it.Schedule)
+				}
+				return m, nil
+			case "C":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				m.openTextModal(modalAddComment, rowID, "Comment…", "")
+				m.pane = paneDetail
+				if m.itemsListActive != nil {
+					*m.itemsListActive = false
+				}
+				m.itemFocus = itemFocusComments
+				return m, nil
+			case "w":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				m.openTextModal(modalAddWorklog, rowID, "My worklog…", "")
+				m.pane = paneDetail
+				if m.itemsListActive != nil {
+					*m.itemsListActive = false
+				}
+				m.itemFocus = itemFocusWorklog
+				return m, nil
+			}
+
+			var cmd tea.Cmd
+			m.itemsList, cmd = m.itemsList.Update(msg)
+			return m, cmd
+		}
+
+		// Right pane: activity-only (comments/worklog/history) for the selected subtree item.
+		itemID := strings.TrimSpace(selectedOutlineListItemID(&m.itemsList))
+		if itemID == "" {
+			itemID = rootID
+		}
+		it, ok := m.db.FindItem(itemID)
+		if !ok || it == nil {
+			return m, nil
+		}
+		readOnly := m.itemArchivedReadOnly || it.Archived
 
 		comments := m.db.CommentsForItem(it.ID)
 		worklog := m.db.WorklogForItem(it.ID)
 		history := filterEventsForItem(m.db, m.eventsTail, it.ID)
 		commentRows := buildCommentThreadRows(comments)
-		attachmentRows := buildAttachmentPanelRows(m.db, *it)
-		children := m.db.ChildrenOf(it.ID)
-		sort.Slice(children, func(i, j int) bool { return compareOutlineItems(children[i], children[j]) < 0 })
-		if m.itemChildIdx < 0 {
-			m.itemChildIdx = 0
-		}
-		if len(children) == 0 {
-			m.itemChildIdx = 0
-			m.itemChildOff = 0
-		} else if m.itemChildIdx >= len(children) {
-			m.itemChildIdx = len(children) - 1
-		}
 
-		active := it
-		activeID := strings.TrimSpace(it.ID)
-		if m.itemFocus == itemFocusChildren && len(children) > 0 {
-			activeID = strings.TrimSpace(children[m.itemChildIdx].ID)
-			if it2, ok := m.db.FindItem(activeID); ok && it2 != nil {
-				active = it2
-			}
+		if m.itemFocus != itemFocusComments && m.itemFocus != itemFocusWorklog && m.itemFocus != itemFocusHistory {
+			m.itemFocus = itemFocusComments
 		}
 
 		switch km.String() {
-		case "up", "k", "ctrl+p":
-			switch m.itemFocus {
-			case itemFocusChildren:
-				if len(children) > 0 && m.itemChildIdx > 0 {
-					m.itemChildIdx--
-					const maxRows = 8
-					if m.itemChildOff < 0 {
-						m.itemChildOff = 0
-					}
-					if m.itemChildIdx < m.itemChildOff {
-						m.itemChildOff = m.itemChildIdx
-					}
-					maxOff := len(children) - maxRows
-					if maxOff < 0 {
-						maxOff = 0
-					}
-					if m.itemChildOff > maxOff {
-						m.itemChildOff = maxOff
-					}
-				}
-				return m, nil
-			case itemFocusAttachments:
-				if len(attachmentRows) > 0 && m.itemAttachmentIdx > 0 {
-					m.itemAttachmentIdx--
-					m.itemSideScroll = 0
-				}
-				return m, nil
-			case itemFocusComments:
-				if len(commentRows) > 0 && m.itemCommentIdx > 0 {
-					m.itemCommentIdx--
-					m.itemSideScroll = 0
-				}
-				return m, nil
-			case itemFocusWorklog:
-				if len(worklog) > 0 && m.itemWorklogIdx > 0 {
-					m.itemWorklogIdx--
-					m.itemSideScroll = 0
-				}
-				return m, nil
-			case itemFocusHistory:
-				if len(history) > 0 && m.itemHistoryIdx > 0 {
-					m.itemHistoryIdx--
-					m.itemSideScroll = 0
-				}
-				return m, nil
-			}
 		case "down", "j", "ctrl+n":
 			switch m.itemFocus {
-			case itemFocusChildren:
-				if n := len(children); n > 0 && m.itemChildIdx < n-1 {
-					m.itemChildIdx++
-					const maxRows = 8
-					if m.itemChildOff < 0 {
-						m.itemChildOff = 0
-					}
-					if m.itemChildIdx >= m.itemChildOff+maxRows {
-						m.itemChildOff = m.itemChildIdx - maxRows + 1
-					}
-					maxOff := len(children) - maxRows
-					if maxOff < 0 {
-						maxOff = 0
-					}
-					if m.itemChildOff > maxOff {
-						m.itemChildOff = maxOff
-					}
-				}
-				return m, nil
-			case itemFocusAttachments:
-				if n := len(attachmentRows); n > 0 && m.itemAttachmentIdx < n-1 {
-					m.itemAttachmentIdx++
-					m.itemSideScroll = 0
-				}
-				return m, nil
 			case itemFocusComments:
 				if n := len(commentRows); n > 0 && m.itemCommentIdx < n-1 {
 					m.itemCommentIdx++
 					m.itemSideScroll = 0
 				}
-				return m, nil
 			case itemFocusWorklog:
 				if n := len(worklog); n > 0 && m.itemWorklogIdx < n-1 {
 					m.itemWorklogIdx++
 					m.itemSideScroll = 0
 				}
-				return m, nil
 			case itemFocusHistory:
 				if n := len(history); n > 0 && m.itemHistoryIdx < n-1 {
 					m.itemHistoryIdx++
 					m.itemSideScroll = 0
 				}
-				return m, nil
 			}
+			return m, nil
+		case "up", "k", "ctrl+p":
+			switch m.itemFocus {
+			case itemFocusComments:
+				if n := len(commentRows); n > 0 && m.itemCommentIdx > 0 {
+					m.itemCommentIdx--
+					m.itemSideScroll = 0
+				}
+			case itemFocusWorklog:
+				if n := len(worklog); n > 0 && m.itemWorklogIdx > 0 {
+					m.itemWorklogIdx--
+					m.itemSideScroll = 0
+				}
+			case itemFocusHistory:
+				if n := len(history); n > 0 && m.itemHistoryIdx > 0 {
+					m.itemHistoryIdx--
+					m.itemSideScroll = 0
+				}
+			}
+			return m, nil
 		case "pgup", "ctrl+u":
-			m.itemDetailScroll -= 5
-			if m.itemDetailScroll < 0 {
-				m.itemDetailScroll = 0
+			m.itemSideScroll -= 5
+			if m.itemSideScroll < 0 {
+				m.itemSideScroll = 0
 			}
 			return m, nil
 		case "pgdown", "ctrl+d":
-			m.itemDetailScroll += 5
-			if m.itemDetailScroll < 0 {
-				m.itemDetailScroll = 0
-			}
-			return m, nil
-		case "home":
-			switch m.itemFocus {
-			case itemFocusAttachments, itemFocusComments, itemFocusWorklog, itemFocusHistory:
-				// Jump to start of list (top).
-				switch m.itemFocus {
-				case itemFocusAttachments:
-					if len(attachmentRows) > 0 {
-						m.itemAttachmentIdx = 0
-					}
-				case itemFocusComments:
-					if len(commentRows) > 0 {
-						m.itemCommentIdx = 0
-					}
-				case itemFocusWorklog:
-					if len(worklog) > 0 {
-						m.itemWorklogIdx = 0 // worklog rendered newest-first
-					}
-				case itemFocusHistory:
-					if len(history) > 0 {
-						m.itemHistoryIdx = 0 // history rendered newest-first
-					}
-				}
-				return m, nil
-			}
-		case "end":
-			switch m.itemFocus {
-			case itemFocusAttachments:
-				if len(attachmentRows) > 0 {
-					m.itemAttachmentIdx = len(attachmentRows) - 1
-				}
-				return m, nil
-			case itemFocusComments:
-				if len(commentRows) > 0 {
-					m.itemCommentIdx = len(commentRows) - 1
-				}
-				return m, nil
-			case itemFocusWorklog:
-				if len(worklog) > 0 {
-					m.itemWorklogIdx = len(worklog) - 1 // newest-first
-				}
-				return m, nil
-			case itemFocusHistory:
-				if len(history) > 0 {
-					m.itemHistoryIdx = len(history) - 1 // newest-first
-				}
-				return m, nil
-			}
-		case "tab":
-			m.itemFocus = m.itemFocus.nextForItem(hasParent)
-			return m, nil
-		case "shift+tab", "backtab":
-			m.itemFocus = m.itemFocus.prevForItem(hasParent)
-			return m, nil
-		case "V":
-			if _, err := (&m).duplicateItem(activeID, true); err != nil {
-				return m, m.reportError(activeID, err)
+			m.itemSideScroll += 5
+			if m.itemSideScroll < 0 {
+				m.itemSideScroll = 0
 			}
 			return m, nil
 		case "enter":
-			// Archived view is read-only: allow opening children, but block mutations.
-			if readOnly {
-				switch m.itemFocus {
-				case itemFocusTitle, itemFocusStatus, itemFocusPriority, itemFocusDescription:
-					m.showMinibuffer("Archived item: read-only")
-					return m, nil
-				}
-			}
 			switch m.itemFocus {
-			case itemFocusTitle:
-				m.openInputModal(modalEditTitle, activeID, "Title", active.Title)
-				return m, nil
-			case itemFocusAttachments:
-				if len(attachmentRows) == 0 {
-					return m, nil
-				}
-				idx := m.itemAttachmentIdx
-				if idx < 0 {
-					idx = 0
-				}
-				if idx >= len(attachmentRows) {
-					idx = len(attachmentRows) - 1
-				}
-				return m, m.openAttachment(attachmentRows[idx].Attachment)
 			case itemFocusComments:
 				if len(commentRows) == 0 || m.db == nil {
 					return m, nil
@@ -1070,85 +1200,49 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				(&m).openViewEntryModal(title, body)
 				return m, nil
-			case itemFocusStatus:
-				if o, ok := m.db.FindOutline(active.OutlineID); ok {
-					m.openStatusPicker(*o, activeID, active.StatusID)
-					m.modal = modalPickStatus
-					m.modalForID = activeID
-				}
-				return m, nil
-			case itemFocusAssigned:
-				m.openAssigneePicker(activeID)
-				return m, nil
-			case itemFocusTags:
-				m.openTagsEditor(activeID)
-				return m, nil
-			case itemFocusPriority:
-				// Toggle priority.
-				if err := m.togglePriority(activeID); err != nil {
-					return m, m.reportError(activeID, err)
-				}
-				return m, nil
-			case itemFocusDescription:
-				m.openTextModal(modalEditDescription, activeID, "Markdown description…", active.Description)
-				return m, nil
-			case itemFocusParent:
-				if !hasParent || parentID == "" {
-					return m, nil
-				}
-				// Record navigation so esc/backspace can return to the child item.
-				if cur := strings.TrimSpace(it.ID); cur != "" && strings.TrimSpace(parentID) != "" && strings.TrimSpace(parentID) != cur {
-					m.itemNavStack = append(m.itemNavStack, itemNavEntry{fromID: cur, toID: strings.TrimSpace(parentID)})
-					if len(m.itemNavStack) > 64 {
-						m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
-					}
-				}
-				// Navigate to the direct parent.
-				m.openItemID = strings.TrimSpace(parentID)
-				(&m).recordRecentItemVisit(m.openItemID)
-				m.itemFocus = itemFocusTitle
-				m.itemCommentIdx = 0
-				m.itemWorklogIdx = 0
-				m.itemHistoryIdx = 0
-				m.itemSideScroll = 0
-				m.itemDetailScroll = 0
-				m.itemChildIdx = 0
-				m.itemChildOff = 0
-				return m, nil
-			case itemFocusChildren:
-				if len(children) == 0 || strings.TrimSpace(activeID) == "" {
-					return m, nil
-				}
-				// Record navigation so esc/backspace can return to the parent item.
-				if cur := strings.TrimSpace(it.ID); cur != "" && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != cur {
-					m.itemNavStack = append(m.itemNavStack, itemNavEntry{fromID: cur, toID: strings.TrimSpace(activeID)})
-					if len(m.itemNavStack) > 64 {
-						m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
-					}
-				}
-				// Navigate to the selected child.
-				m.openItemID = strings.TrimSpace(activeID)
-				(&m).recordRecentItemVisit(m.openItemID)
-				m.itemFocus = itemFocusTitle
-				m.itemCommentIdx = 0
-				m.itemWorklogIdx = 0
-				m.itemHistoryIdx = 0
-				m.itemSideScroll = 0
-				m.itemDetailScroll = 0
-				m.itemChildIdx = 0
-				m.itemChildOff = 0
-				return m, nil
-			default:
+			}
+		case "C":
+			if readOnly {
+				m.showMinibuffer("Archived item: read-only")
 				return m, nil
 			}
+			m.openTextModal(modalAddComment, it.ID, "Comment…", "")
+			m.itemFocus = itemFocusComments
+			return m, nil
+		case "w":
+			if readOnly {
+				m.showMinibuffer("Archived item: read-only")
+				return m, nil
+			}
+			m.openTextModal(modalAddWorklog, it.ID, "My worklog…", "")
+			m.itemFocus = itemFocusWorklog
+			return m, nil
+		case "R":
+			if readOnly {
+				m.showMinibuffer("Archived item: read-only")
+				return m, nil
+			}
+			if m.itemFocus != itemFocusComments || len(commentRows) == 0 || m.db == nil {
+				return m, nil
+			}
+			idx := m.itemCommentIdx
+			if idx < 0 {
+				idx = 0
+			}
+			if idx >= len(commentRows) {
+				idx = len(commentRows) - 1
+			}
+			c := commentRows[idx].Comment
+			quote := truncateInline(c.Body, 280)
+			m.replyQuoteMD = fmt.Sprintf("> %s  %s\n> %s", fmtTS(c.CreatedAt), actorLabel(m.db, c.AuthorID), quote)
+			m.openTextModal(modalReplyComment, it.ID, "Reply…", "")
+			m.itemFocus = itemFocusComments
+			m.modalForKey = strings.TrimSpace(c.ID)
+			return m, nil
 		case "l":
-			// Open a picker for targets found in the selected markdown body.
 			var md string
 			loc := ""
 			switch m.itemFocus {
-			case itemFocusDescription:
-				md = strings.TrimSpace(active.Description)
-				loc = "description"
 			case itemFocusComments:
 				if len(commentRows) == 0 {
 					return m, nil
@@ -1191,306 +1285,9 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.startTargetPicker("Links ("+loc+")", targets)
 			return m, nil
-		case "e":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			// When focusing Attachments, 'e' edits attachment metadata (instead of item title).
-			if m.itemFocus == itemFocusAttachments {
-				if len(attachmentRows) == 0 {
-					return m, nil
-				}
-				idx := m.itemAttachmentIdx
-				if idx < 0 {
-					idx = 0
-				}
-				if idx >= len(attachmentRows) {
-					idx = len(attachmentRows) - 1
-				}
-				a := attachmentRows[idx].Attachment
-				m.attachmentEditID = strings.TrimSpace(a.ID)
-				m.attachmentEditTitle = strings.TrimSpace(a.Title)
-				m.attachmentEditAlt = strings.TrimSpace(a.Alt)
-				m.openInputModal(modalEditAttachmentTitle, "", "Title (recommended)", m.attachmentEditTitle)
-				return m, nil
-			}
-			if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
-				m.itemNavStack = append(m.itemNavStack, itemNavEntry{fromID: strings.TrimSpace(it.ID), toID: strings.TrimSpace(activeID)})
-				if len(m.itemNavStack) > 64 {
-					m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
-				}
-				m.openItemID = strings.TrimSpace(activeID)
-				(&m).recordRecentItemVisit(m.openItemID)
-				it = active
-				m.itemChildIdx = 0
-				m.itemChildOff = 0
-			}
-			m.itemFocus = itemFocusTitle
-			m.openInputModal(modalEditTitle, activeID, "Title", active.Title)
-			return m, nil
-		case "E":
-			// Edit attachment metadata (attachments side panel).
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			if m.itemFocus != itemFocusAttachments || len(attachmentRows) == 0 {
-				return m, nil
-			}
-			idx := m.itemAttachmentIdx
-			if idx < 0 {
-				idx = 0
-			}
-			if idx >= len(attachmentRows) {
-				idx = len(attachmentRows) - 1
-			}
-			a := attachmentRows[idx].Attachment
-			m.attachmentEditID = strings.TrimSpace(a.ID)
-			m.attachmentEditTitle = strings.TrimSpace(a.Title)
-			m.attachmentEditAlt = strings.TrimSpace(a.Alt)
-			m.openInputModal(modalEditAttachmentTitle, "", "Title (recommended)", m.attachmentEditTitle)
-			return m, nil
-		case "D":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
-				m.itemNavStack = append(m.itemNavStack, itemNavEntry{fromID: strings.TrimSpace(it.ID), toID: strings.TrimSpace(activeID)})
-				if len(m.itemNavStack) > 64 {
-					m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
-				}
-				m.openItemID = strings.TrimSpace(activeID)
-				(&m).recordRecentItemVisit(m.openItemID)
-				it = active
-				m.itemChildIdx = 0
-				m.itemChildOff = 0
-			}
-			m.itemFocus = itemFocusDescription
-			m.openTextModal(modalEditDescription, activeID, "Markdown description…", active.Description)
-			return m, nil
-		case "p":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			// Toggle priority.
-			if err := m.togglePriority(activeID); err != nil {
-				return m, m.reportError(activeID, err)
-			}
-			return m, nil
-		case "o":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			// Toggle on-hold.
-			if err := m.toggleOnHold(activeID); err != nil {
-				return m, m.reportError(activeID, err)
-			}
-			return m, nil
-		case "A":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			if strings.TrimSpace(activeID) == "" {
-				return m, nil
-			}
-			m.itemFocus = itemFocusAssigned
-			m.openAssigneePicker(activeID)
-			return m, nil
-		case "t":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			if strings.TrimSpace(activeID) == "" {
-				return m, nil
-			}
-			m.itemFocus = itemFocusTags
-			m.openTagsEditor(activeID)
-			return m, nil
-		case "d":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			if activeID == "" {
-				return m, nil
-			}
-			var cur *model.DateTime
-			if m.db != nil {
-				if it, ok := m.db.FindItem(activeID); ok && it != nil {
-					cur = it.Due
-				}
-			}
-			m.openDateModal(modalSetDue, activeID, cur)
-			return m, nil
-		case "s":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			if activeID == "" {
-				return m, nil
-			}
-			var cur *model.DateTime
-			if m.db != nil {
-				if it, ok := m.db.FindItem(activeID); ok && it != nil {
-					cur = it.Schedule
-				}
-			}
-			m.openDateModal(modalSetSchedule, activeID, cur)
-			return m, nil
-		case "C":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
-				m.itemNavStack = append(m.itemNavStack, itemNavEntry{fromID: strings.TrimSpace(it.ID), toID: strings.TrimSpace(activeID)})
-				if len(m.itemNavStack) > 64 {
-					m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
-				}
-				m.openItemID = strings.TrimSpace(activeID)
-				(&m).recordRecentItemVisit(m.openItemID)
-				it = active
-				comments = m.db.CommentsForItem(it.ID)
-				commentRows = buildCommentThreadRows(comments)
-				m.itemChildIdx = 0
-				m.itemChildOff = 0
-			}
-			// Add comment (keep the side panel open by focusing Comments).
-			m.itemFocus = itemFocusComments
-			if n := len(commentRows); n > 0 {
-				m.itemCommentIdx = n - 1
-			} else {
-				m.itemCommentIdx = 0
-			}
-			m.itemSideScroll = 0
-			m.openTextModal(modalAddComment, it.ID, "Write a comment…", "")
-			return m, nil
-		case "R":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			// Reply to selected comment (comments side panel).
-			if m.itemFocus != itemFocusComments || len(commentRows) == 0 {
-				return m, nil
-			}
-			idx := m.itemCommentIdx
-			if idx < 0 {
-				idx = 0
-			}
-			if idx >= len(commentRows) {
-				idx = len(commentRows) - 1
-			}
-			parent := commentRows[idx].Comment
-			parentID := strings.TrimSpace(parent.ID)
-			if parentID == "" {
-				return m, nil
-			}
-			quote := truncateInline(parent.Body, 280)
-			m.replyQuoteMD = fmt.Sprintf("> %s  %s\n> %s", fmtTS(parent.CreatedAt), strings.TrimSpace(parent.AuthorID), quote)
-			m.modal = modalReplyComment
-			m.modalForID = it.ID
-			m.modalForKey = parentID
-			m.textFocus = textFocusBody
-			m.textarea.SetValue("")
-			m.textarea.Placeholder = "Write a reply…"
-			m.textarea.Focus()
-			return m, nil
-		case "w":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			if m.itemFocus == itemFocusChildren && strings.TrimSpace(activeID) != "" && strings.TrimSpace(activeID) != strings.TrimSpace(it.ID) {
-				m.itemNavStack = append(m.itemNavStack, itemNavEntry{fromID: strings.TrimSpace(it.ID), toID: strings.TrimSpace(activeID)})
-				if len(m.itemNavStack) > 64 {
-					m.itemNavStack = m.itemNavStack[len(m.itemNavStack)-64:]
-				}
-				m.openItemID = strings.TrimSpace(activeID)
-				(&m).recordRecentItemVisit(m.openItemID)
-				it = active
-				m.itemChildIdx = 0
-				m.itemChildOff = 0
-			}
-			// Add worklog entry (keep the side panel open by focusing My worklog).
-			m.itemFocus = itemFocusWorklog
-			m.itemWorklogIdx = 0
-			m.itemSideScroll = 0
-			m.openTextModal(modalAddWorklog, it.ID, "Log work…", "")
-			return m, nil
-		case "u":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-
-			kind := "item"
-			entityID := strings.TrimSpace(activeID)
-			if m.itemFocus == itemFocusComments && len(commentRows) > 0 {
-				idx := m.itemCommentIdx
-				if idx < 0 {
-					idx = 0
-				}
-				if idx >= len(commentRows) {
-					idx = len(commentRows) - 1
-				}
-				cid := strings.TrimSpace(commentRows[idx].Comment.ID)
-				if cid != "" {
-					kind = "comment"
-					entityID = cid
-				}
-			}
-			if entityID == "" {
-				return m, nil
-			}
-
-			m.itemFocus = itemFocusAttachments
-			m.itemSideScroll = 0
-			m.attachmentAddKind = kind
-			m.attachmentAddEntityID = entityID
-			m.attachmentAddPath = ""
-			m.attachmentAddTitle = ""
-			m.attachmentAddAlt = ""
-			m.attachmentAddTitleHint = ""
-			m.attachmentAddFlow = attachmentAddFlowCommit
-			return m, m.openAttachmentFilePicker()
-		case " ":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			m.itemFocus = itemFocusStatus
-			if o, ok := m.db.FindOutline(active.OutlineID); ok {
-				m.openStatusPicker(*o, activeID, active.StatusID)
-				m.modal = modalPickStatus
-				m.modalForID = activeID
-			}
-			return m, nil
-		case "m":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			m.openMoveOutlinePicker(activeID)
-			return m, nil
-		case "r":
-			if readOnly {
-				m.showMinibuffer("Archived item: read-only")
-				return m, nil
-			}
-			m.modal = modalConfirmArchive
-			m.modalForID = activeID
-			m.archiveFor = archiveTargetItem
-			m.input.Blur()
-			return m, nil
 		}
+
+		return m, nil
 	}
 	return m, nil
 }

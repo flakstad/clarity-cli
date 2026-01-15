@@ -74,8 +74,11 @@ func TestItemComment_OpenLinksPicker_IncludesCommentAttachments(t *testing.T) {
 	m.selectedOutlineID = "out-a"
 	m.selectedOutline = &db.Outlines[0]
 	m.openItemID = "item-a"
+	m.pane = paneDetail
 	m.itemFocus = itemFocusComments
 	m.itemCommentIdx = 0
+	m.refreshItemSubtree(db.Outlines[0], "item-a")
+	selectListItemByID(&m.itemsList, "item-a")
 
 	// enter => open comment modal (view entry) with attachments included.
 	mAny, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})

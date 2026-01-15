@@ -31,6 +31,22 @@ type itemNavEntry struct {
 	toID string
 }
 
+func (m *appModel) collapsedState() map[string]bool {
+	if m == nil {
+		return nil
+	}
+	if m.view == viewItem {
+		if m.itemCollapsed == nil {
+			m.itemCollapsed = map[string]bool{}
+		}
+		return m.itemCollapsed
+	}
+	if m.collapsed == nil {
+		m.collapsed = map[string]bool{}
+	}
+	return m.collapsed
+}
+
 type returnSnapshot struct {
 	view              view
 	selectedProjectID string
@@ -77,6 +93,9 @@ func (m *appModel) returnFromItemView() {
 	m.itemArchivedReadOnly = false
 	m.showPreview = false
 	m.pane = paneOutline
+	if m.itemsListActive != nil {
+		*m.itemsListActive = true
+	}
 
 	if retProj != "" {
 		m.selectedProjectID = retProj
@@ -120,6 +139,65 @@ func (m *appModel) returnFromItemView() {
 			if o, ok := m.db.FindOutline(m.selectedOutlineID); ok && o != nil {
 				m.refreshItems(*o)
 			}
+		}
+	}
+}
+
+func (m *appModel) widenItemView() {
+	if m == nil || m.view != viewItem {
+		return
+	}
+
+	// If we narrowed within the item view, widen back to the previous subtree root.
+	if n := len(m.itemNavStack); n > 0 {
+		ent := m.itemNavStack[n-1]
+		m.itemNavStack = m.itemNavStack[:n-1]
+
+		prevID := strings.TrimSpace(ent.fromID)
+		if prevID == "" {
+			return
+		}
+
+		m.openItemID = prevID
+		m.recordRecentItemVisit(m.openItemID)
+
+		m.itemListRootID = ""
+		if m.db != nil {
+			if o, ok := m.db.FindOutline(m.selectedOutlineID); ok && o != nil {
+				m.refreshItemSubtree(*o, m.openItemID)
+				toID := strings.TrimSpace(ent.toID)
+				if toID != "" {
+					selectListItemByID(&m.itemsList, toID)
+				} else {
+					selectListItemByID(&m.itemsList, m.openItemID)
+				}
+			}
+		}
+
+		m.pane = paneOutline
+		if m.itemsListActive != nil {
+			*m.itemsListActive = true
+		}
+		return
+	}
+
+	// No narrow stack: return to where we came from (if any), otherwise go back to the outline.
+	if m.hasReturnView {
+		m.returnFromItemView()
+		return
+	}
+
+	m.view = viewOutline
+	m.openItemID = ""
+	m.itemArchivedReadOnly = false
+	m.showPreview = false
+	m.pane = paneOutline
+	if m.itemsListActive != nil {
+		*m.itemsListActive = true
+	}
+	if m.db != nil {
+		if o, ok := m.db.FindOutline(m.selectedOutlineID); ok && o != nil {
+			m.refreshItems(*o)
 		}
 	}
 }
@@ -574,7 +652,7 @@ func (m appModel) actionPanelKeyLayout() actionPanelKeyLayout {
 	if isFocusedItemContext {
 		switch m.view {
 		case viewItem:
-			addSection("Item", []string{"e", "D", "p", "o", "A", "u", "t", "d", "s", " ", "C", "w", "V", "m", "y", "Y", "r"})
+			addSection("Item", []string{"e", "D", "p", "o", "A", "u", "t", "d", "s", " ", "C", "R", "w", "V", "m", "y", "Y", "r"})
 
 			globalKeys := []string{}
 			for _, k := range []string{"g", "a", "c"} {
@@ -594,8 +672,8 @@ func (m appModel) actionPanelKeyLayout() actionPanelKeyLayout {
 				"e", "V", "n", "N", // title/new items
 				" ", "shift+left", "shift+right", // status
 				"p", "o", "A", "t", "d", "s", "D", // priority/on-hold/assign/tags/due/schedule/description
-				"m",      // move
-				"C", "w", // comment/worklog
+				"m",           // move
+				"C", "R", "w", // comment/reply/worklog
 				"y", "Y", // copy helpers (still item-scoped)
 				"r", // archive
 			})
@@ -1174,13 +1252,23 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 					}
 					mm.view = viewItem
 					mm.itemArchivedReadOnly = false
+					mm.pane = paneDetail
 					mm.itemFocus = itemFocusTitle
 					mm.itemCommentIdx = 0
 					mm.itemWorklogIdx = 0
 					mm.itemHistoryIdx = 0
 					mm.itemSideScroll = 0
+					mm.itemDetailScroll = 0
+					mm.itemChildIdx = 0
+					mm.itemChildOff = 0
 					mm.showPreview = false
-					mm.pane = paneOutline
+					mm.itemListRootID = ""
+					if mm.db != nil {
+						if o, ok := mm.db.FindOutline(mm.selectedOutlineID); ok && o != nil {
+							(&mm).refreshItemSubtree(*o, mm.openItemID)
+							selectListItemByID(&mm.itemsList, mm.openItemID)
+						}
+					}
 					return mm, nil
 				},
 			}
@@ -1367,7 +1455,10 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 		case viewItem:
 			readOnly := false
 			if m.db != nil {
-				id := strings.TrimSpace(m.openItemID)
+				id := selectedOutlineListItemID(&m.itemsList)
+				if strings.TrimSpace(id) == "" {
+					id = strings.TrimSpace(m.openItemID)
+				}
 				if id != "" {
 					if it, ok := m.db.FindItem(id); ok && it != nil && (it.Archived || m.itemArchivedReadOnly) {
 						readOnly = true
@@ -1380,6 +1471,10 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			} else {
 				addActionSpecs(actions, itemActionsItemViewExtrasSpecs)
 				addActionSpecs(actions, itemActionsCoreSpecs)
+				// Reply action is only meaningful when the activity pane is focused on comments.
+				if m.pane == paneDetail && m.itemFocus == itemFocusComments {
+					actions["R"] = actionPanelAction{label: "Reply to comment", kind: actionPanelActionExec}
+				}
 				actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
 			}
 		case viewOutline:
@@ -1395,6 +1490,9 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			actions["y"] = actionPanelAction{label: "Copy item ref (includes --workspace)", kind: actionPanelActionExec}
 			actions["Y"] = actionPanelAction{label: "Copy CLI show command (includes --workspace)", kind: actionPanelActionExec}
 			actions["C"] = actionPanelAction{label: "Add comment", kind: actionPanelActionExec}
+			if m.splitPreviewVisible() && m.pane == paneDetail && m.itemFocus == itemFocusComments {
+				actions["R"] = actionPanelAction{label: "Reply to comment", kind: actionPanelActionExec}
+			}
 			actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
 			actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
 			actions["o"] = actionPanelAction{label: "Toggle on hold", kind: actionPanelActionExec}
@@ -1829,6 +1927,9 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
 			m.openItemID = it.ID
 			m.view = viewItem
 			m.recordRecentItemVisit(m.openItemID)
+			m.itemListRootID = ""
+			m.refreshItemSubtree(*ol, m.openItemID)
+			selectListItemByID(&m.itemsList, m.openItemID)
 			m.itemFocus = itemFocusTitle
 			m.itemCommentIdx = 0
 			m.itemWorklogIdx = 0
@@ -1836,7 +1937,7 @@ func (m *appModel) applySavedTUIState(st *store.TUIState) {
 			m.itemSideScroll = 0
 			m.itemDetailScroll = 0
 			m.showPreview = false
-			m.pane = paneOutline
+			m.pane = paneDetail
 
 			if rv, ok := viewFromString(st.ReturnView); ok && rv != viewItem {
 				m.hasReturnView = true
@@ -2568,7 +2669,7 @@ func (m appModel) renderActionPanel() string {
 		switch m.view {
 		case viewItem:
 			// Full-screen item page: show item work + global entrypoints.
-			addSection("Item", []string{"e", "D", "p", "o", "A", "u", "t", "d", "s", " ", "C", "w", "V", "m", "y", "Y", "r"})
+			addSection("Item", []string{"e", "D", "p", "o", "A", "u", "t", "d", "s", " ", "C", "R", "w", "V", "m", "y", "Y", "r"})
 
 			globalKeys := []string{}
 			for _, k := range []string{"g", "a", "c"} {
@@ -2595,8 +2696,8 @@ func (m appModel) renderActionPanel() string {
 				"e", "V", "n", "N", // title/new items
 				" ", "shift+left", "shift+right", // status
 				"p", "o", "A", "t", "d", "s", "D", // priority/on-hold/assign/tags/due/schedule/description
-				"m",      // move
-				"C", "w", // comment/worklog
+				"m",           // move
+				"C", "R", "w", // comment/reply/worklog
 				"y", "Y", // copy helpers (still item-scoped)
 				"r", // archive
 			})
@@ -3211,13 +3312,7 @@ func splitPaneWidths(contentW int) (leftW, rightW int) {
 	if avail < 8 {
 		avail = 8
 	}
-	leftW = avail / 3
-	if leftW < 20 {
-		leftW = 20
-	}
-	if leftW > avail-20 {
-		leftW = avail - 20
-	}
+	leftW = avail / 2
 	rightW = avail - leftW
 	return leftW, rightW
 }
@@ -3657,15 +3752,17 @@ func (m *appModel) refreshItems(outline model.Outline) {
 			if contentW <= 0 {
 				contentW = 80
 			}
-			descDepth := row.depth + 1
-			leadW := (2 * descDepth) + 2 // indent + "  "
+			// Keep description lines aligned with the item row they belong to.
+			descDepth := row.depth
+			leadW := (2 * descDepth) + 2 // indent + twisty+space ("  ")
 			avail := contentW - leadW
-			descLines := outlineDescriptionLinesMarkdown(row.item.Description, avail)
-			if len(descLines) == 0 {
-				descLines = []string{"(no description)"}
-			}
-			for _, line := range descLines {
-				items = append(items, outlineDescRowItem{parentID: row.item.ID, depth: descDepth, line: line})
+			if strings.TrimSpace(row.item.Description) != "" {
+				if strings.TrimSpace(row.item.Description) != "" {
+					descLines := outlineDescriptionLinesMarkdown(row.item.Description, avail)
+					for _, line := range descLines {
+						items = append(items, outlineDescRowItem{parentID: row.item.ID, depth: descDepth, line: line})
+					}
+				}
 			}
 
 			// Comments as replies under the description (single-line preview).
@@ -3704,6 +3801,141 @@ func (m *appModel) refreshItems(outline model.Outline) {
 		}
 	}
 	selectListItemByID(&m.itemsList, "__add__")
+}
+
+func (m *appModel) refreshItemSubtree(outline model.Outline, rootItemID string) {
+	if m == nil || m.db == nil {
+		return
+	}
+	rootItemID = strings.TrimSpace(rootItemID)
+	if rootItemID == "" {
+		return
+	}
+
+	m.selectedOutline = &outline
+	m.itemListRootID = rootItemID
+
+	title := "Item"
+	if it, ok := m.db.FindItem(rootItemID); ok && it != nil {
+		if t := strings.TrimSpace(it.Title); t != "" {
+			title = t
+		}
+	}
+	m.itemsList.Title = title
+	collapsed := m.collapsedState()
+
+	curID := selectedOutlineListItemID(&m.itemsList)
+	if curID == "" {
+		curID = rootItemID
+	}
+
+	ids := collectSubtreeItemIDs(m.db, rootItemID)
+	if len(ids) == 0 {
+		return
+	}
+	inSubtree := map[string]bool{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		inSubtree[id] = true
+	}
+
+	// Build the item slice for flattenOutline.
+	var its []model.Item
+	for _, it := range m.db.Items {
+		if !inSubtree[strings.TrimSpace(it.ID)] {
+			continue
+		}
+		// Allow the root to be archived (read-only view); skip archived descendants.
+		if it.Archived && strings.TrimSpace(it.ID) != rootItemID {
+			continue
+		}
+		its = append(its, it)
+	}
+
+	// In item view, narrow-to-subtree should fully expand by default (without affecting outline view state).
+	if m.view == viewItem {
+		for id := range inSubtree {
+			collapsed[id] = false
+		}
+	}
+
+	flat := flattenOutline(outline, its, collapsed)
+	items := make([]list.Item, 0, len(flat))
+	for _, row := range flat {
+		row.commentsCount = len(m.db.CommentsForItem(row.item.ID))
+		if strings.TrimSpace(row.item.Description) != "" || row.commentsCount > 0 {
+			row.hasDescription = true
+		}
+		if row.item.AssignedActorID != nil && strings.TrimSpace(*row.item.AssignedActorID) != "" {
+			row.assignedLabel = actorCompactLabel(m.db, *row.item.AssignedActorID)
+		}
+		if len(row.item.Tags) > 0 {
+			cleaned := make([]string, 0, len(row.item.Tags))
+			for _, t := range row.item.Tags {
+				t = normalizeTag(t)
+				if t == "" {
+					continue
+				}
+				cleaned = append(cleaned, t)
+			}
+			row.item.Tags = uniqueSortedStrings(cleaned)
+		}
+		items = append(items, outlineRowItem{row: row, outline: outline})
+		if row.hasDescription && !row.collapsed {
+			contentW := m.itemsList.Width()
+			if contentW <= 0 {
+				contentW = m.width
+			}
+			if contentW <= 0 {
+				contentW = 80
+			}
+			// Keep description lines aligned with the item row they belong to.
+			descDepth := row.depth
+			leadW := (2 * descDepth) + 2 // indent + twisty+space ("  ")
+			avail := contentW - leadW
+			if strings.TrimSpace(row.item.Description) != "" {
+				descLines := outlineDescriptionLinesMarkdown(row.item.Description, avail)
+				for _, line := range descLines {
+					items = append(items, outlineDescRowItem{parentID: row.item.ID, depth: descDepth, line: line})
+				}
+			}
+		}
+	}
+
+	if cmd := m.itemsList.SetItems(items); cmd != nil {
+		if msg := cmd(); msg != nil {
+			m.itemsList, _ = m.itemsList.Update(msg)
+		}
+	}
+	if len(items) > 0 {
+		idx := m.itemsList.Index()
+		if idx < 0 {
+			m.itemsList.Select(0)
+		} else if idx >= len(items) {
+			m.itemsList.Select(len(items) - 1)
+		}
+	}
+	if strings.TrimSpace(curID) != "" {
+		selectListItemByID(&m.itemsList, strings.TrimSpace(curID))
+	}
+}
+
+func (m *appModel) refreshOutlineList(outline model.Outline) {
+	if m == nil {
+		return
+	}
+	// In the item view, the list is "narrowed" to the current subtree root (openItemID).
+	if m.view == viewItem {
+		rootID := strings.TrimSpace(m.openItemID)
+		if rootID != "" {
+			m.refreshItemSubtree(outline, rootID)
+			return
+		}
+	}
+	m.refreshItems(outline)
 }
 
 func (m *appModel) refreshAgenda() {
@@ -4146,7 +4378,7 @@ func (m *appModel) viewOutline() string {
 			descMD := strings.TrimSpace(outline.Description)
 			descRendered := ""
 			if descMD != "" {
-				descRendered = renderMarkdownNoMargin(descMD, contentW)
+				descRendered = renderMarkdownComment(descMD, contentW)
 				descRendered = strings.TrimLeft(descRendered, "\n")
 				header = header + "\n" + descRendered
 			}
@@ -4170,7 +4402,7 @@ func (m *appModel) viewOutline() string {
 			titleLine = titleStyle(leftW).Render(truncateText(outlineTitle(*outline), leftW))
 			descMD := strings.TrimSpace(outline.Description)
 			if descMD != "" {
-				descRendered = renderMarkdownNoMargin(descMD, leftW)
+				descRendered = renderMarkdownComment(descMD, leftW)
 				descRendered = strings.TrimLeft(descRendered, "\n")
 			}
 		}
@@ -4208,6 +4440,13 @@ func (m *appModel) viewOutline() string {
 		if strings.TrimSpace(descRendered) != "" {
 			leftHeader = leftHeader + "\n" + descRendered
 		}
+		// Visually de-emphasize the pane that doesn't have focus (like the modal background dim).
+		if m.pane == paneDetail {
+			leftHeader = dimBackground(leftHeader)
+			leftBody = dimBackground(leftBody)
+		} else {
+			right = dimBackground(right)
+		}
 		main = renderSplitWithLeftHeaderGap(contentW, frameH, leftW, rightW, leftHeader, 1, leftBody, right)
 	}
 	// Outline content should be left-aligned with a small outer margin (same feel as split view).
@@ -4228,23 +4467,10 @@ func (m *appModel) viewOutline() string {
 }
 
 func (m *appModel) viewItem() string {
-	frameH := m.frameHeight()
-	if frameH < 8 {
-		frameH = 8
-	}
-	bodyHeight := frameH - (topPadLines + breadcrumbGap + 2)
-	if bodyHeight < 6 {
-		bodyHeight = 6
-	}
-
+	frameH, bodyH, contentW := m.outlineLayout()
 	w := m.width
 	if w < 10 {
 		w = 10
-	}
-
-	contentW := w - 2*splitOuterMargin
-	if contentW < 10 {
-		contentW = w
 	}
 
 	wrap := func(content string) string {
@@ -4263,35 +4489,68 @@ func (m *appModel) viewItem() string {
 		return overlayCenter(bg, fg, w, frameH)
 	}
 
-	itemID := strings.TrimSpace(m.openItemID)
-	if itemID == "" {
+	rootID := strings.TrimSpace(m.openItemID)
+	if rootID == "" {
 		crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-		msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("No item selected.")
-		block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
-		return wrap(block)
+		msg := lipgloss.NewStyle().Width(contentW).Height(bodyH).Render("No item selected.")
+		main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
+		return wrap(main)
 	}
-
 	outline, ok := m.db.FindOutline(m.selectedOutlineID)
-	if !ok {
+	if !ok || outline == nil {
 		crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-		msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("Outline not found.")
-		block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
-		return wrap(block)
+		msg := lipgloss.NewStyle().Width(contentW).Height(bodyH).Render("Outline not found.")
+		main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
+		return wrap(main)
+	}
+	if _, ok := m.db.FindItem(rootID); !ok {
+		crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+		msg := lipgloss.NewStyle().Width(contentW).Height(bodyH).Render("Item not found.")
+		main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
+		return wrap(main)
 	}
 
-	it, ok := m.db.FindItem(itemID)
-	if !ok {
-		crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-		msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("Item not found.")
-		block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
-		return wrap(block)
+	if strings.TrimSpace(m.itemListRootID) != rootID {
+		m.refreshItemSubtree(*outline, rootID)
+		// Narrowing must keep focus on the root item by default.
+		selectListItemByID(&m.itemsList, rootID)
 	}
 
 	crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
 
-	card := renderItemDetailInteractive(m.db, *outline, *it, contentW, bodyHeight, m.itemFocus, m.eventsTail, m.itemChildIdx, m.itemChildOff, m.itemAttachmentIdx, m.itemCommentIdx, m.itemWorklogIdx, m.itemHistoryIdx, m.itemDetailScroll)
-	block := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + card
-	return wrap(block)
+	// Item view is always a split view: narrowed outline on the left, activity on the right.
+	leftW, rightW := splitPaneWidths(contentW)
+	contentH := frameH - topPadLines
+	if contentH < 0 {
+		contentH = 0
+	}
+	leftHeader := crumb
+	headerLines := 1
+	leftBodyH := contentH - headerLines - 1
+	if leftBodyH < 3 {
+		leftBodyH = 3
+	}
+	leftBody := m.listBodyWithOverflowHint(&m.itemsList, contentW, leftBodyH)
+
+	activeID := selectedOutlineListItemID(&m.itemsList)
+	if activeID == "" {
+		activeID = rootID
+	}
+	active, ok := m.db.FindItem(activeID)
+	if !ok || active == nil {
+		active = &model.Item{ID: activeID}
+	}
+	right := renderItemActivityTabbed(m.db, *active, rightW, contentH, m.itemFocus, m.pane == paneDetail, m.itemCommentIdx, m.itemWorklogIdx, m.itemHistoryIdx, m.itemSideScroll, m.eventsTail)
+	// Visually de-emphasize the pane that doesn't have focus (like the modal background dim).
+	if m.pane == paneDetail {
+		leftHeader = dimBackground(leftHeader)
+		leftBody = dimBackground(leftBody)
+	} else {
+		right = dimBackground(right)
+	}
+
+	main := renderSplitWithLeftHeaderGap(contentW, frameH, leftW, rightW, leftHeader, 1, leftBody, right)
+	return wrap(main)
 }
 
 func (m *appModel) renderModal() string {
@@ -4958,7 +5217,7 @@ func (m *appModel) reloadFromDisk() error {
 		}
 	case viewItem:
 		if o, ok := m.db.FindOutline(m.selectedOutlineID); ok {
-			m.refreshItems(*o)
+			m.refreshItemSubtree(*o, m.openItemID)
 		}
 	}
 	return nil
@@ -5003,6 +5262,98 @@ func selectListItemByID(l *list.Model, id string) {
 				return
 			}
 		}
+	}
+}
+
+func listHasItemID(l *list.Model, id string) bool {
+	if l == nil {
+		return false
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	for i := 0; i < len(l.Items()); i++ {
+		switch it := l.Items()[i].(type) {
+		case projectItem:
+			if strings.TrimSpace(it.project.ID) == id {
+				return true
+			}
+		case outlineItem:
+			if strings.TrimSpace(it.outline.ID) == id {
+				return true
+			}
+		case outlineRowItem:
+			if strings.TrimSpace(it.row.item.ID) == id {
+				return true
+			}
+		case agendaRowItem:
+			if strings.TrimSpace(it.row.item.ID) == id {
+				return true
+			}
+		case workspaceItem:
+			if strings.TrimSpace(it.name) == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (m *appModel) refreshAfterItemChange(itemID string) {
+	if m == nil || m.db == nil {
+		return
+	}
+	itemID = strings.TrimSpace(itemID)
+
+	// Keep selectedOutline pointer fresh.
+	if m.selectedOutline != nil {
+		if o, ok := m.db.FindOutline(strings.TrimSpace(m.selectedOutline.ID)); ok && o != nil {
+			m.selectedOutline = o
+		}
+	}
+	if m.selectedOutline == nil {
+		if oid := strings.TrimSpace(m.selectedOutlineID); oid != "" {
+			if o, ok := m.db.FindOutline(oid); ok && o != nil {
+				m.selectedOutline = o
+			}
+		}
+	}
+	if m.selectedOutline == nil {
+		return
+	}
+
+	// In the full-screen item view, keep the left list narrowed to openItemID.
+	if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
+		rootID := strings.TrimSpace(m.openItemID)
+		m.itemListRootID = ""
+		m.refreshItemSubtree(*m.selectedOutline, rootID)
+		if itemID == "" || !listHasItemID(&m.itemsList, itemID) {
+			selectListItemByID(&m.itemsList, rootID)
+		} else {
+			selectListItemByID(&m.itemsList, itemID)
+		}
+		return
+	}
+
+	// Default: refresh the full outline list.
+	m.refreshItems(*m.selectedOutline)
+	if itemID != "" {
+		selectListItemByID(&m.itemsList, itemID)
+	}
+}
+
+func selectedOutlineListItemID(l *list.Model) string {
+	if l == nil {
+		return ""
+	}
+	switch it := l.SelectedItem().(type) {
+	case outlineRowItem:
+		return strings.TrimSpace(it.row.item.ID)
+	case outlineDescRowItem:
+		return strings.TrimSpace(it.parentID)
+	default:
+		return ""
 	}
 }
 
@@ -7332,14 +7683,25 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.openItemID = it.row.item.ID
 					m.itemArchivedReadOnly = false
 					(&m).recordRecentItemVisit(m.openItemID)
-					m.itemFocus = itemFocusTitle
+					m.pane = paneOutline
+					if m.itemsListActive != nil {
+						*m.itemsListActive = true
+					}
+					m.itemFocus = itemFocusComments
 					m.itemCommentIdx = 0
 					m.itemWorklogIdx = 0
 					m.itemHistoryIdx = 0
 					m.itemSideScroll = 0
+					m.itemDetailScroll = 0
+					m.itemChildIdx = 0
+					m.itemChildOff = 0
+					m.itemNavStack = nil
 					// Leaving preview mode when entering the full item page.
 					m.showPreview = false
 					m.previewCacheForID = ""
+					m.itemListRootID = ""
+					(&m).refreshItemSubtree(it.outline, m.openItemID)
+					selectListItemByID(&m.itemsList, m.openItemID)
 					return m, nil
 				}
 				return m, nil
@@ -7352,6 +7714,11 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cycleOutlineViewMode()
 			if m.selectedOutline != nil {
 				m.refreshItems(*m.selectedOutline)
+			} else if oid := strings.TrimSpace(m.selectedOutlineID); oid != "" {
+				if o, ok := m.db.FindOutline(oid); ok && o != nil {
+					m.selectedOutline = o
+					m.refreshItems(*o)
+				}
 			}
 			return m, nil
 		case "S":
@@ -7488,6 +7855,11 @@ func (m *appModel) updateOutlineColumns(msg tea.KeyMsg) (bool, tea.Cmd) {
 
 	nCols := len(board.cols)
 	switch msg.String() {
+	case "v":
+		// Cycle view mode (columns -> list).
+		m.cycleOutlineViewMode()
+		m.refreshItems(*outline)
+		return true, nil
 	case "tab", "right", "l", "ctrl+f":
 		// Explicit navigation should not be pinned by ItemID; clear it so we can move.
 		sel.ItemID = ""
@@ -7638,13 +8010,20 @@ func (m *appModel) updateOutlineColumns(msg tea.KeyMsg) (bool, tea.Cmd) {
 		m.openItemID = it.Item.ID
 		m.itemArchivedReadOnly = false
 		m.recordRecentItemVisit(m.openItemID)
+		m.pane = paneDetail
 		m.itemFocus = itemFocusTitle
 		m.itemCommentIdx = 0
 		m.itemWorklogIdx = 0
 		m.itemHistoryIdx = 0
 		m.itemSideScroll = 0
+		m.itemDetailScroll = 0
+		m.itemChildIdx = 0
+		m.itemChildOff = 0
 		m.showPreview = false
 		m.previewCacheForID = ""
+		m.itemListRootID = ""
+		m.refreshItemSubtree(*outline, m.openItemID)
+		selectListItemByID(&m.itemsList, m.openItemID)
 		return true, nil
 	}
 
@@ -7730,15 +8109,23 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.view = viewItem
 			m.itemArchivedReadOnly = false
 			(&m).recordRecentItemVisit(m.openItemID)
+			m.pane = paneDetail
 			m.itemFocus = itemFocusTitle
 			m.itemCommentIdx = 0
 			m.itemWorklogIdx = 0
 			m.itemHistoryIdx = 0
 			m.itemSideScroll = 0
+			m.itemDetailScroll = 0
+			m.itemChildIdx = 0
+			m.itemChildOff = 0
 			m.hasReturnView = true
 			m.returnView = viewAgenda
 			m.showPreview = false
-			m.pane = paneOutline
+			m.itemListRootID = ""
+			if m.selectedOutline != nil {
+				(&m).refreshItemSubtree(*m.selectedOutline, m.openItemID)
+				selectListItemByID(&m.itemsList, m.openItemID)
+			}
 			return m, nil
 		case "y":
 			txt := m.clipboardItemRef(it.row.item.ID)
@@ -8461,16 +8848,17 @@ func (m *appModel) navIntoFirstChild() {
 	if !ok {
 		return
 	}
+	collapsed := m.collapsedState()
 	if !it.row.hasChildren {
 		if it.row.hasDescription && it.row.collapsed {
-			m.collapsed[it.row.item.ID] = false
-			m.refreshItems(it.outline)
+			collapsed[it.row.item.ID] = false
+			m.refreshOutlineList(it.outline)
 		}
 		return
 	}
 	if it.row.collapsed {
-		m.collapsed[it.row.item.ID] = false
-		m.refreshItems(it.outline)
+		collapsed[it.row.item.ID] = false
+		m.refreshOutlineList(it.outline)
 	}
 	idx := m.itemsList.Index()
 	// In our flattening, the first child (if visible) is the next outlineRowItem with depth+1.
@@ -8535,6 +8923,7 @@ func (m *appModel) toggleCollapseSelected() {
 	if selectedID == "" {
 		return
 	}
+	collapsed := m.collapsedState()
 	mode := m.curOutlineViewMode()
 
 	its := make([]model.Item, 0, 64)
@@ -8607,42 +8996,44 @@ func (m *appModel) toggleCollapseSelected() {
 
 	descExpanded := false
 	for _, id := range collapsibleDesc {
-		if !m.collapsed[id] {
+		if !collapsed[id] {
 			descExpanded = true
 			break
 		}
 	}
 
-	if m.collapsed[selectedID] {
+	if collapsed[selectedID] {
 		// collapsed -> open first layer
-		m.collapsed[selectedID] = false
+		collapsed[selectedID] = false
 		for _, id := range collapsibleDesc {
-			m.collapsed[id] = true
+			collapsed[id] = true
 		}
 	} else {
 		// expanded -> open all OR collapse, depending on current subtree state
 		if len(collapsibleDesc) == 0 {
-			m.collapsed[selectedID] = true
+			collapsed[selectedID] = true
 		} else if descExpanded {
 			// open all (or mixed) -> collapsed
-			m.collapsed[selectedID] = true
+			collapsed[selectedID] = true
 			for _, id := range collapsibleDesc {
-				m.collapsed[id] = true
+				collapsed[id] = true
 			}
 		} else {
 			// open first layer -> open all
 			for _, id := range collapsibleDesc {
-				m.collapsed[id] = false
+				collapsed[id] = false
 			}
 		}
 	}
-	m.refreshItems(it.outline)
+	m.refreshOutlineList(it.outline)
 }
 
 func (m *appModel) toggleCollapseAll() {
 	if m.selectedOutline == nil {
 		return
 	}
+
+	collapsed := m.collapsedState()
 
 	// Org-mode style global cycling:
 	// - all collapsed
@@ -8709,10 +9100,10 @@ func (m *appModel) toggleCollapseAll() {
 	allCollapsed := true
 	allExpanded := true
 	for id := range collapsible {
-		if !m.collapsed[id] {
+		if !collapsed[id] {
 			allCollapsed = false
 		}
-		if m.collapsed[id] {
+		if collapsed[id] {
 			allExpanded = false
 		}
 	}
@@ -8720,13 +9111,13 @@ func (m *appModel) toggleCollapseAll() {
 	firstLayer := true
 	for id := range collapsible {
 		if rootCollapsible[id] {
-			if m.collapsed[id] {
+			if collapsed[id] {
 				firstLayer = false
 				break
 			}
 			continue
 		}
-		if !m.collapsed[id] {
+		if !collapsed[id] {
 			firstLayer = false
 			break
 		}
@@ -8737,28 +9128,28 @@ func (m *appModel) toggleCollapseAll() {
 		// all collapsed -> open first layer
 		for id := range collapsible {
 			if rootCollapsible[id] {
-				m.collapsed[id] = false
+				collapsed[id] = false
 			} else {
-				m.collapsed[id] = true
+				collapsed[id] = true
 			}
 		}
 	case firstLayer:
 		// open first layer -> open all
 		for id := range collapsible {
-			m.collapsed[id] = false
+			collapsed[id] = false
 		}
 	case allExpanded:
 		// open all -> all collapsed
 		for id := range collapsible {
-			m.collapsed[id] = true
+			collapsed[id] = true
 		}
 	default:
 		// mixed -> all collapsed (predictable reset)
 		for id := range collapsible {
-			m.collapsed[id] = true
+			collapsed[id] = true
 		}
 	}
-	m.refreshItems(*m.selectedOutline)
+	m.refreshOutlineList(*m.selectedOutline)
 }
 
 func (m *appModel) mutateOutlineByKey(msg tea.KeyMsg) (bool, tea.Cmd) {
@@ -9056,8 +9447,10 @@ func (m *appModel) createItemFromModal(title string) error {
 		m.collapsed[*parentID] = false
 	}
 
-	m.refreshItems(outline)
-	selectListItemByID(&m.itemsList, newItem.ID)
+	// Refresh the visible list without breaking item view narrowing.
+	m.selectedOutline = &outline
+	m.selectedOutlineID = strings.TrimSpace(outline.ID)
+	m.refreshAfterItemChange(newItem.ID)
 	return nil
 }
 
@@ -9269,13 +9662,7 @@ func (m *appModel) mutateItem(itemID string, mutate func(db *store.DB, it *model
 		m.previewCacheForID = ""
 	}
 
-	if m.selectedOutline != nil {
-		if o, ok := m.db.FindOutline(m.selectedOutline.ID); ok {
-			m.selectedOutline = o
-		}
-		m.refreshItems(*m.selectedOutline)
-		selectListItemByID(&m.itemsList, it.ID)
-	}
+	m.refreshAfterItemChange(it.ID)
 	// If we're in agenda, immediately refresh so edits are visible (and filtering/grouping
 	// updates, e.g. when an item becomes DONE and disappears).
 	if m.view == viewAgenda {
@@ -11260,7 +11647,7 @@ func (m *appModel) reorderItem(t *model.Item, afterID, beforeID string) error {
 	m.captureStoreModTimes()
 	m.showMinibuffer("Moved " + t.ID)
 	if m.selectedOutline != nil {
-		m.refreshItems(*m.selectedOutline)
+		m.refreshOutlineList(*m.selectedOutline)
 		selectListItemByID(&m.itemsList, t.ID)
 	}
 	return nil
@@ -11314,7 +11701,7 @@ func (m *appModel) indentSelected() error {
 	// Expand new parent so the moved item stays visible.
 	m.collapsed[newParentID] = false
 	if m.selectedOutline != nil {
-		m.refreshItems(*m.selectedOutline)
+		m.refreshOutlineList(*m.selectedOutline)
 		selectListItemByID(&m.itemsList, t.ID)
 	}
 	return nil
@@ -11395,7 +11782,7 @@ func (m *appModel) outdentSelected() error {
 	m.captureStoreModTimes()
 	m.showMinibuffer("Outdented " + t.ID)
 	if m.selectedOutline != nil {
-		m.refreshItems(*m.selectedOutline)
+		m.refreshOutlineList(*m.selectedOutline)
 		selectListItemByID(&m.itemsList, t.ID)
 	}
 	return nil
@@ -11618,15 +12005,15 @@ func (m *appModel) jumpToItemByID(itemID string) error {
 	if m == nil || m.db == nil || itemID == "" {
 		return nil
 	}
+	fromView := m.view
 	it, ok := m.db.FindItem(itemID)
 	if !ok || it == nil || it.Archived {
 		return fmt.Errorf("item not found")
 	}
 
-	// Preserve a return path when jumping from agenda.
-	if m.view == viewAgenda {
-		m.hasReturnView = true
-		m.returnView = viewAgenda
+	// Preserve a return path when jumping from another screen (best-effort).
+	if m.view != viewItem {
+		m.applyReturnSnapshot(m.captureReturnSnapshot())
 	}
 
 	m.selectedProjectID = strings.TrimSpace(it.ProjectID)
@@ -11640,11 +12027,7 @@ func (m *appModel) jumpToItemByID(itemID string) error {
 
 	if ol, ok := m.db.FindOutline(m.selectedOutlineID); ok && ol != nil {
 		m.selectedOutline = ol
-		m.refreshItems(*ol)
-		// Clear any active outline filter so selection is predictable.
-		if m.itemsList.SettingFilter() || m.itemsList.IsFiltered() {
-			m.itemsList.ResetFilter()
-		}
+		m.refreshItemSubtree(*ol, itemID)
 		selectListItemByID(&m.itemsList, itemID)
 	}
 
@@ -11652,13 +12035,19 @@ func (m *appModel) jumpToItemByID(itemID string) error {
 	m.openItemID = itemID
 	m.itemArchivedReadOnly = false
 	m.recordRecentItemVisit(m.openItemID)
-	m.itemFocus = itemFocusTitle
+	m.pane = paneOutline
+	m.itemFocus = itemFocusComments
 	m.itemCommentIdx = 0
 	m.itemWorklogIdx = 0
 	m.itemHistoryIdx = 0
 	m.itemSideScroll = 0
+	m.itemDetailScroll = 0
 	m.itemChildIdx = 0
 	m.itemChildOff = 0
+	if fromView != viewItem {
+		m.itemNavStack = nil
+	}
+	m.itemListRootID = itemID
 	return nil
 }
 
@@ -11734,8 +12123,19 @@ func (m *appModel) addComment(itemID, body string, replyToCommentID *string) (st
 		if o, ok := m.db.FindOutline(m.selectedOutline.ID); ok {
 			m.selectedOutline = o
 		}
-		m.refreshItems(*m.selectedOutline)
-		selectListItemByID(&m.itemsList, itemID)
+		if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
+			rootID := strings.TrimSpace(m.openItemID)
+			m.itemListRootID = ""
+			m.refreshItemSubtree(*m.selectedOutline, rootID)
+			if !listHasItemID(&m.itemsList, itemID) {
+				selectListItemByID(&m.itemsList, rootID)
+			} else {
+				selectListItemByID(&m.itemsList, itemID)
+			}
+		} else {
+			m.refreshItems(*m.selectedOutline)
+			selectListItemByID(&m.itemsList, itemID)
+		}
 	}
 	m.showMinibuffer("Comment added")
 	return c.ID, nil
@@ -11789,8 +12189,19 @@ func (m *appModel) addWorklog(itemID, body string) error {
 		if o, ok := m.db.FindOutline(m.selectedOutline.ID); ok {
 			m.selectedOutline = o
 		}
-		m.refreshItems(*m.selectedOutline)
-		selectListItemByID(&m.itemsList, itemID)
+		if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
+			rootID := strings.TrimSpace(m.openItemID)
+			m.itemListRootID = ""
+			m.refreshItemSubtree(*m.selectedOutline, rootID)
+			if !listHasItemID(&m.itemsList, itemID) {
+				selectListItemByID(&m.itemsList, rootID)
+			} else {
+				selectListItemByID(&m.itemsList, itemID)
+			}
+		} else {
+			m.refreshItems(*m.selectedOutline)
+			selectListItemByID(&m.itemsList, itemID)
+		}
 	}
 	m.showMinibuffer("My worklog entry added")
 	return nil

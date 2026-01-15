@@ -25,6 +25,8 @@ type reloadTickMsg struct{}
 
 type escTimeoutMsg struct{}
 
+type ctrlXTimeoutMsg struct{}
+
 type resizeDoneMsg struct{ seq int }
 
 type flashDoneMsg struct{ seq int }

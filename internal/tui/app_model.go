@@ -40,6 +40,9 @@ type appModel struct {
 	outlinesList           list.Model
 	projectAttachmentsList list.Model
 	itemsList              list.Model
+	// itemsListActive controls whether the outline list shows a selection highlight.
+	// It allows item view / split panes to show focus in only one place at a time.
+	itemsListActive        *bool
 	statusList             list.Model
 	outlinePickList        list.Model
 	assigneeList           list.Model
@@ -89,7 +92,11 @@ type appModel struct {
 	collapsed               map[string]bool
 	// itemFocus is used on the full-screen item view to allow Tab navigation across
 	// editable fields (title/status/description/comment/worklog).
-	itemFocus            itemPageFocus
+	itemFocus itemPageFocus
+	// itemListRootID tracks which root item the left "subtree outline" list is currently showing
+	// in the item view.
+	itemListRootID       string
+	itemCollapsed        map[string]bool
 	itemAttachmentIdx    int
 	itemCommentIdx       int
 	itemWorklogIdx       int
@@ -180,7 +187,8 @@ type appModel struct {
 	// captureKeySeq stores the currently-entered org-capture style key sequence while in the Capture panel.
 	captureKeySeq []string
 
-	pendingEsc bool
+	pendingEsc   bool
+	pendingCtrlX bool
 
 	resizing  bool
 	resizeSeq int
@@ -283,6 +291,8 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
 	}
 	m.columnsSel = map[string]outlineColumnsSelection{}
 	m.tagsListActive = new(bool)
+	m.itemsListActive = new(bool)
+	*m.itemsListActive = true
 
 	if strings.TrimSpace(os.Getenv("CLARITY_TUI_DEBUG")) != "" {
 		m.debugEnabled = true
@@ -299,7 +309,7 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
 	m.projectAttachmentsList.SetFilteringEnabled(true)
 	m.projectAttachmentsList.SetShowFilter(true)
 	m.itemsList = newList("Outline", "Go to items (split view)", []list.Item{})
-	m.itemsList.SetDelegate(newOutlineItemDelegate())
+	m.itemsList.SetDelegate(newFocusAwareOutlineItemDelegate(m.itemsListActive))
 	// Enable "/" filtering to quickly scope down large outlines.
 	m.itemsList.SetFilteringEnabled(true)
 	m.itemsList.SetShowFilter(true)

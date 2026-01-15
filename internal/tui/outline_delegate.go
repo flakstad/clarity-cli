@@ -30,6 +30,77 @@ func newOutlineItemDelegate() outlineItemDelegate {
 	}
 }
 
+// focusAwareOutlineItemDelegate is like outlineItemDelegate, but only highlights the selected row
+// when active is true. This prevents "double highlights" when multiple panes are visible.
+type focusAwareOutlineItemDelegate struct {
+	outlineItemDelegate
+	active *bool
+}
+
+func newFocusAwareOutlineItemDelegate(active *bool) focusAwareOutlineItemDelegate {
+	return focusAwareOutlineItemDelegate{
+		outlineItemDelegate: newOutlineItemDelegate(),
+		active:              active,
+	}
+}
+
+func (d focusAwareOutlineItemDelegate) Height() int  { return 1 }
+func (d focusAwareOutlineItemDelegate) Spacing() int { return 0 }
+func (d focusAwareOutlineItemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d focusAwareOutlineItemDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	contentW := m.Width()
+	if contentW < 4 {
+		fmt.Fprint(w, "")
+		return
+	}
+
+	active := true
+	if d.active != nil {
+		active = *d.active
+	}
+	focused := index == m.Index() && active
+
+	prefix := ""
+	switch it := item.(type) {
+	case outlineRowItem:
+		fmt.Fprint(w, d.outlineItemDelegate.renderOutlineRow(contentW, prefix, it, focused))
+		return
+	case outlineDescRowItem:
+		fmt.Fprint(w, d.outlineItemDelegate.renderOutlineDescRow(contentW, prefix, it, focused))
+		return
+	case addItemRow:
+		line := prefix + "  " + it.Title()
+		if focused {
+			fmt.Fprint(w, d.outlineItemDelegate.renderFocusedRow(contentW, d.addRow, line))
+			return
+		}
+		fmt.Fprint(w, d.outlineItemDelegate.renderRow(contentW, d.addRow, line))
+		return
+	}
+
+	txt := ""
+	if t, ok := item.(interface{ Title() string }); ok {
+		txt = t.Title()
+	} else {
+		txt = fmt.Sprint(item)
+	}
+	line := prefix + txt
+
+	base := d.normal
+	if _, ok := item.(addItemRow); ok {
+		base = d.addRow
+		line = prefix + "  " + txt
+	}
+	if focused {
+		fmt.Fprint(w, d.outlineItemDelegate.renderFocusedRow(contentW, base, line))
+		return
+	}
+	fmt.Fprint(w, d.outlineItemDelegate.renderRow(contentW, base, line))
+}
+
 func (d outlineItemDelegate) Height() int  { return 1 }
 func (d outlineItemDelegate) Spacing() int { return 0 }
 func (d outlineItemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd {

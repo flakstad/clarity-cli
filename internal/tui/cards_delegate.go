@@ -135,11 +135,9 @@ func (d cardDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		}
 		lines = append(lines, titleSt.Render(title))
 
-		desc := strings.TrimSpace(it.outline.Description)
-		if desc == "" {
-			desc = "(no description)"
+		if desc := strings.TrimSpace(it.outline.Description); desc != "" {
+			lines = append(lines, d.metaStyle.Render(truncateToWidth(desc, innerW)))
 		}
-		lines = append(lines, d.metaStyle.Render(truncateToWidth(desc, innerW)))
 
 		created := fmtDate(it.outline.CreatedAt)
 		updated := created
