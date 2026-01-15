@@ -165,6 +165,24 @@ func (d cardDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		}
 
 		lines = append(lines, d.metaStyle.Render(itemsLine+"  |  updated "+updated+"  |  created "+created))
+	case addProjectRow:
+		lines = append(lines,
+			titleSt.Render("+ Add"),
+			d.metaStyle.Render("Create a new project"),
+			d.metaStyle.Render(""),
+		)
+	case addOutlineRow:
+		lines = append(lines,
+			titleSt.Render("+ Add"),
+			d.metaStyle.Render("Create a new outline"),
+			d.metaStyle.Render(""),
+		)
+	case projectUploadsRow:
+		lines = append(lines,
+			titleSt.Render("Uploads"),
+			d.metaStyle.Render("All project uploads"),
+			d.metaStyle.Render(truncateToWidth(strings.TrimSpace(it.Description()), innerW)),
+		)
 	default:
 		txt := fmt.Sprint(item)
 		lines = append(lines,

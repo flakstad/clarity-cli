@@ -882,7 +882,9 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			actions["q"] = actionPanelAction{label: "Quit", kind: actionPanelActionExec}
 		case viewOutlines:
 			actions["enter"] = actionPanelAction{label: "Select outline", kind: actionPanelActionExec}
-			actions["U"] = actionPanelAction{label: "Uploads", kind: actionPanelActionExec}
+			if m.projectHasUploads(m.selectedProjectID) {
+				actions["U"] = actionPanelAction{label: "Uploads", kind: actionPanelActionExec}
+			}
 			actions["n"] = actionPanelAction{label: "New outline", kind: actionPanelActionExec}
 			actions["e"] = actionPanelAction{label: "Rename outline", kind: actionPanelActionExec}
 			actions["D"] = actionPanelAction{label: "Edit outline description", kind: actionPanelActionExec}
@@ -1631,12 +1633,11 @@ func (m *appModel) viewProjects() string {
 	}
 
 	crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-	listH := bodyHeight - 2
+	listH := bodyHeight
 	if listH < 0 {
 		listH = 0
 	}
 	body := m.listBodyWithOverflowHint(&m.projectsList, contentW, listH)
-	body += "\n\n" + renderNewButtonLine(contentW, "New project", "n")
 	main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
 	main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
 	if m.modal == modalNone {
@@ -1668,13 +1669,11 @@ func (m *appModel) viewOutlines() string {
 	}
 
 	crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
-	listH := bodyHeight - 2
+	listH := bodyHeight
 	if listH < 0 {
 		listH = 0
 	}
 	body := m.listBodyWithOverflowHint(&m.outlinesList, contentW, listH)
-	body += "\n\n" + renderNewButtonLine(contentW, "New outline", "n")
-	body += "\n" + renderNewButtonLine(contentW, "Uploads", "U")
 	main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
 	main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
 	if m.modal == modalNone {
@@ -1715,25 +1714,6 @@ func (m *appModel) viewProjectAttachments() string {
 	bg := dimBackground(main)
 	fg := m.renderModal()
 	return overlayCenter(bg, fg, w, frameH)
-}
-
-func renderNewButtonLine(width int, label string, shortcut string) string {
-	if width <= 0 {
-		return ""
-	}
-	key := lipgloss.NewStyle().
-		Padding(0, 1).
-		Background(colorControlBg).
-		Foreground(colorSurfaceFg).
-		Bold(true).
-		Render(shortcut)
-	btn := lipgloss.NewStyle().
-		Padding(0, 1).
-		Background(colorControlBg).
-		Foreground(colorSurfaceFg).
-		Render(label)
-	out := lipgloss.JoinHorizontal(lipgloss.Left, key, " ", btn, " ", styleMuted().Render("(press "+shortcut+")"))
-	return cutToWidth(out, width)
 }
 
 func cutToWidth(s string, w int) string {
@@ -2870,8 +2850,11 @@ func (m *appModel) schedulePreviewCompute() tea.Cmd {
 
 func (m *appModel) refreshProjects() {
 	curID := ""
-	if it, ok := m.projectsList.SelectedItem().(projectItem); ok {
+	switch it := m.projectsList.SelectedItem().(type) {
+	case projectItem:
 		curID = it.project.ID
+	case addProjectRow:
+		curID = "__add__"
 	}
 
 	// Precompute per-project metadata for card rendering.
@@ -2931,19 +2914,35 @@ func (m *appModel) refreshProjects() {
 		meta := metas[strings.TrimSpace(p.ID)]
 		items = append(items, projectItem{project: p, current: p.ID == m.db.CurrentProjectID, meta: meta})
 	}
+	// Always-present affordance for creating a project (useful for empty workspaces).
+	items = append(items, addProjectRow{})
 	m.projectsList.SetItems(items)
 	if curID != "" {
 		selectListItemByID(&m.projectsList, curID)
+	} else {
+		// Default selection: first project, otherwise "+ Add".
+		for i := 0; i < len(items); i++ {
+			if _, ok := items[i].(projectItem); ok {
+				m.projectsList.Select(i)
+				return
+			}
+		}
+		selectListItemByID(&m.projectsList, "__add__")
 	}
-	if len(items) == 0 {
+	if len(items) <= 1 {
 		m.projectsList.SetStatusBarItemName("project", "projects")
 	}
 }
 
 func (m *appModel) refreshOutlines(projectID string) {
 	curID := ""
-	if it, ok := m.outlinesList.SelectedItem().(outlineItem); ok {
+	switch it := m.outlinesList.SelectedItem().(type) {
+	case outlineItem:
 		curID = it.outline.ID
+	case projectUploadsRow:
+		curID = "__uploads__"
+	case addOutlineRow:
+		curID = "__add__"
 	}
 
 	// Precompute per-outline metadata for card rendering.
@@ -3005,10 +3004,86 @@ func (m *appModel) refreshOutlines(projectID string) {
 			items = append(items, outlineItem{outline: o, current: o.ID == m.selectedOutlineID, meta: meta})
 		}
 	}
+	uploadsCount := m.projectUploadsCount(projectID)
+	if uploadsCount > 0 {
+		items = append(items, projectUploadsRow{projectID: strings.TrimSpace(projectID), count: uploadsCount})
+	}
+	// Always-present affordance for creating an outline (useful for empty projects).
+	items = append(items, addOutlineRow{})
 	m.outlinesList.SetItems(items)
 	if curID != "" {
 		selectListItemByID(&m.outlinesList, curID)
+	} else {
+		// Default selection: first outline, otherwise uploads (if present), otherwise "+ Add".
+		for i := 0; i < len(items); i++ {
+			if _, ok := items[i].(outlineItem); ok {
+				m.outlinesList.Select(i)
+				return
+			}
+		}
+		if uploadsCount > 0 {
+			selectListItemByID(&m.outlinesList, "__uploads__")
+			return
+		}
+		selectListItemByID(&m.outlinesList, "__add__")
 	}
+}
+
+func (m *appModel) projectHasUploads(projectID string) bool {
+	return m.projectUploadsCount(projectID) > 0
+}
+
+func (m *appModel) projectUploadsCount(projectID string) int {
+	if m == nil || m.db == nil {
+		return 0
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return 0
+	}
+	if len(m.db.Attachments) == 0 {
+		return 0
+	}
+
+	itemProjectByID := map[string]string{}
+	for i := range m.db.Items {
+		id := strings.TrimSpace(m.db.Items[i].ID)
+		if id == "" {
+			continue
+		}
+		itemProjectByID[id] = strings.TrimSpace(m.db.Items[i].ProjectID)
+	}
+
+	commentItemByID := map[string]string{}
+	for i := range m.db.Comments {
+		cid := strings.TrimSpace(m.db.Comments[i].ID)
+		if cid == "" {
+			continue
+		}
+		commentItemByID[cid] = strings.TrimSpace(m.db.Comments[i].ItemID)
+	}
+
+	count := 0
+	for i := range m.db.Attachments {
+		a := m.db.Attachments[i]
+		kind := strings.TrimSpace(a.EntityKind)
+		id := strings.TrimSpace(a.EntityID)
+		if kind == "" || id == "" {
+			continue
+		}
+		switch kind {
+		case "item":
+			if itemProjectByID[id] == projectID {
+				count++
+			}
+		case "comment":
+			itemID := commentItemByID[id]
+			if itemID != "" && itemProjectByID[itemID] == projectID {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func (m *appModel) refreshItems(outline model.Outline) {
@@ -4423,6 +4498,11 @@ func selectListItemByID(l *list.Model, id string) {
 				l.Select(i)
 				return
 			}
+		case projectUploadsRow:
+			if id == "__uploads__" {
+				l.Select(i)
+				return
+			}
 		case workspaceItem:
 			if it.name == id {
 				l.Select(i)
@@ -4438,7 +4518,7 @@ func selectListItemByID(l *list.Model, id string) {
 				l.Select(i)
 				return
 			}
-		case addItemRow:
+		case addItemRow, addProjectRow, addOutlineRow:
 			if id == "__add__" {
 				l.Select(i)
 				return

@@ -214,6 +214,23 @@ func (i addOutlineRow) FilterValue() string { return "" }
 func (i addOutlineRow) Title() string       { return "+ Add" }
 func (i addOutlineRow) Description() string { return "" }
 
+type projectUploadsRow struct {
+	projectID string
+	count     int
+}
+
+func (i projectUploadsRow) FilterValue() string { return "uploads" }
+func (i projectUploadsRow) Title() string       { return "Uploads" }
+func (i projectUploadsRow) Description() string {
+	if i.count == 1 {
+		return "1 attachment"
+	}
+	if i.count > 1 {
+		return fmt.Sprintf("%d attachments", i.count)
+	}
+	return ""
+}
+
 type statusOptionItem struct {
 	id    string
 	label string

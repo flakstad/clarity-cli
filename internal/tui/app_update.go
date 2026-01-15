@@ -484,7 +484,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			switch m.view {
 			case viewProjects:
-				if it, ok := m.projectsList.SelectedItem().(projectItem); ok {
+				switch it := m.projectsList.SelectedItem().(type) {
+				case projectItem:
 					m.selectedProjectID = it.project.ID
 					m.db.CurrentProjectID = it.project.ID
 					_ = m.store.Save(m.db)
@@ -492,9 +493,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.view = viewOutlines
 					m.refreshOutlines(it.project.ID)
 					return m, nil
+				case addProjectRow:
+					m.openInputModal(modalNewProject, "", "Project name", "")
+					return m, nil
 				}
 			case viewOutlines:
-				if it, ok := m.outlinesList.SelectedItem().(outlineItem); ok {
+				switch it := m.outlinesList.SelectedItem().(type) {
+				case outlineItem:
 					m.selectedOutlineID = it.outline.ID
 					m.view = viewOutline
 					// Apply per-outline view mode (includes preview state).
@@ -503,6 +508,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.itemArchivedReadOnly = false
 					m.collapsed = map[string]bool{}
 					m.refreshItems(it.outline)
+					return m, nil
+				case projectUploadsRow:
+					m.view = viewProjectAttachments
+					m.refreshProjectAttachments(m.selectedProjectID)
+					return m, nil
+				case addOutlineRow:
+					m.openInputModal(modalNewOutline, "", "Outline name (optional)", "")
 					return m, nil
 				}
 			case viewProjectAttachments:
@@ -667,6 +679,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "U":
 			if m.view == viewOutlines {
+				if !m.projectHasUploads(m.selectedProjectID) {
+					m.showMinibuffer("No uploads")
+					return m, nil
+				}
 				m.view = viewProjectAttachments
 				m.refreshProjectAttachments(m.selectedProjectID)
 				return m, nil
