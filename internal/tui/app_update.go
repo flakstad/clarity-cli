@@ -794,7 +794,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Outline navigation keys (parent/child) should keep working.
 			beforeSelID := selectedOutlineListSelectionID(&m.itemsList)
 			if m.navOutline(km) {
-				m.maybeAutoExpandActivitySelection(beforeSelID)
+				m.maybeUpdateActivityFocus(beforeSelID)
 				return m, nil
 			}
 			if handled, cmd := m.mutateOutlineByKey(km); handled {
@@ -1012,7 +1012,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 			prevSelID := selectedOutlineListSelectionID(&m.itemsList)
 			var cmd tea.Cmd
 			m.itemsList, cmd = m.itemsList.Update(msg)
-			m.maybeAutoExpandActivitySelection(prevSelID)
+			m.maybeUpdateActivityFocus(prevSelID)
 			return m, cmd
 		}
 	}

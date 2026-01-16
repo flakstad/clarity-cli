@@ -131,7 +131,7 @@ func (m *appModel) openActivityListModal(kind activityModalKind, itemID string) 
 	m.activityModalCollapsed = map[string]bool{}
 	m.activityModalContentW = 0
 	m.refreshActivityModalItems()
-	m.autoExpandSelectedActivityModalItem()
+	m.updateActivityModalFocus("")
 	m.pendingEsc = false
 	m.pendingCtrlX = false
 }
@@ -326,21 +326,44 @@ func (m *appModel) refreshActivityModalItems() {
 	}
 }
 
-func (m *appModel) autoExpandSelectedActivityModalItem() {
+func (m *appModel) updateActivityModalFocus(prevSelID string) {
 	if m == nil {
 		return
 	}
-	act, ok := m.activityModalList.SelectedItem().(outlineActivityRowItem)
-	if !ok {
+	if m.activityModalCollapsed == nil {
+		m.activityModalCollapsed = map[string]bool{}
+	}
+
+	prevID := strings.TrimSpace(prevSelID)
+	act, ok := activityFocusFromListSelection(&m.activityModalList)
+	if !ok || !activityRowIsEntity(act) {
+		// If we moved off an entry, collapse the previously-focused entry.
+		if prevID != "" && !m.activityModalCollapsed[prevID] {
+			m.activityModalCollapsed[prevID] = true
+			m.refreshActivityModalItems()
+			selectListItemByID(&m.activityModalList, prevID)
+		}
 		return
 	}
-	if !act.hasChildren && !act.hasDescription {
-		return
+
+	// Collapse all other entries.
+	for _, li := range m.activityModalList.Items() {
+		other, ok := li.(outlineActivityRowItem)
+		if !ok || !activityRowIsEntity(other) {
+			continue
+		}
+		if strings.TrimSpace(other.id) == strings.TrimSpace(act.id) {
+			continue
+		}
+		if !m.activityModalCollapsed[other.id] {
+			m.activityModalCollapsed[other.id] = true
+		}
 	}
-	if m.activityModalCollapsed == nil || !m.activityModalCollapsed[act.id] {
-		return
+
+	// Expand the focused entry.
+	if (act.hasChildren || act.hasDescription) && m.activityModalCollapsed[act.id] {
+		m.activityModalCollapsed[act.id] = false
 	}
-	m.activityModalCollapsed[act.id] = false
 	m.refreshActivityModalItems()
 	selectListItemByID(&m.activityModalList, act.id)
 }

@@ -5433,31 +5433,175 @@ func selectedOutlineListSelectionID(l *list.Model) string {
 	}
 }
 
-func (m *appModel) maybeAutoExpandActivitySelection(prevSelID string) bool {
+func activityFocusFromListSelection(l *list.Model) (outlineActivityRowItem, bool) {
+	if l == nil {
+		return outlineActivityRowItem{}, false
+	}
+	switch it := l.SelectedItem().(type) {
+	case outlineActivityRowItem:
+		return it, true
+	case outlineDescRowItem:
+		pid := strings.TrimSpace(it.parentID)
+		if pid == "" {
+			return outlineActivityRowItem{}, false
+		}
+		for _, li := range l.Items() {
+			act, ok := li.(outlineActivityRowItem)
+			if !ok {
+				continue
+			}
+			if strings.TrimSpace(act.id) == pid {
+				return act, true
+			}
+		}
+		return outlineActivityRowItem{}, false
+	default:
+		return outlineActivityRowItem{}, false
+	}
+}
+
+func activityRowIsEntity(act outlineActivityRowItem) bool {
+	switch act.kind {
+	case outlineActivityComment, outlineActivityWorklogEntry, outlineActivityHistoryEntry:
+		return true
+	default:
+		return false
+	}
+}
+
+func activityRowIsRoot(act outlineActivityRowItem) bool {
+	switch act.kind {
+	case outlineActivityCommentsRoot, outlineActivityWorklogRoot:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *appModel) maybeUpdateActivityFocus(prevSelID string) bool {
 	if m == nil || m.db == nil {
 		return false
 	}
-	curSelID := selectedOutlineListSelectionID(&m.itemsList)
-	if strings.TrimSpace(curSelID) == "" || strings.TrimSpace(curSelID) == strings.TrimSpace(prevSelID) {
+
+	prevID := strings.TrimSpace(prevSelID)
+	curID := strings.TrimSpace(selectedOutlineListSelectionID(&m.itemsList))
+
+	// If selection didn't meaningfully change, do nothing.
+	if prevID != "" && prevID == curID {
 		return false
 	}
-	act, ok := m.itemsList.SelectedItem().(outlineActivityRowItem)
+
+	collapsed := m.collapsedState()
+	changed := false
+
+	// Collapse the previously-focused activity entry (entities only) if we left it.
+	if prevID != "" {
+		for _, li := range m.itemsList.Items() {
+			act, ok := li.(outlineActivityRowItem)
+			if !ok {
+				continue
+			}
+			if strings.TrimSpace(act.id) != prevID {
+				continue
+			}
+			if activityRowIsEntity(act) && (act.hasChildren || act.hasDescription) && !collapsed[act.id] {
+				collapsed[act.id] = true
+				changed = true
+			}
+			break
+		}
+	}
+
+	act, ok := activityFocusFromListSelection(&m.itemsList)
 	if !ok {
-		return false
+		// When leaving activity entries, ensure none stay expanded.
+		for _, li := range m.itemsList.Items() {
+			a, ok := li.(outlineActivityRowItem)
+			if !ok || !activityRowIsEntity(a) {
+				continue
+			}
+			if (a.hasChildren || a.hasDescription) && !collapsed[a.id] {
+				collapsed[a.id] = true
+				changed = true
+			}
+		}
+		if changed && m.selectedOutline != nil {
+			m.refreshOutlineList(*m.selectedOutline)
+		}
+		return changed
+	}
+	if activityRowIsRoot(act) {
+		// Never auto-expand roots.
+		for _, li := range m.itemsList.Items() {
+			a, ok := li.(outlineActivityRowItem)
+			if !ok || !activityRowIsEntity(a) {
+				continue
+			}
+			if (a.hasChildren || a.hasDescription) && !collapsed[a.id] {
+				collapsed[a.id] = true
+				changed = true
+			}
+		}
+		if changed && m.selectedOutline != nil {
+			m.refreshOutlineList(*m.selectedOutline)
+		}
+		return changed
+	}
+	if !activityRowIsEntity(act) {
+		for _, li := range m.itemsList.Items() {
+			a, ok := li.(outlineActivityRowItem)
+			if !ok || !activityRowIsEntity(a) {
+				continue
+			}
+			if (a.hasChildren || a.hasDescription) && !collapsed[a.id] {
+				collapsed[a.id] = true
+				changed = true
+			}
+		}
+		if changed && m.selectedOutline != nil {
+			m.refreshOutlineList(*m.selectedOutline)
+		}
+		return changed
 	}
 	if !act.hasChildren && !act.hasDescription {
-		return false
+		if changed && m.selectedOutline != nil {
+			m.refreshOutlineList(*m.selectedOutline)
+		}
+		return changed
 	}
-	collapsed := m.collapsedState()
-	if !collapsed[act.id] {
-		return false
+
+	// Collapse all other activity entries (entities only) for the same item.
+	for _, li := range m.itemsList.Items() {
+		other, ok := li.(outlineActivityRowItem)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(other.itemID) != strings.TrimSpace(act.itemID) {
+			continue
+		}
+		if !activityRowIsEntity(other) {
+			continue
+		}
+		if strings.TrimSpace(other.id) == strings.TrimSpace(act.id) {
+			continue
+		}
+		if (other.hasChildren || other.hasDescription) && !collapsed[other.id] {
+			collapsed[other.id] = true
+			changed = true
+		}
 	}
-	collapsed[act.id] = false
-	if m.selectedOutline != nil {
+
+	// Auto-expand the focused entry.
+	if collapsed[act.id] {
+		collapsed[act.id] = false
+		changed = true
+	}
+
+	if changed && m.selectedOutline != nil {
 		m.refreshOutlineList(*m.selectedOutline)
+		selectListItemByID(&m.itemsList, act.id)
 	}
-	selectListItemByID(&m.itemsList, act.id)
-	return true
+	return changed
 }
 
 func selectedOutlineListItemID(l *list.Model) string {
@@ -6991,15 +7135,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.activityModalList, cmd = m.activityModalList.Update(msg)
-			if strings.TrimSpace(selectedOutlineListSelectionID(&m.activityModalList)) != strings.TrimSpace(beforeSelID) {
-				if act, ok := m.activityModalList.SelectedItem().(outlineActivityRowItem); ok {
-					if (act.hasChildren || act.hasDescription) && m.activityModalCollapsed != nil && m.activityModalCollapsed[act.id] {
-						m.activityModalCollapsed[act.id] = false
-						(&m).refreshActivityModalItems()
-						selectListItemByID(&m.activityModalList, act.id)
-					}
-				}
-			}
+			(&m).updateActivityModalFocus(beforeSelID)
 			return m, cmd
 		}
 
@@ -7776,7 +7912,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Batch(cmd, m.schedulePreviewCompute())
 				}
 			}
-			m.maybeAutoExpandActivitySelection(beforeSelID)
+			m.maybeUpdateActivityFocus(beforeSelID)
 			return m, cmd
 		}
 
@@ -8092,7 +8228,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Outline navigation.
 		beforeSelID := selectedOutlineListSelectionID(&m.itemsList)
 		if m.navOutline(msg) {
-			m.maybeAutoExpandActivitySelection(beforeSelID)
+			m.maybeUpdateActivityFocus(beforeSelID)
 			if m.splitPreviewVisible() {
 				return m, m.schedulePreviewCompute()
 			}
@@ -8112,7 +8248,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.itemsList, cmd = m.itemsList.Update(msg)
 	afterID := strings.TrimSpace(selectedOutlineListItemID(&m.itemsList))
-	if m.maybeAutoExpandActivitySelection(beforeSelID) {
+	if m.maybeUpdateActivityFocus(beforeSelID) {
 		return m, cmd
 	}
 	beforeID := strings.TrimSpace(beforeSelID)
