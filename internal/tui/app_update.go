@@ -792,7 +792,9 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Left pane: outline-style navigation within the current subtree.
 		if m.pane == paneOutline {
 			// Outline navigation keys (parent/child) should keep working.
+			beforeSelID := selectedOutlineListSelectionID(&m.itemsList)
 			if m.navOutline(km) {
+				m.maybeAutoExpandActivitySelection(beforeSelID)
 				return m, nil
 			}
 			if handled, cmd := m.mutateOutlineByKey(km); handled {
@@ -1007,8 +1009,10 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+			prevSelID := selectedOutlineListSelectionID(&m.itemsList)
 			var cmd tea.Cmd
 			m.itemsList, cmd = m.itemsList.Update(msg)
+			m.maybeAutoExpandActivitySelection(prevSelID)
 			return m, cmd
 		}
 	}

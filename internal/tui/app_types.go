@@ -266,6 +266,8 @@ func (m *appModel) closeAllModals() {
 	m.viewModalReturn = modalNone
 	m.activityModalItemID = ""
 	m.activityModalKind = activityModalKindComments
+	m.activityModalCollapsed = nil
+	m.activityModalContentW = 0
 	m.capture = nil
 	m.replyQuoteMD = ""
 	m.pendingMoveOutlineTo = ""

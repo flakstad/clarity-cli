@@ -138,19 +138,23 @@ func TestStatusPicker_Enter_SetsStatus_WhenCurrentActorIsAgent(t *testing.T) {
 	}
 
 	historyFound := false
+	historyID := ""
 	for _, it := range m3.activityModalList.Items() {
-		row, ok := it.(activityModalRowItem)
+		row, ok := it.(outlineActivityRowItem)
 		if !ok {
 			continue
 		}
-		if strings.Contains(row.title, "set status:") && strings.Contains(row.title, "todo") && strings.Contains(row.title, "doing") {
+		if strings.Contains(row.label, "set status:") && strings.Contains(row.label, "todo") && strings.Contains(row.label, "doing") {
 			historyFound = true
+			historyID = strings.TrimSpace(row.id)
 			break
 		}
 	}
 	if !historyFound {
 		t.Fatalf("expected status transition in history list; got %d rows", len(m3.activityModalList.Items()))
 	}
+
+	selectListItemByID(&m3.activityModalList, historyID)
 
 	// Enter opens the selected history entry and ESC returns to the list.
 	mAny, _ = m3.Update(tea.KeyMsg{Type: tea.KeyEnter})

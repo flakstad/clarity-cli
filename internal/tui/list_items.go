@@ -193,6 +193,7 @@ const (
 	outlineActivityComment      outlineActivityKind = "comment"
 	outlineActivityWorklogRoot  outlineActivityKind = "worklog_root"
 	outlineActivityWorklogEntry outlineActivityKind = "worklog_entry"
+	outlineActivityHistoryEntry outlineActivityKind = "history_entry"
 )
 
 // outlineActivityRowItem is a "virtual" row rendered in the outline list (used in item view)

@@ -125,25 +125,13 @@ func (m *appModel) openActivityListModal(kind activityModalKind, itemID string) 
 		return
 	}
 
-	items := []list.Item{}
-	switch kind {
-	case activityModalKindComments:
-		items = commentsModalItems(m.db, itemID)
-	case activityModalKindWorklog:
-		items = worklogModalItems(m.db, itemID)
-	case activityModalKindHistory:
-		items = historyModalItems(m.db, m.eventsTail, itemID)
-	}
-	if len(items) == 0 {
-		items = []list.Item{activityModalRowItem{kind: activityModalRowHistory, title: "(empty)"}}
-	}
-
 	m.modal = modalActivityList
 	m.activityModalKind = kind
 	m.activityModalItemID = itemID
-
-	_ = m.activityModalList.SetItems(items)
-	m.activityModalList.Select(0)
+	m.activityModalCollapsed = map[string]bool{}
+	m.activityModalContentW = 0
+	m.refreshActivityModalItems()
+	m.autoExpandSelectedActivityModalItem()
 	m.pendingEsc = false
 	m.pendingCtrlX = false
 }
@@ -178,6 +166,10 @@ func (m *appModel) renderActivityListModal() string {
 		h = 22
 	}
 	m.activityModalList.SetSize(bodyW, h)
+	if m.activityModalContentW != bodyW {
+		m.activityModalContentW = bodyW
+		m.refreshActivityModalItems()
+	}
 
 	controls := "up/down: move   enter: open   esc/ctrl+g: close"
 	content := m.activityModalList.View() + "\n\n" + styleMuted().Render(controls) + "\x1b[0m"
@@ -289,4 +281,238 @@ func historyEventMarkdown(ev model.Event) string {
 		"```",
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m *appModel) refreshActivityModalItems() {
+	if m == nil || m.db == nil {
+		return
+	}
+	itemID := strings.TrimSpace(m.activityModalItemID)
+	if itemID == "" {
+		return
+	}
+	if m.activityModalCollapsed == nil {
+		m.activityModalCollapsed = map[string]bool{}
+	}
+
+	contentW := m.activityModalContentW
+	if contentW <= 0 {
+		contentW = 80
+	}
+
+	curSel := selectedOutlineListSelectionID(&m.activityModalList)
+
+	items := []list.Item{}
+	switch m.activityModalKind {
+	case activityModalKindComments:
+		items = buildActivityCommentItems(m.db, itemID, m.activityModalCollapsed, contentW)
+	case activityModalKindWorklog:
+		items = buildActivityWorklogItems(m.db, itemID, m.activityModalCollapsed, contentW)
+	case activityModalKindHistory:
+		items = buildActivityHistoryItems(m.db, m.eventsTail, itemID, m.activityModalCollapsed, contentW)
+	default:
+		items = []list.Item{outlineDescRowItem{parentID: itemID, depth: 0, line: "(empty)"}}
+	}
+	if len(items) == 0 {
+		items = []list.Item{outlineDescRowItem{parentID: itemID, depth: 0, line: "(empty)"}}
+	}
+
+	_ = m.activityModalList.SetItems(items)
+
+	if strings.TrimSpace(curSel) != "" {
+		selectListItemByID(&m.activityModalList, curSel)
+	} else {
+		m.activityModalList.Select(0)
+	}
+}
+
+func (m *appModel) autoExpandSelectedActivityModalItem() {
+	if m == nil {
+		return
+	}
+	act, ok := m.activityModalList.SelectedItem().(outlineActivityRowItem)
+	if !ok {
+		return
+	}
+	if !act.hasChildren && !act.hasDescription {
+		return
+	}
+	if m.activityModalCollapsed == nil || !m.activityModalCollapsed[act.id] {
+		return
+	}
+	m.activityModalCollapsed[act.id] = false
+	m.refreshActivityModalItems()
+	selectListItemByID(&m.activityModalList, act.id)
+}
+
+func buildActivityCommentItems(db *store.DB, itemID string, collapsed map[string]bool, contentW int) []list.Item {
+	comments := db.CommentsForItem(itemID)
+	rows := buildCommentThreadRows(comments)
+	if len(rows) == 0 {
+		return nil
+	}
+
+	commentKids := map[string]int{}
+	for _, c := range comments {
+		if c.ReplyToCommentID == nil {
+			continue
+		}
+		p := strings.TrimSpace(*c.ReplyToCommentID)
+		if p == "" {
+			continue
+		}
+		commentKids[p]++
+	}
+
+	out := make([]list.Item, 0, len(rows)*2)
+	skipDepth := -1
+	for _, r := range rows {
+		if skipDepth >= 0 && r.Depth > skipDepth {
+			continue
+		}
+		if skipDepth >= 0 && r.Depth <= skipDepth {
+			skipDepth = -1
+		}
+
+		c := r.Comment
+		cid := strings.TrimSpace(c.ID)
+		if cid == "" {
+			continue
+		}
+		hasChildren := commentKids[cid] > 0
+		bodyMD := strings.TrimSpace(commentMarkdownWithAttachments(db, c))
+		hasDescription := bodyMD != ""
+
+		if hasChildren || hasDescription {
+			if _, ok := collapsed[cid]; !ok {
+				collapsed[cid] = true
+			}
+		}
+
+		label := fmt.Sprintf("%s  %s", fmtTS(c.CreatedAt), actorLabel(db, c.AuthorID))
+		out = append(out, outlineActivityRowItem{
+			id:             cid,
+			itemID:         itemID,
+			kind:           outlineActivityComment,
+			depth:          max(0, r.Depth),
+			label:          label,
+			commentID:      cid,
+			hasChildren:    hasChildren,
+			hasDescription: hasDescription,
+			collapsed:      collapsed[cid],
+		})
+
+		if hasDescription && !collapsed[cid] {
+			descDepth := max(0, r.Depth)
+			leadW := (2 * descDepth) + 2
+			avail := contentW - leadW
+			if avail < 0 {
+				avail = 0
+			}
+			descLines := outlineDescriptionLinesMarkdown(bodyMD, avail)
+			for _, line := range descLines {
+				out = append(out, outlineDescRowItem{parentID: cid, depth: descDepth, line: line})
+			}
+		}
+
+		if (hasChildren || hasDescription) && collapsed[cid] {
+			skipDepth = r.Depth
+		}
+	}
+	return out
+}
+
+func buildActivityWorklogItems(db *store.DB, itemID string, collapsed map[string]bool, contentW int) []list.Item {
+	worklog := db.WorklogForItem(itemID)
+	if len(worklog) == 0 {
+		return nil
+	}
+	sort.SliceStable(worklog, func(i, j int) bool { return worklog[i].CreatedAt.After(worklog[j].CreatedAt) })
+
+	out := make([]list.Item, 0, len(worklog)*2)
+	for _, w := range worklog {
+		wid := strings.TrimSpace(w.ID)
+		if wid == "" {
+			continue
+		}
+		body := strings.TrimSpace(w.Body)
+		hasDescription := body != ""
+		if hasDescription {
+			if _, ok := collapsed[wid]; !ok {
+				collapsed[wid] = true
+			}
+		}
+
+		label := fmt.Sprintf("%s  %s", fmtTS(w.CreatedAt), actorLabel(db, w.AuthorID))
+		out = append(out, outlineActivityRowItem{
+			id:             wid,
+			itemID:         itemID,
+			kind:           outlineActivityWorklogEntry,
+			depth:          0,
+			label:          label,
+			worklogID:      wid,
+			hasDescription: hasDescription,
+			collapsed:      collapsed[wid],
+		})
+
+		if hasDescription && !collapsed[wid] {
+			descDepth := 0
+			leadW := (2 * descDepth) + 2
+			avail := contentW - leadW
+			if avail < 0 {
+				avail = 0
+			}
+			descLines := outlineDescriptionLinesMarkdown(body, avail)
+			for _, line := range descLines {
+				out = append(out, outlineDescRowItem{parentID: wid, depth: descDepth, line: line})
+			}
+		}
+	}
+	return out
+}
+
+func buildActivityHistoryItems(db *store.DB, events []model.Event, itemID string, collapsed map[string]bool, contentW int) []list.Item {
+	history := filterEventsForItem(db, events, itemID)
+	if len(history) == 0 {
+		return nil
+	}
+
+	out := make([]list.Item, 0, len(history)*2)
+	for _, ev := range history {
+		eid := strings.TrimSpace(ev.ID)
+		if eid == "" {
+			continue
+		}
+		body := strings.TrimSpace(historyEventMarkdown(ev))
+		hasDescription := body != ""
+		if hasDescription {
+			if _, ok := collapsed[eid]; !ok {
+				collapsed[eid] = true
+			}
+		}
+		label := fmt.Sprintf("%s  %s  %s", fmtTS(ev.TS), actorLabel(db, ev.ActorID), eventSummary(ev))
+		out = append(out, outlineActivityRowItem{
+			id:             eid,
+			itemID:         itemID,
+			kind:           outlineActivityHistoryEntry,
+			depth:          0,
+			label:          label,
+			eventID:        eid,
+			hasDescription: hasDescription,
+			collapsed:      collapsed[eid],
+		})
+		if hasDescription && !collapsed[eid] {
+			descDepth := 0
+			leadW := (2 * descDepth) + 2
+			avail := contentW - leadW
+			if avail < 0 {
+				avail = 0
+			}
+			descLines := outlineDescriptionLinesMarkdown(body, avail)
+			for _, line := range descLines {
+				out = append(out, outlineDescRowItem{parentID: eid, depth: descDepth, line: line})
+			}
+		}
+	}
+	return out
 }

@@ -5433,6 +5433,33 @@ func selectedOutlineListSelectionID(l *list.Model) string {
 	}
 }
 
+func (m *appModel) maybeAutoExpandActivitySelection(prevSelID string) bool {
+	if m == nil || m.db == nil {
+		return false
+	}
+	curSelID := selectedOutlineListSelectionID(&m.itemsList)
+	if strings.TrimSpace(curSelID) == "" || strings.TrimSpace(curSelID) == strings.TrimSpace(prevSelID) {
+		return false
+	}
+	act, ok := m.itemsList.SelectedItem().(outlineActivityRowItem)
+	if !ok {
+		return false
+	}
+	if !act.hasChildren && !act.hasDescription {
+		return false
+	}
+	collapsed := m.collapsedState()
+	if !collapsed[act.id] {
+		return false
+	}
+	collapsed[act.id] = false
+	if m.selectedOutline != nil {
+		m.refreshOutlineList(*m.selectedOutline)
+	}
+	selectListItemByID(&m.itemsList, act.id)
+	return true
+}
+
 func selectedOutlineListItemID(l *list.Model) string {
 	if l == nil {
 		return ""
@@ -6881,6 +6908,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if m.modal == modalActivityList {
+			beforeSelID := selectedOutlineListSelectionID(&m.activityModalList)
 			switch km := msg.(type) {
 			case tea.KeyMsg:
 				switch km.String() {
@@ -6888,26 +6916,90 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					(&m).closeAllModals()
 					return m, nil
 				case "enter":
-					if it, ok := m.activityModalList.SelectedItem().(activityModalRowItem); ok {
-						title := strings.TrimSpace(it.title)
-						body := strings.TrimSpace(it.body)
-						if body == "" {
-							body = "(empty)"
+					itemID := strings.TrimSpace(m.activityModalItemID)
+					if itemID == "" {
+						return m, nil
+					}
+					selID := strings.TrimSpace(selectedOutlineListSelectionID(&m.activityModalList))
+					if selID == "" {
+						return m, nil
+					}
+					var row outlineActivityRowItem
+					switch it := m.activityModalList.SelectedItem().(type) {
+					case outlineActivityRowItem:
+						row = it
+					case outlineDescRowItem:
+						for _, li := range m.activityModalList.Items() {
+							act, ok := li.(outlineActivityRowItem)
+							if !ok {
+								continue
+							}
+							if strings.TrimSpace(act.id) == strings.TrimSpace(it.parentID) {
+								row = act
+								break
+							}
 						}
-						switch it.kind {
-						case activityModalRowComment:
-							(&m).openViewEntryModalReturning("Comment — "+title, body, modalActivityList)
-						case activityModalRowWorklog:
-							(&m).openViewEntryModalReturning("My worklog — "+title, body, modalActivityList)
-						default:
-							(&m).openViewEntryModalReturning("History — "+title, body, modalActivityList)
+					default:
+						return m, nil
+					}
+					switch row.kind {
+					case outlineActivityComment:
+						c, ok := findCommentByID(m.db.CommentsForItem(itemID), row.commentID)
+						if !ok {
+							return m, nil
 						}
+						title := fmt.Sprintf("Comment — %s — %s", fmtTS(c.CreatedAt), actorLabel(m.db, c.AuthorID))
+						body := commentMarkdownWithAttachments(m.db, c)
+						(&m).openViewEntryModalReturning(title, body, modalActivityList)
+						return m, nil
+					case outlineActivityWorklogEntry:
+						worklog := m.db.WorklogForItem(itemID)
+						var w model.WorklogEntry
+						found := false
+						for i := range worklog {
+							if strings.TrimSpace(worklog[i].ID) == strings.TrimSpace(row.worklogID) {
+								w = worklog[i]
+								found = true
+								break
+							}
+						}
+						if !found {
+							return m, nil
+						}
+						title := fmt.Sprintf("My worklog — %s — %s", fmtTS(w.CreatedAt), actorLabel(m.db, w.AuthorID))
+						(&m).openViewEntryModalReturning(title, strings.TrimSpace(w.Body), modalActivityList)
+						return m, nil
+					case outlineActivityHistoryEntry:
+						history := filterEventsForItem(m.db, m.eventsTail, itemID)
+						var ev model.Event
+						found := false
+						for i := range history {
+							if strings.TrimSpace(history[i].ID) == strings.TrimSpace(row.eventID) {
+								ev = history[i]
+								found = true
+								break
+							}
+						}
+						if !found {
+							return m, nil
+						}
+						title := fmt.Sprintf("History — %s — %s", fmtTS(ev.TS), actorLabel(m.db, ev.ActorID))
+						(&m).openViewEntryModalReturning(title, strings.TrimSpace(historyEventMarkdown(ev)), modalActivityList)
 						return m, nil
 					}
 				}
 			}
 			var cmd tea.Cmd
 			m.activityModalList, cmd = m.activityModalList.Update(msg)
+			if strings.TrimSpace(selectedOutlineListSelectionID(&m.activityModalList)) != strings.TrimSpace(beforeSelID) {
+				if act, ok := m.activityModalList.SelectedItem().(outlineActivityRowItem); ok {
+					if (act.hasChildren || act.hasDescription) && m.activityModalCollapsed != nil && m.activityModalCollapsed[act.id] {
+						m.activityModalCollapsed[act.id] = false
+						(&m).refreshActivityModalItems()
+						selectListItemByID(&m.activityModalList, act.id)
+					}
+				}
+			}
 			return m, cmd
 		}
 
@@ -7674,21 +7766,17 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// When the user is editing the filter input, the list should own keystrokes.
 		// Otherwise keys like Enter/j/k would be interpreted as "open item"/navigation.
 		if m.itemsList.SettingFilter() {
-			beforeID := ""
-			if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-				beforeID = strings.TrimSpace(it.row.item.ID)
-			}
+			beforeSelID := selectedOutlineListSelectionID(&m.itemsList)
+			beforeItemID := strings.TrimSpace(selectedOutlineListItemID(&m.itemsList))
 			var cmd tea.Cmd
 			m.itemsList, cmd = m.itemsList.Update(msg)
 			if m.splitPreviewVisible() {
-				afterID := ""
-				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-					afterID = strings.TrimSpace(it.row.item.ID)
-				}
-				if beforeID != afterID {
+				afterItemID := strings.TrimSpace(selectedOutlineListItemID(&m.itemsList))
+				if beforeItemID != afterItemID {
 					return m, tea.Batch(cmd, m.schedulePreviewCompute())
 				}
 			}
+			m.maybeAutoExpandActivitySelection(beforeSelID)
 			return m, cmd
 		}
 
@@ -8002,7 +8090,9 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Outline navigation.
+		beforeSelID := selectedOutlineListSelectionID(&m.itemsList)
 		if m.navOutline(msg) {
+			m.maybeAutoExpandActivitySelection(beforeSelID)
 			if m.splitPreviewVisible() {
 				return m, m.schedulePreviewCompute()
 			}
@@ -8018,18 +8108,14 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Allow list to handle incidental keys (help paging, etc).
-	beforeID := ""
-	switch it := m.itemsList.SelectedItem().(type) {
-	case outlineRowItem:
-		beforeID = strings.TrimSpace(it.row.item.ID)
-	}
+	beforeSelID := selectedOutlineListSelectionID(&m.itemsList)
 	var cmd tea.Cmd
 	m.itemsList, cmd = m.itemsList.Update(msg)
-	afterID := ""
-	switch it := m.itemsList.SelectedItem().(type) {
-	case outlineRowItem:
-		afterID = strings.TrimSpace(it.row.item.ID)
+	afterID := strings.TrimSpace(selectedOutlineListItemID(&m.itemsList))
+	if m.maybeAutoExpandActivitySelection(beforeSelID) {
+		return m, cmd
 	}
+	beforeID := strings.TrimSpace(beforeSelID)
 	if beforeID != afterID {
 		if m.splitPreviewVisible() {
 			return m, tea.Batch(cmd, m.schedulePreviewCompute())
