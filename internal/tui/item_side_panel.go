@@ -128,7 +128,7 @@ func renderItemActivityColumns(db *store.DB, it model.Item, width, height int, f
 	return lipgloss.JoinHorizontal(lipgloss.Top, comments, worklog, history)
 }
 
-func renderItemActivityTabbed(db *store.DB, it model.Item, width, height int, focus itemPageFocus, focused bool, commentIdx, worklogIdx, historyIdx int, scroll int, events []model.Event) string {
+func renderItemActivityTabbed(db *store.DB, it model.Item, width, height int, focus itemPageFocus, focused bool, commentIdx, worklogIdx int, scroll int) string {
 	if width < 0 {
 		width = 0
 	}
@@ -141,7 +141,7 @@ func renderItemActivityTabbed(db *store.DB, it model.Item, width, height int, fo
 
 	// Default to Comments.
 	k := sidePanelKindForFocus(focus)
-	if k != itemSideComments && k != itemSideWorklog && k != itemSideHistory {
+	if k != itemSideComments && k != itemSideWorklog {
 		k = itemSideComments
 	}
 
@@ -161,8 +161,6 @@ func renderItemActivityTabbed(db *store.DB, it model.Item, width, height int, fo
 		tab("Comments", k == itemSideComments),
 		" ",
 		tab("My worklog", k == itemSideWorklog),
-		" ",
-		tab("History", k == itemSideHistory),
 	)
 	if xansi.StringWidth(header) > width {
 		header = xansi.Cut(header, 0, width)
@@ -175,11 +173,9 @@ func renderItemActivityTabbed(db *store.DB, it model.Item, width, height int, fo
 	var body string
 	switch k {
 	case itemSideWorklog:
-		body = renderItemSidePanelWithEvents(db, it, width, bodyH, itemSideWorklog, focused && focus == itemFocusWorklog, 0, 0, worklogIdx, 0, scroll, events)
-	case itemSideHistory:
-		body = renderItemSidePanelWithEvents(db, it, width, bodyH, itemSideHistory, focused && focus == itemFocusHistory, 0, 0, 0, historyIdx, scroll, events)
+		body = renderItemSidePanelWithEvents(db, it, width, bodyH, itemSideWorklog, focused && focus == itemFocusWorklog, 0, 0, worklogIdx, 0, scroll, nil)
 	default:
-		body = renderItemSidePanelWithEvents(db, it, width, bodyH, itemSideComments, focused && focus == itemFocusComments, 0, commentIdx, 0, 0, scroll, events)
+		body = renderItemSidePanelWithEvents(db, it, width, bodyH, itemSideComments, focused && focus == itemFocusComments, 0, commentIdx, 0, 0, scroll, nil)
 	}
 
 	return normalizePane(header+"\n"+body, width, height)

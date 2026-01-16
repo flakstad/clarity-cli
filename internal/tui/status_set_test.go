@@ -118,24 +118,52 @@ func TestStatusPicker_Enter_SetsStatus_WhenCurrentActorIsAgent(t *testing.T) {
 		t.Fatalf("expected an item.set_status event for item-a; got %d events", len(evs))
 	}
 
-	// Ensure the item activity panel "History" reflects the new event immediately.
+	// Ensure history is available via the History modal ("H", discoverable via action panel).
 	m2.view = viewItem
 	m2.selectedProjectID = "proj-a"
 	m2.selectedOutlineID = "out-a"
 	m2.openItemID = "item-a"
-	m2.itemFocus = itemFocusHistory
-	m2.itemHistoryIdx = 0
 	m2.width = 120
-	// Ensure enough vertical space to include the History section in the rendered view.
 	m2.height = 80
-	m2.pane = paneDetail
+	m2.pane = paneOutline
 	m2.refreshItemSubtree(db.Outlines[0], "item-a")
 	selectListItemByID(&m2.itemsList, "item-a")
-	out := m2.viewItem()
-	if !strings.Contains(out, "History") {
-		t.Fatalf("expected History section in item view; got: %q", out)
+	mAny, _ := m2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("H")})
+	m3 := mAny.(appModel)
+	if m3.modal != modalActivityList {
+		t.Fatalf("expected modalActivityList after H, got %v", m3.modal)
 	}
-	if !strings.Contains(out, "set_status") || !strings.Contains(out, "todo") || !strings.Contains(out, "doing") {
-		t.Fatalf("expected status transition in History; got: %q", out)
+	if m3.activityModalKind != activityModalKindHistory {
+		t.Fatalf("expected activityModalKindHistory, got %v", m3.activityModalKind)
+	}
+
+	historyFound := false
+	for _, it := range m3.activityModalList.Items() {
+		row, ok := it.(activityModalRowItem)
+		if !ok {
+			continue
+		}
+		if strings.Contains(row.title, "set status:") && strings.Contains(row.title, "todo") && strings.Contains(row.title, "doing") {
+			historyFound = true
+			break
+		}
+	}
+	if !historyFound {
+		t.Fatalf("expected status transition in history list; got %d rows", len(m3.activityModalList.Items()))
+	}
+
+	// Enter opens the selected history entry and ESC returns to the list.
+	mAny, _ = m3.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m4 := mAny.(appModel)
+	if m4.modal != modalViewEntry {
+		t.Fatalf("expected modalViewEntry after enter in history list, got %v", m4.modal)
+	}
+	if m4.viewModalReturn != modalActivityList {
+		t.Fatalf("expected viewModalReturn to be modalActivityList, got %v", m4.viewModalReturn)
+	}
+	mAny, _ = m4.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m5 := mAny.(appModel)
+	if m5.modal != modalActivityList {
+		t.Fatalf("expected modalActivityList after esc in view entry, got %v", m5.modal)
 	}
 }

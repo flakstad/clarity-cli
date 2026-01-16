@@ -68,6 +68,9 @@ func (d focusAwareOutlineItemDelegate) Render(w io.Writer, m list.Model, index i
 	case outlineRowItem:
 		fmt.Fprint(w, d.outlineItemDelegate.renderOutlineRow(contentW, prefix, it, focused))
 		return
+	case outlineActivityRowItem:
+		fmt.Fprint(w, d.outlineItemDelegate.renderOutlineActivityRow(contentW, prefix, it, focused))
+		return
 	case outlineDescRowItem:
 		fmt.Fprint(w, d.outlineItemDelegate.renderOutlineDescRow(contentW, prefix, it, focused))
 		return
@@ -122,6 +125,9 @@ func (d outlineItemDelegate) Render(w io.Writer, m list.Model, index int, item l
 	switch it := item.(type) {
 	case outlineRowItem:
 		fmt.Fprint(w, d.renderOutlineRow(contentW, prefix, it, focused))
+		return
+	case outlineActivityRowItem:
+		fmt.Fprint(w, d.renderOutlineActivityRow(contentW, prefix, it, focused))
 		return
 	case outlineDescRowItem:
 		fmt.Fprint(w, d.renderOutlineDescRow(contentW, prefix, it, focused))
@@ -319,6 +325,25 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
 		out = xansi.Cut(out, 0, width) + "\x1b[0m"
 	}
 	return out
+}
+
+func (d outlineItemDelegate) renderOutlineActivityRow(width int, prefix string, it outlineActivityRowItem, focused bool) string {
+	base := d.normal
+	if focused {
+		base = d.selected
+	}
+
+	indent := strings.Repeat("  ", it.depth)
+	twisty := " "
+	if it.hasChildren || it.hasDescription {
+		if it.collapsed {
+			twisty = "▸"
+		} else {
+			twisty = "▾"
+		}
+	}
+	line := prefix + indent + twisty + " " + strings.TrimSpace(it.label)
+	return d.renderRow(width, base, line)
 }
 
 func (d outlineItemDelegate) renderOutlineDescRow(width int, prefix string, it outlineDescRowItem, focused bool) string {

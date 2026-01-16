@@ -186,6 +186,42 @@ func (i outlineRowItem) Title() string {
 }
 func (i outlineRowItem) Description() string { return "" }
 
+type outlineActivityKind string
+
+const (
+	outlineActivityCommentsRoot outlineActivityKind = "comments_root"
+	outlineActivityComment      outlineActivityKind = "comment"
+	outlineActivityWorklogRoot  outlineActivityKind = "worklog_root"
+	outlineActivityWorklogEntry outlineActivityKind = "worklog_entry"
+)
+
+// outlineActivityRowItem is a "virtual" row rendered in the outline list (used in item view)
+// to show comments/worklog/history as if they were outline children.
+type outlineActivityRowItem struct {
+	// id uniquely identifies the row for selection/collapse state.
+	id string
+	// itemID is the item this row belongs to (the "real" item in the store).
+	itemID string
+
+	kind      outlineActivityKind
+	depth     int
+	label     string
+	collapsed bool
+
+	// entity IDs (optional, kind-dependent).
+	commentID string
+	worklogID string
+	eventID   string
+
+	hasChildren bool
+	// hasDescription indicates the row has a body rendered as outlineDescRowItem lines.
+	hasDescription bool
+}
+
+func (i outlineActivityRowItem) FilterValue() string { return i.label }
+func (i outlineActivityRowItem) Title() string       { return i.label }
+func (i outlineActivityRowItem) Description() string { return "" }
+
 type outlineDescRowItem struct {
 	parentID string
 	depth    int

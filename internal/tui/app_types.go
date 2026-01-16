@@ -133,6 +133,7 @@ const (
 	modalReplyComment
 	modalAddWorklog
 	modalViewEntry
+	modalActivityList
 	modalEditOutlineStatuses
 	modalAddOutlineStatus
 	modalRenameOutlineStatus
@@ -164,6 +165,14 @@ const (
 	modalEditAttachmentAlt
 	modalCapture
 	modalGitSetupRemote
+)
+
+type activityModalKind int
+
+const (
+	activityModalKindComments activityModalKind = iota
+	activityModalKindWorklog
+	activityModalKindHistory
 )
 
 type actionPanelKind int
@@ -251,6 +260,12 @@ func (m *appModel) closeAllModals() {
 	m.modal = modalNone
 	m.modalForID = ""
 	m.modalForKey = ""
+	m.viewModalTitle = ""
+	m.viewModalBody = ""
+	m.viewModalScroll = 0
+	m.viewModalReturn = modalNone
+	m.activityModalItemID = ""
+	m.activityModalKind = activityModalKindComments
 	m.capture = nil
 	m.replyQuoteMD = ""
 	m.pendingMoveOutlineTo = ""

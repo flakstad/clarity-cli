@@ -229,7 +229,7 @@ func TestItemView_EnterNarrowsFurther_BackspaceWidens(t *testing.T) {
 	}
 }
 
-func TestItemView_CtrlO_TogglesActivityPane(t *testing.T) {
+func TestItemView_RendersActivityRowsInList_NoSplitPane(t *testing.T) {
 	dir := t.TempDir()
 	s := store.Store{Dir: dir}
 
@@ -263,6 +263,20 @@ func TestItemView_CtrlO_TogglesActivityPane(t *testing.T) {
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}},
+		Comments: []model.Comment{{
+			ID:        "c1",
+			ItemID:    "item-a",
+			AuthorID:  actorID,
+			Body:      "Comment body",
+			CreatedAt: now.Add(1 * time.Minute),
+		}},
+		Worklog: []model.WorklogEntry{{
+			ID:        "w1",
+			ItemID:    "item-a",
+			AuthorID:  actorID,
+			Body:      "Worked on it",
+			CreatedAt: now.Add(2 * time.Minute),
+		}},
 	}
 	if err := s.Save(db); err != nil {
 		t.Fatalf("save db: %v", err)
@@ -277,29 +291,118 @@ func TestItemView_CtrlO_TogglesActivityPane(t *testing.T) {
 	m.selectedOutlineID = "out-a"
 	m.selectedOutline = &db.Outlines[0]
 	m.openItemID = "item-a"
+	// Expand the root and activity roots so rows are visible.
+	m.itemCollapsed = map[string]bool{
+		"item-a":                         false,
+		activityCommentsRootID("item-a"): false,
+		activityWorklogRootID("item-a"):  false,
+	}
 	m.refreshItemSubtree(db.Outlines[0], "item-a")
 	selectListItemByID(&m.itemsList, "item-a")
 
-	// ctrl+x then o switches focus to the activity panel ("other window").
-	m2 := m
-	mAny, _ := m2.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
-	mAny, _ = mAny.(appModel).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
-	m3 := mAny.(appModel)
-	if m3.pane != paneDetail {
-		t.Fatalf("expected paneDetail after ctrl+x o, got %v", m3.pane)
+	out := m.viewItem()
+	if strings.Contains(out, "Comments   My worklog") {
+		t.Fatalf("expected no split-pane activity tabs; got: %q", out)
 	}
-	if m3.itemFocus != itemFocusComments {
-		t.Fatalf("expected focus=comments after ctrl+x o, got %v", m3.itemFocus)
+	if !strings.Contains(out, "Comments (1)") || !strings.Contains(out, "My worklog (1)") {
+		t.Fatalf("expected item activity tabs in view; got: %q", out)
+	}
+}
+
+func TestItemView_TabCollapse_IsIsolatedFromOutlineCollapse(t *testing.T) {
+	dir := t.TempDir()
+	s := store.Store{Dir: dir}
+
+	actorID := "act-human"
+	now := time.Now().UTC()
+	db := &store.DB{
+		CurrentActorID: actorID,
+		Actors:         []model.Actor{{ID: actorID, Kind: model.ActorKindHuman, Name: "human"}},
+		Projects: []model.Project{{
+			ID:        "proj-a",
+			Name:      "Project A",
+			CreatedBy: actorID,
+			CreatedAt: now,
+		}},
+		Outlines: []model.Outline{{
+			ID:         "out-a",
+			ProjectID:  "proj-a",
+			StatusDefs: store.DefaultOutlineStatusDefs(),
+			CreatedBy:  actorID,
+			CreatedAt:  now,
+		}},
+		Items: []model.Item{
+			{
+				ID:           "item-root",
+				ProjectID:    "proj-a",
+				OutlineID:    "out-a",
+				Rank:         "h",
+				Title:        "Root",
+				StatusID:     "todo",
+				OwnerActorID: actorID,
+				CreatedBy:    actorID,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			},
+			{
+				ID:           "item-child",
+				ProjectID:    "proj-a",
+				OutlineID:    "out-a",
+				ParentID:     ptr("item-root"),
+				Rank:         "i",
+				Title:        "Child",
+				StatusID:     "todo",
+				OwnerActorID: actorID,
+				CreatedBy:    actorID,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			},
+		},
+	}
+	if err := s.Save(db); err != nil {
+		t.Fatalf("save db: %v", err)
 	}
 
-	// tab cycles focus to Worklog.
-	mAny, _ = m3.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m4 := mAny.(appModel)
-	if m4.itemFocus != itemFocusWorklog {
-		t.Fatalf("expected focus=worklog after tab, got %v", m4.itemFocus)
+	m := newAppModel(dir, db)
+	m.width = 120
+	m.height = 40
+	m.view = viewOutline
+	m.pane = paneOutline
+	m.selectedProjectID = "proj-a"
+	m.selectedOutlineID = "out-a"
+	m.selectedOutline = &db.Outlines[0]
+	m.refreshItems(db.Outlines[0])
+	selectListItemByID(&m.itemsList, "item-root")
+
+	// Outline default: parent collapsed (so child is hidden).
+	if m.collapsed == nil || !m.collapsed["item-root"] {
+		t.Fatalf("expected outline collapsed[item-root]=true by default")
 	}
-	out := m4.viewItem()
-	if !strings.Contains(out, "Comments") || !strings.Contains(out, "My worklog") || !strings.Contains(out, "History") {
-		t.Fatalf("expected item activity tabs in view; got: %q", out)
+
+	// Enter item view (copies collapse state).
+	mAny, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2 := mAny.(appModel)
+	if m2.view != viewItem {
+		t.Fatalf("expected viewItem, got %v", m2.view)
+	}
+
+	// Toggle collapse in item view (should not affect outline's collapsed map).
+	mAny, _ = m2.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m3 := mAny.(appModel)
+	if m3.itemCollapsed == nil {
+		t.Fatalf("expected itemCollapsed to exist")
+	}
+	if m3.itemCollapsed["item-root"] == m3.collapsed["item-root"] {
+		t.Fatalf("expected itemCollapsed[item-root] to diverge from outline collapsed[item-root]")
+	}
+
+	// Back to outline: outline collapsed state should remain unchanged.
+	mAny, _ = m3.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m4 := mAny.(appModel)
+	if m4.view != viewOutline {
+		t.Fatalf("expected viewOutline after backspace, got %v", m4.view)
+	}
+	if !m4.collapsed["item-root"] {
+		t.Fatalf("expected outline collapsed[item-root] to remain true after item view tab toggle")
 	}
 }

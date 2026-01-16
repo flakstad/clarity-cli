@@ -64,16 +64,20 @@ func TestItemView_ReplyOpensReplyModalAndSetsReplyTo(t *testing.T) {
 
 	m := newAppModel(dir, db)
 	m.view = viewItem
-	m.pane = paneDetail
-	if m.itemsListActive != nil {
-		*m.itemsListActive = false
-	}
-	m.itemFocus = itemFocusComments
+	m.pane = paneOutline
 	m.selectedProjectID = "proj-a"
 	m.selectedOutlineID = "out-a"
 	m.selectedOutline = &db.Outlines[0]
 	m.openItemID = "item-a"
+	if m.collapsed == nil {
+		m.collapsed = map[string]bool{}
+	}
+	m.itemCollapsed = map[string]bool{
+		"item-a":                         false,
+		activityCommentsRootID("item-a"): false,
+	}
 	m.refreshItemSubtree(db.Outlines[0], "item-a")
+	selectListItemByID(&m.itemsList, "c1")
 
 	// "R" should open the reply modal with modalForKey set to the parent comment id.
 	mAny, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})

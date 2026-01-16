@@ -31,6 +31,17 @@ type itemNavEntry struct {
 	toID string
 }
 
+func copyBoolMap(in map[string]bool) map[string]bool {
+	if in == nil {
+		return map[string]bool{}
+	}
+	out := make(map[string]bool, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 func (m *appModel) collapsedState() map[string]bool {
 	if m == nil {
 		return nil
@@ -3695,12 +3706,9 @@ func (m *appModel) refreshItems(outline model.Outline) {
 	if m.collapsed == nil {
 		m.collapsed = map[string]bool{}
 	}
-	curID := ""
-	switch it := m.itemsList.SelectedItem().(type) {
-	case outlineRowItem:
-		curID = it.row.item.ID
-	case addItemRow:
-		curID = "__add__"
+	curSelID := selectedOutlineListSelectionID(&m.itemsList)
+	if _, ok := m.itemsList.SelectedItem().(addItemRow); ok {
+		curSelID = "__add__"
 	}
 	var its []model.Item
 	for _, it := range m.db.Items {
@@ -3736,6 +3744,19 @@ func (m *appModel) refreshItems(outline model.Outline) {
 			m.collapsed[it.ID] = true
 		}
 	}
+	// Activity (comments/worklog) makes items collapsible too.
+	for _, it := range its {
+		id := strings.TrimSpace(it.ID)
+		if id == "" {
+			continue
+		}
+		if len(m.db.CommentsForItem(id)) == 0 && len(m.db.WorklogForItem(id)) == 0 {
+			continue
+		}
+		if _, ok := m.collapsed[id]; !ok {
+			m.collapsed[id] = true
+		}
+	}
 
 	flat := flattenOutline(outline, its, m.collapsed)
 	var items []list.Item
@@ -3743,7 +3764,11 @@ func (m *appModel) refreshItems(outline model.Outline) {
 
 	for _, row := range flat {
 		row.commentsCount = len(m.db.CommentsForItem(row.item.ID))
-		if showInlineDescriptions && (strings.TrimSpace(row.item.Description) != "" || row.commentsCount > 0) {
+		worklogCount := len(m.db.WorklogForItem(row.item.ID))
+		if row.commentsCount > 0 || worklogCount > 0 {
+			row.hasChildren = true
+		}
+		if showInlineDescriptions && strings.TrimSpace(row.item.Description) != "" {
 			row.hasDescription = true
 		}
 		// Cache display labels for metadata that needs DB context.
@@ -3791,6 +3816,16 @@ func (m *appModel) refreshItems(outline model.Outline) {
 			// Comments as replies under the description (single-line preview).
 			// (Intentionally not rendering comment subtree inline; outline stays lean.)
 		}
+		if !row.collapsed {
+			contentW := m.itemsList.Width()
+			if contentW <= 0 {
+				contentW = m.width
+			}
+			if contentW <= 0 {
+				contentW = 80
+			}
+			items = append(items, buildItemActivityOutlineRows(m.db, row.item.ID, m.collapsed, row.depth+1, contentW)...)
+		}
 	}
 	// Always-present affordance for adding an item (useful for empty outlines).
 	items = append(items, addItemRow{})
@@ -3812,8 +3847,8 @@ func (m *appModel) refreshItems(outline model.Outline) {
 			m.itemsList.Select(len(items) - 1)
 		}
 	}
-	if strings.TrimSpace(curID) != "" {
-		selectListItemByID(&m.itemsList, strings.TrimSpace(curID))
+	if strings.TrimSpace(curSelID) != "" {
+		selectListItemByID(&m.itemsList, strings.TrimSpace(curSelID))
 		return
 	}
 	// Default selection: first real item row, otherwise "+ Add item".
@@ -3847,9 +3882,9 @@ func (m *appModel) refreshItemSubtree(outline model.Outline, rootItemID string) 
 	m.itemsList.Title = title
 	collapsed := m.collapsedState()
 
-	curID := selectedOutlineListItemID(&m.itemsList)
-	if curID == "" {
-		curID = rootItemID
+	curSelID := selectedOutlineListSelectionID(&m.itemsList)
+	if curSelID == "" {
+		curSelID = rootItemID
 	}
 
 	ids := collectSubtreeItemIDs(m.db, rootItemID)
@@ -3878,10 +3913,17 @@ func (m *appModel) refreshItemSubtree(outline model.Outline, rootItemID string) 
 		its = append(its, it)
 	}
 
-	// In item view, narrow-to-subtree should fully expand by default (without affecting outline view state).
-	if m.view == viewItem {
-		for id := range inSubtree {
-			collapsed[id] = false
+	// Activity (comments/worklog) makes items collapsible too.
+	for _, it := range its {
+		id := strings.TrimSpace(it.ID)
+		if id == "" {
+			continue
+		}
+		if len(m.db.CommentsForItem(id)) == 0 && len(m.db.WorklogForItem(id)) == 0 {
+			continue
+		}
+		if _, ok := collapsed[id]; !ok {
+			collapsed[id] = true
 		}
 	}
 
@@ -3889,7 +3931,11 @@ func (m *appModel) refreshItemSubtree(outline model.Outline, rootItemID string) 
 	items := make([]list.Item, 0, len(flat))
 	for _, row := range flat {
 		row.commentsCount = len(m.db.CommentsForItem(row.item.ID))
-		if strings.TrimSpace(row.item.Description) != "" || row.commentsCount > 0 {
+		worklogCount := len(m.db.WorklogForItem(row.item.ID))
+		if row.commentsCount > 0 || worklogCount > 0 {
+			row.hasChildren = true
+		}
+		if strings.TrimSpace(row.item.Description) != "" {
 			row.hasDescription = true
 		}
 		if row.item.AssignedActorID != nil && strings.TrimSpace(*row.item.AssignedActorID) != "" {
@@ -3926,6 +3972,16 @@ func (m *appModel) refreshItemSubtree(outline model.Outline, rootItemID string) 
 				}
 			}
 		}
+		if !row.collapsed {
+			contentW := m.itemsList.Width()
+			if contentW <= 0 {
+				contentW = m.width
+			}
+			if contentW <= 0 {
+				contentW = 80
+			}
+			items = append(items, buildItemActivityOutlineRows(m.db, row.item.ID, collapsed, row.depth+1, contentW)...)
+		}
 	}
 
 	if cmd := m.itemsList.SetItems(items); cmd != nil {
@@ -3941,8 +3997,8 @@ func (m *appModel) refreshItemSubtree(outline model.Outline, rootItemID string) 
 			m.itemsList.Select(len(items) - 1)
 		}
 	}
-	if strings.TrimSpace(curID) != "" {
-		selectListItemByID(&m.itemsList, strings.TrimSpace(curID))
+	if strings.TrimSpace(curSelID) != "" {
+		selectListItemByID(&m.itemsList, strings.TrimSpace(curSelID))
 	}
 }
 
@@ -4541,38 +4597,19 @@ func (m *appModel) viewItem() string {
 
 	crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
 
-	// Item view is always a split view: narrowed outline on the left, activity on the right.
-	leftW, rightW := splitPaneWidths(contentW)
+	// Item view: single-pane outline list (narrowed to the current root).
 	contentH := frameH - topPadLines
 	if contentH < 0 {
 		contentH = 0
 	}
-	leftHeader := crumb
 	headerLines := 1
-	leftBodyH := contentH - headerLines - 1
-	if leftBodyH < 3 {
-		leftBodyH = 3
+	listH := contentH - headerLines - 1
+	if listH < 3 {
+		listH = 3
 	}
-	leftBody := m.listBodyWithOverflowHint(&m.itemsList, contentW, leftBodyH)
+	body := m.listBodyWithOverflowHint(&m.itemsList, contentW, listH)
 
-	activeID := selectedOutlineListItemID(&m.itemsList)
-	if activeID == "" {
-		activeID = rootID
-	}
-	active, ok := m.db.FindItem(activeID)
-	if !ok || active == nil {
-		active = &model.Item{ID: activeID}
-	}
-	right := renderItemActivityTabbed(m.db, *active, rightW, contentH, m.itemFocus, m.pane == paneDetail, m.itemCommentIdx, m.itemWorklogIdx, m.itemHistoryIdx, m.itemSideScroll, m.eventsTail)
-	// Visually de-emphasize the pane that doesn't have focus (like the modal background dim).
-	if m.pane == paneDetail {
-		leftHeader = dimBackground(leftHeader)
-		leftBody = dimBackground(leftBody)
-	} else {
-		right = dimBackground(right)
-	}
-
-	main := renderSplitWithLeftHeaderGap(contentW, frameH, leftW, rightW, leftHeader, 1, leftBody, right)
+	main := strings.Repeat("\n", topPadLines) + crumb + "\n\n" + body
 	return wrap(main)
 }
 
@@ -4700,6 +4737,8 @@ func (m *appModel) renderModal() string {
 		return m.renderTextAreaModal("Add worklog")
 	case modalViewEntry:
 		return m.renderViewEntryModal()
+	case modalActivityList:
+		return m.renderActivityListModal()
 	case modalConfirmArchive:
 		title := ""
 		cascade := ""
@@ -5050,7 +5089,11 @@ func (m *appModel) renderViewEntryModal() string {
 		lines[i] = fixedWidthLine(lines[i], bodyW)
 	}
 
-	controls := styleMuted().Render("up/down: scroll  pgup/pgdown: page  l: links  ctrl+y: copy  ctrl+o: editor  esc/ctrl+g: close") + "\x1b[0m"
+	closeHint := "esc/ctrl+g: close"
+	if m.viewModalReturn != modalNone {
+		closeHint = "esc: back   ctrl+g: close"
+	}
+	controls := styleMuted().Render("up/down: scroll  pgup/pgdown: page  l: links  ctrl+y: copy  ctrl+o: editor  "+closeHint) + "\x1b[0m"
 	window := windowLinesWithIndicators(lines, max(1, h-2), m.viewModalScroll, styleMuted())
 	content := strings.Join(append(window, "", controls), "\n")
 	return renderModalBox(m.width, title, content)
@@ -5063,6 +5106,9 @@ func (m *appModel) openViewEntryModal(title, body string) {
 	m.viewModalTitle = strings.TrimSpace(title)
 	m.viewModalBody = body
 	m.viewModalScroll = 0
+	m.viewModalReturn = modalNone
+	m.pendingEsc = false
+	m.pendingCtrlX = false
 }
 
 func (m *appModel) renderInputModal(title string) string {
@@ -5274,6 +5320,11 @@ func selectListItemByID(l *list.Model, id string) {
 				l.Select(i)
 				return
 			}
+		case outlineActivityRowItem:
+			if strings.TrimSpace(it.id) == id {
+				l.Select(i)
+				return
+			}
 		case agendaRowItem:
 			if it.row.item.ID == id {
 				l.Select(i)
@@ -5363,6 +5414,22 @@ func (m *appModel) refreshAfterItemChange(itemID string) {
 	m.refreshItems(*m.selectedOutline)
 	if itemID != "" {
 		selectListItemByID(&m.itemsList, itemID)
+	}
+}
+
+func selectedOutlineListSelectionID(l *list.Model) string {
+	if l == nil {
+		return ""
+	}
+	switch it := l.SelectedItem().(type) {
+	case outlineRowItem:
+		return strings.TrimSpace(it.row.item.ID)
+	case outlineDescRowItem:
+		return strings.TrimSpace(it.parentID)
+	case outlineActivityRowItem:
+		return strings.TrimSpace(it.id)
+	default:
+		return ""
 	}
 }
 
@@ -6238,10 +6305,20 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.KeyMsg:
 				switch km.String() {
 				case "esc", "ctrl+g":
+					if km.String() == "esc" && m.viewModalReturn != modalNone {
+						ret := m.viewModalReturn
+						m.viewModalReturn = modalNone
+						m.modal = ret
+						m.viewModalTitle = ""
+						m.viewModalBody = ""
+						m.viewModalScroll = 0
+						return m, nil
+					}
 					m.modal = modalNone
 					m.viewModalTitle = ""
 					m.viewModalBody = ""
 					m.viewModalScroll = 0
+					m.viewModalReturn = modalNone
 					return m, nil
 				case "ctrl+y":
 					if err := copyToClipboard(m.viewModalBody); err != nil {
@@ -6800,6 +6877,37 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.targetPickList, cmd = m.targetPickList.Update(msg)
+			return m, cmd
+		}
+
+		if m.modal == modalActivityList {
+			switch km := msg.(type) {
+			case tea.KeyMsg:
+				switch km.String() {
+				case "esc":
+					(&m).closeAllModals()
+					return m, nil
+				case "enter":
+					if it, ok := m.activityModalList.SelectedItem().(activityModalRowItem); ok {
+						title := strings.TrimSpace(it.title)
+						body := strings.TrimSpace(it.body)
+						if body == "" {
+							body = "(empty)"
+						}
+						switch it.kind {
+						case activityModalRowComment:
+							(&m).openViewEntryModalReturning("Comment — "+title, body, modalActivityList)
+						case activityModalRowWorklog:
+							(&m).openViewEntryModalReturning("My worklog — "+title, body, modalActivityList)
+						default:
+							(&m).openViewEntryModalReturning("History — "+title, body, modalActivityList)
+						}
+						return m, nil
+					}
+				}
+			}
+			var cmd tea.Cmd
+			m.activityModalList, cmd = m.activityModalList.Update(msg)
 			return m, cmd
 		}
 
@@ -7691,6 +7799,15 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+		case "H":
+			switch it := m.itemsList.SelectedItem().(type) {
+			case outlineActivityRowItem:
+				(&m).openHistoryModal(it.itemID)
+				return m, nil
+			case outlineRowItem:
+				(&m).openHistoryModal(it.row.item.ID)
+				return m, nil
+			}
 		case "C":
 			// Add comment to selected item.
 			if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
@@ -7787,24 +7904,19 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter":
 			switch m.itemsList.SelectedItem().(type) {
+			case outlineActivityRowItem:
+				if it, ok := m.itemsList.SelectedItem().(outlineActivityRowItem); ok {
+					(&m).openModalForActivityRow(it)
+					return m, nil
+				}
+				return m, nil
 			case outlineRowItem:
 				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
 					m.view = viewItem
 					m.openItemID = it.row.item.ID
+					m.itemCollapsed = copyBoolMap(m.collapsed)
 					m.itemArchivedReadOnly = false
 					(&m).recordRecentItemVisit(m.openItemID)
-					m.pane = paneOutline
-					if m.itemsListActive != nil {
-						*m.itemsListActive = true
-					}
-					m.itemFocus = itemFocusComments
-					m.itemCommentIdx = 0
-					m.itemWorklogIdx = 0
-					m.itemHistoryIdx = 0
-					m.itemSideScroll = 0
-					m.itemDetailScroll = 0
-					m.itemChildIdx = 0
-					m.itemChildOff = 0
 					m.itemNavStack = nil
 					// Leaving preview mode when entering the full item page.
 					m.showPreview = false
@@ -8915,7 +9027,7 @@ func (m *appModel) navOutline(msg tea.KeyMsg) bool {
 		}
 		for i := idx + 1; i < len(items); i++ {
 			switch items[i].(type) {
-			case outlineRowItem, addItemRow:
+			case outlineRowItem, outlineActivityRowItem, addItemRow:
 				m.itemsList.Select(i)
 				return true
 			}
@@ -8936,7 +9048,7 @@ func (m *appModel) navOutline(msg tea.KeyMsg) bool {
 		}
 		for i := idx - 1; i >= 0; i-- {
 			switch items[i].(type) {
-			case outlineRowItem, addItemRow:
+			case outlineRowItem, outlineActivityRowItem, addItemRow:
 				m.itemsList.Select(i)
 				return true
 			}
@@ -8953,43 +9065,77 @@ func (m *appModel) navOutline(msg tea.KeyMsg) bool {
 	}
 }
 
-func (m *appModel) navIntoFirstChild() {
-	it, ok := m.itemsList.SelectedItem().(outlineRowItem)
-	if !ok {
-		return
+func outlineListDepth(it list.Item) (int, bool) {
+	switch t := it.(type) {
+	case outlineRowItem:
+		return t.row.depth, true
+	case outlineActivityRowItem:
+		return t.depth, true
+	default:
+		return 0, false
 	}
-	collapsed := m.collapsedState()
-	if !it.row.hasChildren {
-		if it.row.hasDescription && it.row.collapsed {
+}
+
+func (m *appModel) navIntoFirstChild() {
+	switch it := m.itemsList.SelectedItem().(type) {
+	case outlineRowItem:
+		collapsed := m.collapsedState()
+		if !it.row.hasChildren {
+			if it.row.hasDescription && it.row.collapsed {
+				collapsed[it.row.item.ID] = false
+				m.refreshOutlineList(it.outline)
+			}
+			return
+		}
+		if it.row.collapsed {
 			collapsed[it.row.item.ID] = false
 			m.refreshOutlineList(it.outline)
 		}
-		return
-	}
-	if it.row.collapsed {
-		collapsed[it.row.item.ID] = false
-		m.refreshOutlineList(it.outline)
-	}
-	idx := m.itemsList.Index()
-	// In our flattening, the first child (if visible) is the next outlineRowItem with depth+1.
-	items := m.itemsList.Items()
-	for i := idx + 1; i < len(items); i++ {
-		next, ok := items[i].(outlineRowItem)
-		if !ok {
-			continue
+		idx := m.itemsList.Index()
+		// In our flattening, the first child (if visible) is the next outlineRowItem with depth+1.
+		items := m.itemsList.Items()
+		for i := idx + 1; i < len(items); i++ {
+			next, ok := items[i].(outlineRowItem)
+			if !ok {
+				continue
+			}
+			if next.row.depth == it.row.depth+1 {
+				m.itemsList.Select(i)
+			}
+			return
 		}
-		if next.row.depth == it.row.depth+1 {
-			m.itemsList.Select(i)
+	case outlineActivityRowItem:
+		id := strings.TrimSpace(it.id)
+		if id == "" || !it.hasChildren {
+			return
 		}
+		collapsed := m.collapsedState()
+		if it.collapsed {
+			collapsed[id] = false
+			if m.selectedOutline != nil {
+				m.refreshOutlineList(*m.selectedOutline)
+			}
+			selectListItemByID(&m.itemsList, id)
+		}
+		curDepth := it.depth
+		idx := m.itemsList.Index()
+		items := m.itemsList.Items()
+		for i := idx + 1; i < len(items); i++ {
+			d, ok := outlineListDepth(items[i])
+			if !ok {
+				continue
+			}
+			if d == curDepth+1 {
+				m.itemsList.Select(i)
+			}
+			return
+		}
+	default:
 		return
 	}
 }
 
 func (m *appModel) navToParent() {
-	it, ok := m.itemsList.SelectedItem().(outlineRowItem)
-	if !ok {
-		return
-	}
 	idx := m.itemsList.Index()
 	items := m.itemsList.Items()
 	if idx >= len(items) {
@@ -8999,16 +9145,17 @@ func (m *appModel) navToParent() {
 		}
 		m.itemsList.Select(idx)
 	}
-	if idx <= 0 || it.row.depth <= 0 {
+	curDepth, ok := outlineListDepth(m.itemsList.SelectedItem())
+	if idx <= 0 || !ok || curDepth <= 0 {
 		return
 	}
-	wantDepth := it.row.depth - 1
+	wantDepth := curDepth - 1
 	for i := idx - 1; i >= 0; i-- {
-		prev, ok := items[i].(outlineRowItem)
+		d, ok := outlineListDepth(items[i])
 		if !ok {
 			continue
 		}
-		if prev.row.depth == wantDepth {
+		if d == wantDepth {
 			m.itemsList.Select(i)
 			return
 		}
@@ -9016,6 +9163,40 @@ func (m *appModel) navToParent() {
 }
 
 func (m *appModel) toggleCollapseSelected() {
+	if act, ok := m.itemsList.SelectedItem().(outlineActivityRowItem); ok {
+		if !act.hasChildren && !act.hasDescription {
+			return
+		}
+		collapsed := m.collapsedState()
+		collapsed[act.id] = !collapsed[act.id]
+
+		if m.db == nil {
+			return
+		}
+		var outline model.Outline
+		if m.selectedOutline != nil {
+			outline = *m.selectedOutline
+		} else if o, ok := m.db.FindOutline(strings.TrimSpace(m.selectedOutlineID)); ok && o != nil {
+			outline = *o
+		} else {
+			return
+		}
+
+		rootID := strings.TrimSpace(m.openItemID)
+		if m.view == viewItem {
+			if cur := strings.TrimSpace(m.itemListRootID); cur != "" {
+				rootID = cur
+			}
+		}
+		if m.view == viewItem && rootID != "" {
+			m.refreshItemSubtree(outline, rootID)
+		} else {
+			m.refreshItems(outline)
+		}
+		selectListItemByID(&m.itemsList, act.id)
+		return
+	}
+
 	it, ok := m.itemsList.SelectedItem().(outlineRowItem)
 	if !ok {
 		return
@@ -9036,12 +9217,29 @@ func (m *appModel) toggleCollapseSelected() {
 	collapsed := m.collapsedState()
 	mode := m.curOutlineViewMode()
 
+	var inSubtree map[string]bool
+	if m.view == viewItem {
+		rootID := strings.TrimSpace(m.openItemID)
+		if rootID != "" {
+			inSubtree = map[string]bool{}
+			for _, id := range collectSubtreeItemIDs(m.db, rootID) {
+				id = strings.TrimSpace(id)
+				if id != "" {
+					inSubtree[id] = true
+				}
+			}
+		}
+	}
+
 	its := make([]model.Item, 0, 64)
 	for _, item := range m.db.Items {
 		if item.Archived {
 			continue
 		}
 		if item.OutlineID != it.outline.ID {
+			continue
+		}
+		if inSubtree != nil && !inSubtree[strings.TrimSpace(item.ID)] {
 			continue
 		}
 		its = append(its, item)
@@ -9154,11 +9352,29 @@ func (m *appModel) toggleCollapseAll() {
 	// Collect outline items (non-archived) and build parent/roots like flattenOutline does.
 	its := make([]model.Item, 0, 128)
 	present := map[string]bool{}
+
+	var inSubtree map[string]bool
+	if m.view == viewItem {
+		rootID := strings.TrimSpace(m.openItemID)
+		if rootID != "" {
+			inSubtree = map[string]bool{}
+			for _, id := range collectSubtreeItemIDs(m.db, rootID) {
+				id = strings.TrimSpace(id)
+				if id != "" {
+					inSubtree[id] = true
+				}
+			}
+		}
+	}
+
 	for _, item := range m.db.Items {
 		if item.Archived {
 			continue
 		}
 		if item.OutlineID != m.selectedOutline.ID {
+			continue
+		}
+		if inSubtree != nil && !inSubtree[strings.TrimSpace(item.ID)] {
 			continue
 		}
 		its = append(its, item)
@@ -9233,6 +9449,7 @@ func (m *appModel) toggleCollapseAll() {
 		}
 	}
 
+	targetOpenAll := false
 	switch {
 	case allCollapsed:
 		// all collapsed -> open first layer
@@ -9248,6 +9465,7 @@ func (m *appModel) toggleCollapseAll() {
 		for id := range collapsible {
 			collapsed[id] = false
 		}
+		targetOpenAll = true
 	case allExpanded:
 		// open all -> all collapsed
 		for id := range collapsible {
@@ -9259,6 +9477,28 @@ func (m *appModel) toggleCollapseAll() {
 			collapsed[id] = true
 		}
 	}
+
+	// Keep activity roots in sync with the global folding state. We only auto-expand
+	// activity in the "open all" state; otherwise keep it collapsed by default.
+	if m.db != nil {
+		for _, item := range its {
+			id := strings.TrimSpace(item.ID)
+			if id == "" {
+				continue
+			}
+			collapsed[activityCommentsRootID(id)] = !targetOpenAll
+			collapsed[activityWorklogRootID(id)] = !targetOpenAll
+			if targetOpenAll {
+				for _, c := range m.db.CommentsForItem(id) {
+					cid := strings.TrimSpace(c.ID)
+					if cid != "" {
+						collapsed[cid] = false
+					}
+				}
+			}
+		}
+	}
+
 	m.refreshOutlineList(*m.selectedOutline)
 }
 
@@ -12127,6 +12367,7 @@ func (m *appModel) jumpToItemByID(itemID string) error {
 
 	m.view = viewItem
 	m.openItemID = itemID
+	m.itemCollapsed = copyBoolMap(m.collapsed)
 	m.itemArchivedReadOnly = false
 	m.recordRecentItemVisit(m.openItemID)
 	m.pane = paneOutline

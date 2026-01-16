@@ -112,12 +112,16 @@ type appModel struct {
 	// Per-outline selection state for columns mode.
 	columnsSel map[string]outlineColumnsSelection
 
-	modal           modalKind
-	modalForID      string
-	modalForKey     string
-	viewModalTitle  string
-	viewModalBody   string
-	viewModalScroll int
+	modal               modalKind
+	modalForID          string
+	modalForKey         string
+	viewModalTitle      string
+	viewModalBody       string
+	viewModalScroll     int
+	viewModalReturn     modalKind
+	activityModalKind   activityModalKind
+	activityModalItemID string
+	activityModalList   list.Model
 	// capture holds the embedded capture model when modal == modalCapture.
 	capture                       *captureModel
 	returnToCaptureAfterTemplates bool
@@ -328,6 +332,14 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
 	m.statusList.SetShowHelp(false)
 	m.statusList.SetShowStatusBar(false)
 	m.statusList.SetShowPagination(false)
+
+	m.activityModalList = newList("", "", []list.Item{})
+	m.activityModalList.SetDelegate(newCompactItemDelegate())
+	m.activityModalList.SetFilteringEnabled(false)
+	m.activityModalList.SetShowFilter(false)
+	m.activityModalList.SetShowHelp(false)
+	m.activityModalList.SetShowStatusBar(false)
+	m.activityModalList.SetShowPagination(false)
 
 	m.outlinePickList = newList("Outlines", "Select an outline", []list.Item{})
 	m.outlinePickList.SetDelegate(newCompactItemDelegate())
