@@ -5533,215 +5533,6 @@ func selectedOutlineListSelectionID(l *list.Model) string {
 	}
 }
 
-func activityFocusFromListSelection(l *list.Model) (outlineActivityRowItem, bool) {
-	if l == nil {
-		return outlineActivityRowItem{}, false
-	}
-	switch it := l.SelectedItem().(type) {
-	case outlineActivityRowItem:
-		return it, true
-	case outlineDescRowItem:
-		pid := strings.TrimSpace(it.parentID)
-		if pid == "" {
-			return outlineActivityRowItem{}, false
-		}
-		for _, li := range l.Items() {
-			act, ok := li.(outlineActivityRowItem)
-			if !ok {
-				continue
-			}
-			if strings.TrimSpace(act.id) == pid {
-				return act, true
-			}
-		}
-		return outlineActivityRowItem{}, false
-	default:
-		return outlineActivityRowItem{}, false
-	}
-}
-
-func activityRowIsEntity(act outlineActivityRowItem) bool {
-	switch act.kind {
-	case outlineActivityComment, outlineActivityWorklogEntry, outlineActivityHistoryEntry:
-		return true
-	default:
-		return false
-	}
-}
-
-func activityRowIsRoot(act outlineActivityRowItem) bool {
-	switch act.kind {
-	case outlineActivityCommentsRoot, outlineActivityWorklogRoot:
-		return true
-	default:
-		return false
-	}
-}
-
-func (m *appModel) maybeUpdateActivityFocus(prevSelID string) bool {
-	if m == nil || m.db == nil {
-		return false
-	}
-
-	prevID := strings.TrimSpace(prevSelID)
-	curID := strings.TrimSpace(selectedOutlineListSelectionID(&m.itemsList))
-
-	// If selection didn't meaningfully change, do nothing.
-	if prevID != "" && prevID == curID {
-		return false
-	}
-
-	collapsed := m.collapsedState()
-	changed := false
-
-	// We'll handle collapsing once we know the current focus (so comment ancestors can stay open).
-
-	act, ok := activityFocusFromListSelection(&m.itemsList)
-	if !ok {
-		// When leaving activity entries, ensure none stay expanded.
-		for _, li := range m.itemsList.Items() {
-			a, ok := li.(outlineActivityRowItem)
-			if !ok || !activityRowIsEntity(a) {
-				continue
-			}
-			if (a.hasChildren || a.hasDescription) && !collapsed[a.id] {
-				collapsed[a.id] = true
-				changed = true
-			}
-		}
-		if changed && m.selectedOutline != nil {
-			m.refreshOutlineList(*m.selectedOutline)
-		}
-		return changed
-	}
-	if activityRowIsRoot(act) {
-		// Never auto-expand roots.
-		for _, li := range m.itemsList.Items() {
-			a, ok := li.(outlineActivityRowItem)
-			if !ok || !activityRowIsEntity(a) {
-				continue
-			}
-			if (a.hasChildren || a.hasDescription) && !collapsed[a.id] {
-				collapsed[a.id] = true
-				changed = true
-			}
-		}
-		if changed && m.selectedOutline != nil {
-			m.refreshOutlineList(*m.selectedOutline)
-		}
-		return changed
-	}
-	if !activityRowIsEntity(act) {
-		for _, li := range m.itemsList.Items() {
-			a, ok := li.(outlineActivityRowItem)
-			if !ok || !activityRowIsEntity(a) {
-				continue
-			}
-			if (a.hasChildren || a.hasDescription) && !collapsed[a.id] {
-				collapsed[a.id] = true
-				changed = true
-			}
-		}
-		if changed && m.selectedOutline != nil {
-			m.refreshOutlineList(*m.selectedOutline)
-		}
-		return changed
-	}
-	if !act.hasChildren && !act.hasDescription {
-		if changed && m.selectedOutline != nil {
-			m.refreshOutlineList(*m.selectedOutline)
-		}
-		return changed
-	}
-
-	keepOpen := map[string]bool{}
-	if act.kind == outlineActivityComment {
-		// Keep all ancestors of the focused reply expanded so replies remain reachable.
-		parentByID := map[string]string{}
-		for _, c := range m.db.CommentsForItem(act.itemID) {
-			cid := strings.TrimSpace(c.ID)
-			if cid == "" || c.ReplyToCommentID == nil {
-				continue
-			}
-			pid := strings.TrimSpace(*c.ReplyToCommentID)
-			if pid == "" {
-				continue
-			}
-			parentByID[cid] = pid
-		}
-		cur := strings.TrimSpace(act.id)
-		seen := map[string]bool{}
-		for cur != "" && !seen[cur] {
-			seen[cur] = true
-			keepOpen[cur] = true
-			cur = strings.TrimSpace(parentByID[cur])
-		}
-		keepOpen[strings.TrimSpace(act.id)] = true
-	}
-
-	// Collapse the previously-focused activity entry (entities only) if we left it, unless it's
-	// an ancestor of the newly-focused comment.
-	if prevID != "" && !keepOpen[prevID] {
-		for _, li := range m.itemsList.Items() {
-			prevAct, ok := li.(outlineActivityRowItem)
-			if !ok {
-				continue
-			}
-			if strings.TrimSpace(prevAct.id) != prevID {
-				continue
-			}
-			if activityRowIsEntity(prevAct) && (prevAct.hasChildren || prevAct.hasDescription) && !collapsed[prevAct.id] {
-				collapsed[prevAct.id] = true
-				changed = true
-			}
-			break
-		}
-	}
-
-	// Collapse all other activity entries (entities only) for the same item.
-	for _, li := range m.itemsList.Items() {
-		other, ok := li.(outlineActivityRowItem)
-		if !ok {
-			continue
-		}
-		if strings.TrimSpace(other.itemID) != strings.TrimSpace(act.itemID) {
-			continue
-		}
-		if !activityRowIsEntity(other) {
-			continue
-		}
-		if strings.TrimSpace(other.id) == strings.TrimSpace(act.id) {
-			continue
-		}
-		if keepOpen[strings.TrimSpace(other.id)] {
-			continue
-		}
-		if (other.hasChildren || other.hasDescription) && !collapsed[other.id] {
-			collapsed[other.id] = true
-			changed = true
-		}
-	}
-
-	// Auto-expand the focused entry (and its ancestors for comment threads).
-	if len(keepOpen) > 0 {
-		for id := range keepOpen {
-			if collapsed[id] {
-				collapsed[id] = false
-				changed = true
-			}
-		}
-	} else if collapsed[act.id] {
-		collapsed[act.id] = false
-		changed = true
-	}
-
-	if changed && m.selectedOutline != nil {
-		m.refreshOutlineList(*m.selectedOutline)
-		selectListItemByID(&m.itemsList, act.id)
-	}
-	return changed
-}
-
 func selectedOutlineListItemID(l *list.Model) string {
 	if l == nil {
 		return ""
@@ -7190,13 +6981,17 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if m.modal == modalActivityList {
-			beforeSelID := selectedOutlineListSelectionID(&m.activityModalList)
-			beforeAct, beforeActOK := activityFocusFromListSelection(&m.activityModalList)
 			switch km := msg.(type) {
 			case tea.KeyMsg:
 				switch km.String() {
 				case "esc":
 					(&m).closeAllModals()
+					return m, nil
+				case "tab":
+					(&m).toggleActivityModalCollapseSelected()
+					return m, nil
+				case "shift+tab", "backtab":
+					(&m).toggleActivityModalCollapseAll()
 					return m, nil
 				case "enter":
 					itemID := strings.TrimSpace(m.activityModalItemID)
@@ -7274,37 +7069,6 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.activityModalList, cmd = m.activityModalList.Update(msg)
-			// Special navigation: when leaving a comment row, Down should go to the first reply (not the body line).
-			if km, ok := msg.(tea.KeyMsg); ok {
-				switch km.String() {
-				case "down", "j", "ctrl+n":
-					if beforeActOK && beforeAct.kind == outlineActivityComment && strings.TrimSpace(beforeAct.id) != "" {
-						if (beforeAct.hasChildren || beforeAct.hasDescription) && m.activityModalCollapsed != nil && !m.activityModalCollapsed[beforeAct.id] {
-							if desc, ok := m.activityModalList.SelectedItem().(outlineDescRowItem); ok && strings.TrimSpace(desc.parentID) == strings.TrimSpace(beforeAct.id) {
-								items := m.activityModalList.Items()
-								idx := m.activityModalList.Index()
-								for i := idx + 1; i >= 0 && i < len(items); i++ {
-									act, ok := items[i].(outlineActivityRowItem)
-									if !ok {
-										continue
-									}
-									if act.kind != outlineActivityComment {
-										continue
-									}
-									if act.depth == beforeAct.depth+1 {
-										selectListItemByID(&m.activityModalList, act.id)
-										break
-									}
-									if act.depth <= beforeAct.depth {
-										break
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-			(&m).updateActivityModalFocus(beforeSelID)
 			return m, cmd
 		}
 
@@ -8081,7 +7845,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Batch(cmd, m.schedulePreviewCompute())
 				}
 			}
-			m.maybeUpdateActivityFocus(beforeSelID)
+			_ = beforeSelID
 			return m, cmd
 		}
 
@@ -8396,9 +8160,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Outline navigation.
-		beforeSelID := selectedOutlineListSelectionID(&m.itemsList)
 		if m.navOutline(msg) {
-			m.maybeUpdateActivityFocus(beforeSelID)
 			if m.splitPreviewVisible() {
 				return m, m.schedulePreviewCompute()
 			}
@@ -8415,46 +8177,10 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Allow list to handle incidental keys (help paging, etc).
 	beforeSelID := selectedOutlineListSelectionID(&m.itemsList)
-	beforeAct, beforeActOK := activityFocusFromListSelection(&m.itemsList)
 	var cmd tea.Cmd
 	m.itemsList, cmd = m.itemsList.Update(msg)
 
-	// Special navigation: when leaving a comment row, Down should go to the first reply (not the body line).
-	if km, ok := msg.(tea.KeyMsg); ok {
-		switch km.String() {
-		case "down", "j", "ctrl+n":
-			if beforeActOK && beforeAct.kind == outlineActivityComment && strings.TrimSpace(beforeAct.id) != "" {
-				collapsed := m.collapsedState()
-				if (beforeAct.hasChildren || beforeAct.hasDescription) && !collapsed[beforeAct.id] {
-					if desc, ok := m.itemsList.SelectedItem().(outlineDescRowItem); ok && strings.TrimSpace(desc.parentID) == strings.TrimSpace(beforeAct.id) {
-						items := m.itemsList.Items()
-						idx := m.itemsList.Index()
-						for i := idx + 1; i >= 0 && i < len(items); i++ {
-							act, ok := items[i].(outlineActivityRowItem)
-							if !ok {
-								continue
-							}
-							if act.kind != outlineActivityComment {
-								continue
-							}
-							if act.depth == beforeAct.depth+1 {
-								selectListItemByID(&m.itemsList, act.id)
-								break
-							}
-							if act.depth <= beforeAct.depth {
-								break
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
 	afterID := strings.TrimSpace(selectedOutlineListItemID(&m.itemsList))
-	if m.maybeUpdateActivityFocus(beforeSelID) {
-		return m, cmd
-	}
 	beforeID := strings.TrimSpace(beforeSelID)
 	if beforeID != afterID {
 		if m.splitPreviewVisible() {

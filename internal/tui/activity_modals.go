@@ -131,7 +131,6 @@ func (m *appModel) openActivityListModal(kind activityModalKind, itemID string) 
 	m.activityModalCollapsed = map[string]bool{}
 	m.activityModalContentW = 0
 	m.refreshActivityModalItems()
-	m.updateActivityModalFocus("")
 	m.pendingEsc = false
 	m.pendingCtrlX = false
 }
@@ -326,93 +325,63 @@ func (m *appModel) refreshActivityModalItems() {
 	}
 }
 
-func (m *appModel) updateActivityModalFocus(prevSelID string) {
+func (m *appModel) toggleActivityModalCollapseSelected() {
+	if m == nil {
+		return
+	}
+	act, ok := m.activityModalList.SelectedItem().(outlineActivityRowItem)
+	if !ok {
+		return
+	}
+	if !act.hasChildren && !act.hasDescription {
+		return
+	}
+	if m.activityModalCollapsed == nil {
+		m.activityModalCollapsed = map[string]bool{}
+	}
+	m.activityModalCollapsed[act.id] = !m.activityModalCollapsed[act.id]
+	m.refreshActivityModalItems()
+	selectListItemByID(&m.activityModalList, act.id)
+}
+
+func (m *appModel) toggleActivityModalCollapseAll() {
 	if m == nil {
 		return
 	}
 	if m.activityModalCollapsed == nil {
 		m.activityModalCollapsed = map[string]bool{}
 	}
-
-	prevID := strings.TrimSpace(prevSelID)
-	act, ok := activityFocusFromListSelection(&m.activityModalList)
-	if !ok || !activityRowIsEntity(act) {
-		// If we moved off an entry, collapse the previously-focused entry.
-		if prevID != "" && !m.activityModalCollapsed[prevID] {
-			m.activityModalCollapsed[prevID] = true
-			m.refreshActivityModalItems()
-			selectListItemByID(&m.activityModalList, prevID)
-		}
-		return
-	}
-
-	if m.activityModalKind == activityModalKindComments && act.kind == outlineActivityComment {
-		keepOpen := map[string]bool{}
-		parentByID := map[string]string{}
-		for _, c := range m.db.CommentsForItem(m.activityModalItemID) {
-			cid := strings.TrimSpace(c.ID)
-			if cid == "" || c.ReplyToCommentID == nil {
-				continue
-			}
-			pid := strings.TrimSpace(*c.ReplyToCommentID)
-			if pid == "" {
-				continue
-			}
-			parentByID[cid] = pid
-		}
-		cur := strings.TrimSpace(act.id)
-		seen := map[string]bool{}
-		for cur != "" && !seen[cur] {
-			seen[cur] = true
-			keepOpen[cur] = true
-			cur = strings.TrimSpace(parentByID[cur])
-		}
-
-		for _, li := range m.activityModalList.Items() {
-			other, ok := li.(outlineActivityRowItem)
-			if !ok || other.kind != outlineActivityComment {
-				continue
-			}
-			oid := strings.TrimSpace(other.id)
-			if oid == "" {
-				continue
-			}
-			if keepOpen[oid] {
-				if m.activityModalCollapsed[oid] {
-					m.activityModalCollapsed[oid] = false
-				}
-				continue
-			}
-			if (other.hasChildren || other.hasDescription) && !m.activityModalCollapsed[oid] {
-				m.activityModalCollapsed[oid] = true
-			}
-		}
-
-		m.refreshActivityModalItems()
-		selectListItemByID(&m.activityModalList, act.id)
-		return
-	}
-
-	// Collapse all other entries.
-	for _, li := range m.activityModalList.Items() {
-		other, ok := li.(outlineActivityRowItem)
-		if !ok || !activityRowIsEntity(other) {
+	items := m.activityModalList.Items()
+	allCollapsed := true
+	collapsibleIDs := make([]string, 0, len(items))
+	for _, li := range items {
+		act, ok := li.(outlineActivityRowItem)
+		if !ok {
 			continue
 		}
-		if strings.TrimSpace(other.id) == strings.TrimSpace(act.id) {
+		if !act.hasChildren && !act.hasDescription {
 			continue
 		}
-		if !m.activityModalCollapsed[other.id] {
-			m.activityModalCollapsed[other.id] = true
+		collapsibleIDs = append(collapsibleIDs, act.id)
+		if !m.activityModalCollapsed[act.id] {
+			allCollapsed = false
 		}
 	}
-
-	// Expand the focused entry.
-	if (act.hasChildren || act.hasDescription) && m.activityModalCollapsed[act.id] {
-		m.activityModalCollapsed[act.id] = false
+	if len(collapsibleIDs) == 0 {
+		return
 	}
+	next := true // collapse
+	if allCollapsed {
+		next = false // expand all
+	}
+	for _, id := range collapsibleIDs {
+		m.activityModalCollapsed[id] = next
+	}
+	sel := selectedOutlineListSelectionID(&m.activityModalList)
 	m.refreshActivityModalItems()
-	selectListItemByID(&m.activityModalList, act.id)
+	if sel != "" {
+		selectListItemByID(&m.activityModalList, sel)
+	}
 }
 
 func buildActivityCommentItems(db *store.DB, itemID string, collapsed map[string]bool, contentW int) []list.Item {
