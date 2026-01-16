@@ -1014,7 +1014,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				quote := truncateInline(c.Body, 280)
-				m.replyQuoteMD = fmt.Sprintf("> %s  %s\n> %s", fmtTS(c.CreatedAt), actorLabel(m.db, c.AuthorID), quote)
+				m.replyQuoteMD = fmt.Sprintf("> %s %s\n> %s", fmtTS(c.CreatedAt), actorAtLabel(m.db, c.AuthorID), quote)
 				m.openTextModal(modalReplyComment, itemID, "Reply…", "")
 				m.modalForKey = strings.TrimSpace(c.ID)
 				return m, nil

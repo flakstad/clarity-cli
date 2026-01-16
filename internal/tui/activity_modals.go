@@ -63,7 +63,7 @@ func (m *appModel) openModalForActivityRow(act outlineActivityRowItem) bool {
 			m.showMinibuffer("Comment: not found")
 			return true
 		}
-		title := fmt.Sprintf("Comment — %s — %s", fmtTS(c.CreatedAt), actorLabel(m.db, c.AuthorID))
+		title := fmt.Sprintf("Comment — %s — %s", fmtTS(c.CreatedAt), actorAtLabel(m.db, c.AuthorID))
 		m.openViewEntryModal(title, commentMarkdownWithAttachments(m.db, c))
 		return true
 	case outlineActivityWorklogRoot:
@@ -84,7 +84,7 @@ func (m *appModel) openModalForActivityRow(act outlineActivityRowItem) bool {
 			m.showMinibuffer("Worklog: not found")
 			return true
 		}
-		title := fmt.Sprintf("My worklog — %s — %s", fmtTS(w.CreatedAt), actorLabel(m.db, w.AuthorID))
+		title := fmt.Sprintf("My worklog — %s — %s", fmtTS(w.CreatedAt), actorAtLabel(m.db, w.AuthorID))
 		m.openViewEntryModal(title, strings.TrimSpace(w.Body))
 		return true
 	default:
@@ -200,7 +200,7 @@ func commentsModalItems(db *store.DB, itemID string) []list.Item {
 		}
 		first = strings.TrimSpace(first)
 		indent := strings.Repeat("  ", max(0, r.Depth))
-		label := fmt.Sprintf("%s  %s  %s", fmtTS(c.CreatedAt), actorLabel(db, c.AuthorID), truncateInline(first, 120))
+		label := fmt.Sprintf("%s %s %s", fmtTS(c.CreatedAt), actorAtLabel(db, c.AuthorID), truncateInline(first, 120))
 		title := indent + label
 		items = append(items, activityModalRowItem{
 			kind:      activityModalRowComment,
@@ -228,7 +228,7 @@ func worklogModalItems(db *store.DB, itemID string) []list.Item {
 			first = first[:nl]
 		}
 		first = strings.TrimSpace(first)
-		label := fmt.Sprintf("%s  %s  %s", fmtTS(w.CreatedAt), actorLabel(db, w.AuthorID), truncateInline(first, 120))
+		label := fmt.Sprintf("%s %s %s", fmtTS(w.CreatedAt), actorAtLabel(db, w.AuthorID), truncateInline(first, 120))
 		items = append(items, activityModalRowItem{
 			kind:      activityModalRowWorklog,
 			title:     label,
@@ -249,7 +249,7 @@ func historyModalItems(db *store.DB, events []model.Event, itemID string) []list
 	items := make([]list.Item, 0, len(history))
 	for i := range history {
 		ev := history[i]
-		label := fmt.Sprintf("%s  %s  %s", fmtTS(ev.TS), actorLabel(db, ev.ActorID), eventSummary(ev))
+		label := fmt.Sprintf("%s %s %s", fmtTS(ev.TS), actorAtLabel(db, ev.ActorID), eventSummary(ev))
 		body := historyEventMarkdown(ev)
 		evCopy := ev
 		items = append(items, activityModalRowItem{
@@ -428,7 +428,7 @@ func buildActivityCommentItems(db *store.DB, itemID string, collapsed map[string
 			}
 		}
 
-		label := fmt.Sprintf("%s  %s", fmtTS(c.CreatedAt), actorLabel(db, c.AuthorID))
+		label := fmt.Sprintf("%s %s", fmtTS(c.CreatedAt), actorAtLabel(db, c.AuthorID))
 		out = append(out, outlineActivityRowItem{
 			id:             cid,
 			itemID:         itemID,
@@ -482,7 +482,7 @@ func buildActivityWorklogItems(db *store.DB, itemID string, collapsed map[string
 			}
 		}
 
-		label := fmt.Sprintf("%s  %s", fmtTS(w.CreatedAt), actorLabel(db, w.AuthorID))
+		label := fmt.Sprintf("%s %s", fmtTS(w.CreatedAt), actorAtLabel(db, w.AuthorID))
 		out = append(out, outlineActivityRowItem{
 			id:             wid,
 			itemID:         itemID,
@@ -529,7 +529,7 @@ func buildActivityHistoryItems(db *store.DB, events []model.Event, itemID string
 				collapsed[eid] = true
 			}
 		}
-		label := fmt.Sprintf("%s  %s  %s", fmtTS(ev.TS), actorLabel(db, ev.ActorID), eventSummary(ev))
+		label := fmt.Sprintf("%s %s %s", fmtTS(ev.TS), actorAtLabel(db, ev.ActorID), eventSummary(ev))
 		out = append(out, outlineActivityRowItem{
 			id:             eid,
 			itemID:         itemID,

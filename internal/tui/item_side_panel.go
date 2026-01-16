@@ -685,6 +685,40 @@ func actorLabel(db *store.DB, actorID string) string {
 	return id
 }
 
+func actorAtLabel(db *store.DB, actorID string) string {
+	id := strings.TrimSpace(actorID)
+	if id == "" || db == nil {
+		return id
+	}
+	a, ok := db.FindActor(id)
+	if !ok || a == nil {
+		return "@" + id
+	}
+
+	name := strings.TrimSpace(a.Name)
+	if name == "" {
+		name = strings.TrimSpace(a.ID)
+	}
+	if name == "" {
+		return ""
+	}
+
+	if a.Kind == model.ActorKindAgent && a.UserID != nil && strings.TrimSpace(*a.UserID) != "" {
+		userID := strings.TrimSpace(*a.UserID)
+		userName := userID
+		if u, ok := db.FindActor(userID); ok && u != nil {
+			if strings.TrimSpace(u.Name) != "" {
+				userName = strings.TrimSpace(u.Name)
+			}
+		}
+		if strings.TrimSpace(userName) != "" {
+			return fmt.Sprintf("@%s (%s)", name, userName)
+		}
+	}
+
+	return "@" + name
+}
+
 func filterEventsForItem(db *store.DB, events []model.Event, itemID string) []model.Event {
 	id := strings.TrimSpace(itemID)
 	if id == "" || len(events) == 0 {

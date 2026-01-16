@@ -130,7 +130,7 @@ func buildItemActivityOutlineRows(db *store.DB, itemID string, collapsed map[str
 					}
 				}
 
-				label := fmt.Sprintf("%s  %s", fmtTS(c.CreatedAt), actorLabel(db, c.AuthorID))
+				label := fmt.Sprintf("%s %s", fmtTS(c.CreatedAt), actorAtLabel(db, c.AuthorID))
 				commentDepth := baseDepth + 1 + r.Depth
 
 				out = append(out, outlineActivityRowItem{
@@ -195,7 +195,7 @@ func buildItemActivityOutlineRows(db *store.DB, itemID string, collapsed map[str
 						collapsed[wid] = true
 					}
 				}
-				label := fmt.Sprintf("%s  %s", fmtTS(w.CreatedAt), actorLabel(db, w.AuthorID))
+				label := fmt.Sprintf("%s %s", fmtTS(w.CreatedAt), actorAtLabel(db, w.AuthorID))
 				worklogDepth := baseDepth + 1
 				out = append(out, outlineActivityRowItem{
 					id:             wid,

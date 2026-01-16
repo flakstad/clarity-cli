@@ -7026,7 +7026,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if !ok {
 							return m, nil
 						}
-						title := fmt.Sprintf("Comment — %s — %s", fmtTS(c.CreatedAt), actorLabel(m.db, c.AuthorID))
+						title := fmt.Sprintf("Comment — %s — %s", fmtTS(c.CreatedAt), actorAtLabel(m.db, c.AuthorID))
 						body := commentMarkdownWithAttachments(m.db, c)
 						(&m).openViewEntryModalReturning(title, body, modalActivityList)
 						return m, nil
@@ -7044,7 +7044,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if !found {
 							return m, nil
 						}
-						title := fmt.Sprintf("My worklog — %s — %s", fmtTS(w.CreatedAt), actorLabel(m.db, w.AuthorID))
+						title := fmt.Sprintf("My worklog — %s — %s", fmtTS(w.CreatedAt), actorAtLabel(m.db, w.AuthorID))
 						(&m).openViewEntryModalReturning(title, strings.TrimSpace(w.Body), modalActivityList)
 						return m, nil
 					case outlineActivityHistoryEntry:
@@ -7061,7 +7061,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if !found {
 							return m, nil
 						}
-						title := fmt.Sprintf("History — %s — %s", fmtTS(ev.TS), actorLabel(m.db, ev.ActorID))
+						title := fmt.Sprintf("History — %s — %s", fmtTS(ev.TS), actorAtLabel(m.db, ev.ActorID))
 						(&m).openViewEntryModalReturning(title, strings.TrimSpace(historyEventMarkdown(ev)), modalActivityList)
 						return m, nil
 					}
