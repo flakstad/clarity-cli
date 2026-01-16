@@ -2199,24 +2199,8 @@ func (m *captureModel) openAssigneePicker(active *model.Item) {
 	}
 
 	opts := []list.Item{assigneeOptionItem{id: "", label: ""}}
-	actors := append([]model.Actor(nil), m.db.Actors...)
-	sort.Slice(actors, func(i, j int) bool {
-		ai := strings.ToLower(strings.TrimSpace(actors[i].Name))
-		aj := strings.ToLower(strings.TrimSpace(actors[j].Name))
-		if ai == aj {
-			return actors[i].ID < actors[j].ID
-		}
-		if ai == "" {
-			return false
-		}
-		if aj == "" {
-			return true
-		}
-		return ai < aj
-	})
-	for _, a := range actors {
-		lbl := actorPickerLabel(m.db, a.ID)
-		opts = append(opts, assigneeOptionItem{id: a.ID, label: lbl})
+	for _, opt := range assigneePickerOptions(m.db, cur) {
+		opts = append(opts, opt)
 	}
 
 	m.assigneeList.Title = ""
