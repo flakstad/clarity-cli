@@ -5357,6 +5357,122 @@ func selectedOutlineListItemID(l *list.Model) string {
 	}
 }
 
+func keyMsgFromActionKey(key string) (tea.KeyMsg, bool) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return tea.KeyMsg{}, false
+	}
+
+	// Common special keys.
+	switch key {
+	case "enter":
+		return tea.KeyMsg{Type: tea.KeyEnter}, true
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}, true
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}, true
+	case "backspace":
+		return tea.KeyMsg{Type: tea.KeyBackspace}, true
+	case "up":
+		return tea.KeyMsg{Type: tea.KeyUp}, true
+	case "down":
+		return tea.KeyMsg{Type: tea.KeyDown}, true
+	case "left":
+		return tea.KeyMsg{Type: tea.KeyLeft}, true
+	case "right":
+		return tea.KeyMsg{Type: tea.KeyRight}, true
+	case "shift+tab", "backtab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}, true
+	case "shift+left":
+		return tea.KeyMsg{Type: tea.KeyShiftLeft}, true
+	case "shift+right":
+		return tea.KeyMsg{Type: tea.KeyShiftRight}, true
+	case "shift+up":
+		return tea.KeyMsg{Type: tea.KeyShiftUp}, true
+	case "shift+down":
+		return tea.KeyMsg{Type: tea.KeyShiftDown}, true
+	case "pgup":
+		return tea.KeyMsg{Type: tea.KeyPgUp}, true
+	case "pgdown":
+		return tea.KeyMsg{Type: tea.KeyPgDown}, true
+	case "home":
+		return tea.KeyMsg{Type: tea.KeyHome}, true
+	case "end":
+		return tea.KeyMsg{Type: tea.KeyEnd}, true
+	case "delete":
+		return tea.KeyMsg{Type: tea.KeyDelete}, true
+	case "insert":
+		return tea.KeyMsg{Type: tea.KeyInsert}, true
+	case " ":
+		return tea.KeyMsg{Type: tea.KeySpace}, true
+	}
+
+	// ctrl+<letter>
+	if strings.HasPrefix(key, "ctrl+") {
+		rest := strings.TrimSpace(strings.TrimPrefix(key, "ctrl+"))
+		if len(rest) == 1 && rest[0] >= 'a' && rest[0] <= 'z' {
+			return tea.KeyMsg{Type: tea.KeyType(int(tea.KeyCtrlA) + int(rest[0]-'a'))}, true
+		}
+		switch rest {
+		case "@":
+			return tea.KeyMsg{Type: tea.KeyCtrlAt}, true
+		case "[":
+			return tea.KeyMsg{Type: tea.KeyCtrlOpenBracket}, true
+		case "\\":
+			return tea.KeyMsg{Type: tea.KeyCtrlBackslash}, true
+		case "]":
+			return tea.KeyMsg{Type: tea.KeyCtrlCloseBracket}, true
+		case "^":
+			return tea.KeyMsg{Type: tea.KeyCtrlCaret}, true
+		case "_":
+			return tea.KeyMsg{Type: tea.KeyCtrlUnderscore}, true
+		case "?":
+			return tea.KeyMsg{Type: tea.KeyCtrlQuestionMark}, true
+		}
+	}
+
+	// Single rune keys like "a", "A", "/", etc.
+	if r := []rune(key); len(r) == 1 {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: r}, true
+	}
+
+	return tea.KeyMsg{}, false
+}
+
+func (m appModel) runActionPanelAction(key string, a actionPanelAction) (appModel, tea.Cmd) {
+	switch a.kind {
+	case actionPanelActionNav:
+		// Root -> subpanel: push (so esc/backspace returns to root).
+		// Subpanel -> subpanel: switch (avoid infinite nesting).
+		if len(m.actionPanelStack) <= 1 {
+			(&m).pushActionPanel(a.next)
+		} else {
+			m.actionPanelStack[len(m.actionPanelStack)-1] = a.next
+		}
+		if a.next == actionPanelCapture {
+			m.captureKeySeq = nil
+		}
+		m.actionPanelSelectedKey = ""
+		m.ensureActionPanelSelection()
+		return m, nil
+	default:
+		// Execute and close (panel takes over keys; only listed keys run).
+		(&m).closeActionPanel()
+		if a.handler != nil {
+			return a.handler(m)
+		}
+		km, ok := keyMsgFromActionKey(key)
+		if !ok {
+			return m, nil
+		}
+		m2Any, cmd := m.Update(km)
+		if m2, ok := m2Any.(appModel); ok {
+			return m2, cmd
+		}
+		return m, cmd
+	}
+}
+
 func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.modal == modalCapture {
 		if m.capture == nil {
@@ -5543,53 +5659,24 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					// Fall through to normal key handling (e.g. ctrl+g/backspace handled above).
 				}
-				// If the current panel has no explicit "enter" binding, allow Enter to execute
-				// the currently selected action key.
-				if km.String() == "enter" {
-					if _, ok := actions["enter"]; !ok {
-						k := strings.TrimSpace(m.actionPanelSelectedKey)
-						if k != "" {
-							if a, ok := actions[k]; ok {
-								(&m).closeActionPanel()
-								if a.handler != nil {
-									m2, cmd := a.handler(m)
-									return m2, cmd
-								}
-								return m, nil
-							}
-						}
+				// Enter always executes the current selection in the action panel (including
+				// selecting a literal "enter" entry), rather than forwarding Enter to the
+				// underlying view.
+				if km.String() == "enter" && panelKind != actionPanelCapture {
+					k := strings.TrimSpace(m.actionPanelSelectedKey)
+					if k == "" {
 						return m, nil
 					}
+					if a, ok := actions[k]; ok {
+						m2, cmd := m.runActionPanelAction(k, a)
+						return m2, cmd
+					}
+					return m, nil
 				}
+
 				if a, ok := actions[km.String()]; ok {
-					switch a.kind {
-					case actionPanelActionNav:
-						// Root -> subpanel: push (so esc/backspace returns to root).
-						// Subpanel -> subpanel: switch (avoid infinite nesting).
-						if len(m.actionPanelStack) <= 1 {
-							(&m).pushActionPanel(a.next)
-						} else {
-							m.actionPanelStack[len(m.actionPanelStack)-1] = a.next
-						}
-						if a.next == actionPanelCapture {
-							m.captureKeySeq = nil
-						}
-						m.actionPanelSelectedKey = ""
-						m.ensureActionPanelSelection()
-						return m, nil
-					default:
-						// Execute and close (panel takes over keys; only listed keys run).
-						(&m).closeActionPanel()
-						if a.handler != nil {
-							m2, cmd := a.handler(m)
-							return m2, cmd
-						}
-						m2Any, cmd := m.Update(km)
-						if m2, ok := m2Any.(appModel); ok {
-							return m2, cmd
-						}
-						return m, cmd
-					}
+					m2, cmd := m.runActionPanelAction(km.String(), a)
+					return m2, cmd
 				}
 			}
 			return m, nil

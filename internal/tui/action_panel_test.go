@@ -144,6 +144,55 @@ func TestActionPanel_ExecutesActionAndCloses(t *testing.T) {
 	}
 }
 
+func TestActionPanel_EnterExecutesSelection_EvenWhenEnterIsActionKey(t *testing.T) {
+	t.Setenv("CLARITY_CONFIG_DIR", t.TempDir())
+
+	dir := t.TempDir()
+	s := store.Store{Dir: dir}
+
+	actorID := "act-human"
+	now := time.Now().UTC()
+	db := &store.DB{
+		CurrentActorID: actorID,
+		Actors:         []model.Actor{{ID: actorID, Kind: model.ActorKindHuman, Name: "human"}},
+		Projects: []model.Project{{
+			ID:        "proj-a",
+			Name:      "Project A",
+			CreatedBy: actorID,
+			CreatedAt: now,
+		}},
+	}
+	if err := s.Save(db); err != nil {
+		t.Fatalf("save db: %v", err)
+	}
+
+	m := newAppModel(dir, db)
+	m.view = viewProjects
+
+	// Open panel with x.
+	mAny, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m2 := mAny.(appModel)
+	if m2.modal != modalActionPanel {
+		t.Fatalf("expected modalActionPanel, got %v", m2.modal)
+	}
+
+	// In viewProjects the action list includes an explicit "enter" key, but Enter should still
+	// run the currently selected action rather than forwarding Enter to the underlying list.
+	m2.actionPanelSelectedKey = "g"
+
+	mAny, _ = m2.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m3 := mAny.(appModel)
+	if m3.modal != modalActionPanel {
+		t.Fatalf("expected modalActionPanel after Enter executes selection, got %v", m3.modal)
+	}
+	if got := m3.curActionPanelKind(); got != actionPanelNav {
+		t.Fatalf("expected Enter to execute selected 'g' nav action; got panel kind %v", got)
+	}
+	if got := m3.view; got != viewProjects {
+		t.Fatalf("expected viewProjects to remain while action panel is open; got %v", got)
+	}
+}
+
 func TestActionPanel_GlobalKeys_OpenPanels(t *testing.T) {
 	t.Setenv("CLARITY_CONFIG_DIR", t.TempDir())
 
