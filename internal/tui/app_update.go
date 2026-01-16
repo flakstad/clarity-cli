@@ -1010,8 +1010,40 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			prevSelID := selectedOutlineListSelectionID(&m.itemsList)
+			prevAct, prevActOK := activityFocusFromListSelection(&m.itemsList)
 			var cmd tea.Cmd
 			m.itemsList, cmd = m.itemsList.Update(msg)
+			// Special navigation: when leaving a comment row, Down should go to the first reply (not the body line).
+			if km, ok := msg.(tea.KeyMsg); ok {
+				switch km.String() {
+				case "down", "j", "ctrl+n":
+					if prevActOK && prevAct.kind == outlineActivityComment && strings.TrimSpace(prevAct.id) != "" {
+						collapsed := m.collapsedState()
+						if (prevAct.hasChildren || prevAct.hasDescription) && !collapsed[prevAct.id] {
+							if desc, ok := m.itemsList.SelectedItem().(outlineDescRowItem); ok && strings.TrimSpace(desc.parentID) == strings.TrimSpace(prevAct.id) {
+								items := m.itemsList.Items()
+								idx := m.itemsList.Index()
+								for i := idx + 1; i >= 0 && i < len(items); i++ {
+									act, ok := items[i].(outlineActivityRowItem)
+									if !ok {
+										continue
+									}
+									if act.kind != outlineActivityComment {
+										continue
+									}
+									if act.depth == prevAct.depth+1 {
+										selectListItemByID(&m.itemsList, act.id)
+										break
+									}
+									if act.depth <= prevAct.depth {
+										break
+									}
+								}
+							}
+						}
+					}
+				}
+			}
 			m.maybeUpdateActivityFocus(prevSelID)
 			return m, cmd
 		}

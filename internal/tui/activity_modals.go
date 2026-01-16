@@ -346,6 +346,53 @@ func (m *appModel) updateActivityModalFocus(prevSelID string) {
 		return
 	}
 
+	if m.activityModalKind == activityModalKindComments && act.kind == outlineActivityComment {
+		keepOpen := map[string]bool{}
+		parentByID := map[string]string{}
+		for _, c := range m.db.CommentsForItem(m.activityModalItemID) {
+			cid := strings.TrimSpace(c.ID)
+			if cid == "" || c.ReplyToCommentID == nil {
+				continue
+			}
+			pid := strings.TrimSpace(*c.ReplyToCommentID)
+			if pid == "" {
+				continue
+			}
+			parentByID[cid] = pid
+		}
+		cur := strings.TrimSpace(act.id)
+		seen := map[string]bool{}
+		for cur != "" && !seen[cur] {
+			seen[cur] = true
+			keepOpen[cur] = true
+			cur = strings.TrimSpace(parentByID[cur])
+		}
+
+		for _, li := range m.activityModalList.Items() {
+			other, ok := li.(outlineActivityRowItem)
+			if !ok || other.kind != outlineActivityComment {
+				continue
+			}
+			oid := strings.TrimSpace(other.id)
+			if oid == "" {
+				continue
+			}
+			if keepOpen[oid] {
+				if m.activityModalCollapsed[oid] {
+					m.activityModalCollapsed[oid] = false
+				}
+				continue
+			}
+			if (other.hasChildren || other.hasDescription) && !m.activityModalCollapsed[oid] {
+				m.activityModalCollapsed[oid] = true
+			}
+		}
+
+		m.refreshActivityModalItems()
+		selectListItemByID(&m.activityModalList, act.id)
+		return
+	}
+
 	// Collapse all other entries.
 	for _, li := range m.activityModalList.Items() {
 		other, ok := li.(outlineActivityRowItem)
