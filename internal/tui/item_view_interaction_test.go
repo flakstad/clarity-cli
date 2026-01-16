@@ -387,13 +387,18 @@ func TestItemView_TabCollapse_IsIsolatedFromOutlineCollapse(t *testing.T) {
 	}
 
 	// Toggle collapse in item view (should not affect outline's collapsed map).
+	itemPre := m2.itemCollapsed["item-root"]
+	outlinePre := m2.collapsed["item-root"]
 	mAny, _ = m2.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m3 := mAny.(appModel)
 	if m3.itemCollapsed == nil {
 		t.Fatalf("expected itemCollapsed to exist")
 	}
-	if m3.itemCollapsed["item-root"] == m3.collapsed["item-root"] {
-		t.Fatalf("expected itemCollapsed[item-root] to diverge from outline collapsed[item-root]")
+	if m3.collapsed["item-root"] != outlinePre {
+		t.Fatalf("expected outline collapsed[item-root] to remain %v, got %v", outlinePre, m3.collapsed["item-root"])
+	}
+	if m3.itemCollapsed["item-root"] == itemPre {
+		t.Fatalf("expected itemCollapsed[item-root] to toggle from %v", itemPre)
 	}
 
 	// Back to outline: outline collapsed state should remain unchanged.

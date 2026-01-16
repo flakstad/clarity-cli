@@ -3899,6 +3899,9 @@ func (m *appModel) refreshItemSubtree(outline model.Outline, rootItemID string) 
 		}
 		inSubtree[id] = true
 	}
+	// If the current selection is an activity entry, ensure the relevant roots/ancestors are
+	// expanded so the selection can be restored after refreshes.
+	m.ensureActivitySelectionVisibleInCollapsedMap(collapsed, inSubtree, curSelID)
 
 	// Build the item slice for flattenOutline.
 	var its []model.Item
@@ -5361,6 +5364,10 @@ func listHasItemID(l *list.Model, id string) bool {
 			if strings.TrimSpace(it.row.item.ID) == id {
 				return true
 			}
+		case outlineActivityRowItem:
+			if strings.TrimSpace(it.id) == id {
+				return true
+			}
 		case agendaRowItem:
 			if strings.TrimSpace(it.row.item.ID) == id {
 				return true
@@ -5372,6 +5379,94 @@ func listHasItemID(l *list.Model, id string) bool {
 		}
 	}
 	return false
+}
+
+func (m *appModel) expandOneLevelInItemView(rootID string) {
+	if m == nil || m.db == nil {
+		return
+	}
+	rootID = strings.TrimSpace(rootID)
+	if rootID == "" {
+		return
+	}
+	collapsed := m.collapsedState()
+	collapsed[rootID] = false
+
+	// Ensure first-level children are visible but collapsed.
+	for _, it := range m.db.Items {
+		if it.Archived {
+			continue
+		}
+		if it.ParentID == nil || strings.TrimSpace(*it.ParentID) != rootID {
+			continue
+		}
+		childID := strings.TrimSpace(it.ID)
+		if childID == "" {
+			continue
+		}
+		collapsed[childID] = true
+	}
+}
+
+func (m *appModel) ensureActivitySelectionVisibleInCollapsedMap(collapsed map[string]bool, subtreeIDs map[string]bool, selectionID string) {
+	if m == nil || m.db == nil || collapsed == nil {
+		return
+	}
+	selectionID = strings.TrimSpace(selectionID)
+	if selectionID == "" {
+		return
+	}
+
+	// Worklog entry: ensure worklog root is expanded.
+	for id := range subtreeIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		for _, w := range m.db.WorklogForItem(id) {
+			if strings.TrimSpace(w.ID) != selectionID {
+				continue
+			}
+			collapsed[activityWorklogRootID(id)] = false
+			collapsed[selectionID] = false
+			return
+		}
+	}
+
+	// Comment entry: ensure comments root and ancestor chain are expanded.
+	for id := range subtreeIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		comments := m.db.CommentsForItem(id)
+		parentByID := map[string]string{}
+		for _, c := range comments {
+			cid := strings.TrimSpace(c.ID)
+			if cid == "" || c.ReplyToCommentID == nil {
+				continue
+			}
+			pid := strings.TrimSpace(*c.ReplyToCommentID)
+			if pid == "" {
+				continue
+			}
+			parentByID[cid] = pid
+		}
+		for _, c := range comments {
+			if strings.TrimSpace(c.ID) != selectionID {
+				continue
+			}
+			collapsed[activityCommentsRootID(id)] = false
+			cur := selectionID
+			seen := map[string]bool{}
+			for cur != "" && !seen[cur] {
+				seen[cur] = true
+				collapsed[cur] = false
+				cur = strings.TrimSpace(parentByID[cur])
+			}
+			return
+		}
+	}
 }
 
 func (m *appModel) refreshAfterItemChange(itemID string) {
@@ -5400,13 +5495,18 @@ func (m *appModel) refreshAfterItemChange(itemID string) {
 	// In the full-screen item view, keep the left list narrowed to openItemID.
 	if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
 		rootID := strings.TrimSpace(m.openItemID)
+		restoreSel := selectedOutlineListSelectionID(&m.itemsList)
 		m.itemListRootID = ""
 		m.refreshItemSubtree(*m.selectedOutline, rootID)
-		if itemID == "" || !listHasItemID(&m.itemsList, itemID) {
-			selectListItemByID(&m.itemsList, rootID)
-		} else {
-			selectListItemByID(&m.itemsList, itemID)
+		if restoreSel != "" && listHasItemID(&m.itemsList, restoreSel) {
+			selectListItemByID(&m.itemsList, restoreSel)
+			return
 		}
+		if itemID != "" && listHasItemID(&m.itemsList, itemID) {
+			selectListItemByID(&m.itemsList, itemID)
+			return
+		}
+		selectListItemByID(&m.itemsList, rootID)
 		return
 	}
 
@@ -8215,6 +8315,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.showPreview = false
 					m.previewCacheForID = ""
 					m.itemListRootID = ""
+					m.expandOneLevelInItemView(m.openItemID)
 					(&m).refreshItemSubtree(it.outline, m.openItemID)
 					selectListItemByID(&m.itemsList, m.openItemID)
 					return m, nil
@@ -12686,8 +12787,6 @@ func (m *appModel) jumpToItemByID(itemID string) error {
 
 	if ol, ok := m.db.FindOutline(m.selectedOutlineID); ok && ol != nil {
 		m.selectedOutline = ol
-		m.refreshItemSubtree(*ol, itemID)
-		selectListItemByID(&m.itemsList, itemID)
 	}
 
 	m.view = viewItem
@@ -12708,6 +12807,11 @@ func (m *appModel) jumpToItemByID(itemID string) error {
 		m.itemNavStack = nil
 	}
 	m.itemListRootID = itemID
+	if m.selectedOutline != nil {
+		m.expandOneLevelInItemView(m.openItemID)
+		m.refreshItemSubtree(*m.selectedOutline, m.openItemID)
+		selectListItemByID(&m.itemsList, m.openItemID)
+	}
 	return nil
 }
 

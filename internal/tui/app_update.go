@@ -435,6 +435,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.openItemID = it.row.item.ID
 					(&m).recordRecentItemVisit(m.openItemID)
 					m.view = viewItem
+					m.itemCollapsed = copyBoolMap(m.collapsed)
 					m.itemArchivedReadOnly = false
 					m.itemFocus = itemFocusComments
 					m.itemCommentIdx = 0
@@ -450,6 +451,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.itemsListActive != nil {
 						*m.itemsListActive = true
 					}
+					m.itemListRootID = ""
+					(&m).expandOneLevelInItemView(m.openItemID)
+					(&m).refreshItemSubtree(it.outline, m.openItemID)
+					selectListItemByID(&m.itemsList, m.openItemID)
 					return m, nil
 				}
 			case viewArchived:
@@ -467,6 +472,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.openItemID = id
 					m.view = viewItem
+					m.itemCollapsed = copyBoolMap(m.collapsed)
 					m.itemArchivedReadOnly = true
 					m.itemFocus = itemFocusComments
 					m.itemCommentIdx = 0
@@ -481,6 +487,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.pane = paneOutline
 					if m.itemsListActive != nil {
 						*m.itemsListActive = true
+					}
+					if m.selectedOutline != nil {
+						m.itemListRootID = ""
+						(&m).expandOneLevelInItemView(m.openItemID)
+						(&m).refreshItemSubtree(*m.selectedOutline, m.openItemID)
+						selectListItemByID(&m.itemsList, m.openItemID)
 					}
 					return m, nil
 				}
@@ -828,6 +840,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.openItemID = strings.TrimSpace(toID)
 				(&m).recordRecentItemVisit(m.openItemID)
 				m.itemListRootID = ""
+				(&m).expandOneLevelInItemView(m.openItemID)
 				m.refreshItemSubtree(*outline, m.openItemID)
 				selectListItemByID(&m.itemsList, m.openItemID)
 				return m, nil
