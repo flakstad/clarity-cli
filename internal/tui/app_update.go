@@ -787,13 +787,6 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 			(&m).openHistoryModal(itemID)
 			return m, nil
 		case "tab":
-			if act, ok := m.itemsList.SelectedItem().(outlineActivityRowItem); ok && (act.hasChildren || act.hasDescription) {
-				collapsed := m.collapsedState()
-				collapsed[act.id] = !collapsed[act.id]
-				m.refreshItemSubtree(*outline, rootID)
-				selectListItemByID(&m.itemsList, act.id)
-				return m, nil
-			}
 			m.toggleCollapseSelected()
 			return m, nil
 		case "shift+tab", "backtab":
@@ -987,27 +980,43 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.showMinibuffer("Archived item: read-only")
 					return m, nil
 				}
-				m.openTextModal(modalAddComment, rowID, "Comment…", "")
+				itemID := rowID
+				if act, ok := selectedOutlineActivityRow(&m.itemsList); ok {
+					if id := strings.TrimSpace(act.itemID); id != "" {
+						itemID = id
+					}
+				}
+				m.openTextModal(modalAddComment, itemID, "Comment…", "")
 				return m, nil
 			case "w":
 				if m.itemArchivedReadOnly {
 					m.showMinibuffer("Archived item: read-only")
 					return m, nil
 				}
-				m.openTextModal(modalAddWorklog, rowID, "My worklog…", "")
+				itemID := rowID
+				if act, ok := selectedOutlineActivityRow(&m.itemsList); ok {
+					if id := strings.TrimSpace(act.itemID); id != "" {
+						itemID = id
+					}
+				}
+				m.openTextModal(modalAddWorklog, itemID, "My worklog…", "")
 				return m, nil
 			case "R":
 				if m.itemArchivedReadOnly {
 					m.showMinibuffer("Archived item: read-only")
 					return m, nil
 				}
-				act, ok := m.itemsList.SelectedItem().(outlineActivityRowItem)
+				act, ok := selectedOutlineActivityRow(&m.itemsList)
 				if !ok || act.kind != outlineActivityComment {
+					if ok && act.kind == outlineActivityCommentsRoot {
+						m.showMinibuffer("Reply: select a comment")
+						return m, nil
+					}
 					return m, nil
 				}
-				itemID := strings.TrimSpace(act.itemID)
-				if itemID == "" {
-					itemID = rootID
+				itemID := rowID
+				if id := strings.TrimSpace(act.itemID); id != "" {
+					itemID = id
 				}
 				c, ok := findCommentByID(m.db.CommentsForItem(itemID), act.commentID)
 				if !ok {

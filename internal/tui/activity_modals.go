@@ -339,7 +339,116 @@ func (m *appModel) toggleActivityModalCollapseSelected() {
 	if m.activityModalCollapsed == nil {
 		m.activityModalCollapsed = map[string]bool{}
 	}
-	m.activityModalCollapsed[act.id] = !m.activityModalCollapsed[act.id]
+	collapsed := m.activityModalCollapsed
+
+	switch act.kind {
+	case outlineActivityCommentsRoot:
+		comments := m.db.CommentsForItem(m.activityModalItemID)
+		cids := make([]string, 0, len(comments))
+		for _, c := range comments {
+			cid := strings.TrimSpace(c.ID)
+			if cid != "" {
+				cids = append(cids, cid)
+			}
+		}
+		anyExpanded := false
+		allCollapsed := true
+		for _, cid := range cids {
+			if !collapsed[cid] {
+				anyExpanded = true
+				allCollapsed = false
+			}
+		}
+		if collapsed[act.id] {
+			collapsed[act.id] = false
+			for _, cid := range cids {
+				collapsed[cid] = true
+			}
+		} else if anyExpanded {
+			collapsed[act.id] = true
+			for _, cid := range cids {
+				collapsed[cid] = true
+			}
+		} else if allCollapsed {
+			for _, cid := range cids {
+				collapsed[cid] = false
+			}
+		} else {
+			collapsed[act.id] = true
+		}
+
+	case outlineActivityComment:
+		comments := m.db.CommentsForItem(m.activityModalItemID)
+		desc := commentDescendantIDs(comments, act.id)
+		descExpanded := false
+		for _, id := range desc {
+			if !collapsed[id] {
+				descExpanded = true
+				break
+			}
+		}
+		if collapsed[act.id] {
+			collapsed[act.id] = false
+			for _, id := range desc {
+				collapsed[id] = true
+			}
+		} else {
+			if len(desc) == 0 {
+				collapsed[act.id] = true
+			} else if descExpanded {
+				collapsed[act.id] = true
+				for _, id := range desc {
+					collapsed[id] = true
+				}
+			} else {
+				for _, id := range desc {
+					collapsed[id] = false
+				}
+			}
+		}
+
+	case outlineActivityWorklogRoot:
+		worklog := m.db.WorklogForItem(m.activityModalItemID)
+		wids := make([]string, 0, len(worklog))
+		for _, w := range worklog {
+			wid := strings.TrimSpace(w.ID)
+			if wid != "" {
+				wids = append(wids, wid)
+			}
+		}
+		anyExpanded := false
+		allCollapsed := true
+		for _, wid := range wids {
+			if !collapsed[wid] {
+				anyExpanded = true
+				allCollapsed = false
+			}
+		}
+		if collapsed[act.id] {
+			collapsed[act.id] = false
+			for _, wid := range wids {
+				collapsed[wid] = true
+			}
+		} else if anyExpanded {
+			collapsed[act.id] = true
+			for _, wid := range wids {
+				collapsed[wid] = true
+			}
+		} else if allCollapsed {
+			for _, wid := range wids {
+				collapsed[wid] = false
+			}
+		} else {
+			collapsed[act.id] = true
+		}
+
+	case outlineActivityWorklogEntry:
+		collapsed[act.id] = !collapsed[act.id]
+
+	default:
+		collapsed[act.id] = !collapsed[act.id]
+	}
+
 	m.refreshActivityModalItems()
 	selectListItemByID(&m.activityModalList, act.id)
 }

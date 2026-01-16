@@ -5547,6 +5547,66 @@ func selectedOutlineListItemID(l *list.Model) string {
 	}
 }
 
+func selectedOutlineActivityRow(l *list.Model) (outlineActivityRowItem, bool) {
+	if l == nil {
+		return outlineActivityRowItem{}, false
+	}
+	switch it := l.SelectedItem().(type) {
+	case outlineActivityRowItem:
+		return it, true
+	case outlineDescRowItem:
+		pid := strings.TrimSpace(it.parentID)
+		if pid == "" {
+			return outlineActivityRowItem{}, false
+		}
+		for _, li := range l.Items() {
+			act, ok := li.(outlineActivityRowItem)
+			if !ok {
+				continue
+			}
+			if strings.TrimSpace(act.id) == pid {
+				return act, true
+			}
+		}
+		return outlineActivityRowItem{}, false
+	default:
+		return outlineActivityRowItem{}, false
+	}
+}
+
+func commentDescendantIDs(comments []model.Comment, rootCommentID string) []string {
+	rootCommentID = strings.TrimSpace(rootCommentID)
+	if rootCommentID == "" || len(comments) == 0 {
+		return nil
+	}
+	children := map[string][]string{}
+	for _, c := range comments {
+		cid := strings.TrimSpace(c.ID)
+		if cid == "" || c.ReplyToCommentID == nil {
+			continue
+		}
+		pid := strings.TrimSpace(*c.ReplyToCommentID)
+		if pid == "" {
+			continue
+		}
+		children[pid] = append(children[pid], cid)
+	}
+	var out []string
+	stack := append([]string(nil), children[rootCommentID]...)
+	seen := map[string]bool{}
+	for len(stack) > 0 {
+		cur := strings.TrimSpace(stack[len(stack)-1])
+		stack = stack[:len(stack)-1]
+		if cur == "" || seen[cur] {
+			continue
+		}
+		seen[cur] = true
+		out = append(out, cur)
+		stack = append(stack, children[cur]...)
+	}
+	return out
+}
+
 func keyMsgFromActionKey(key string) (tea.KeyMsg, bool) {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -7971,10 +8031,48 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.openTextModal(modalAddComment, it.row.item.ID, "Write a comment…", "")
 				return m, nil
 			}
+			if act, ok := selectedOutlineActivityRow(&m.itemsList); ok {
+				itemID := strings.TrimSpace(act.itemID)
+				if itemID != "" {
+					m.openTextModal(modalAddComment, itemID, "Write a comment…", "")
+					return m, nil
+				}
+			}
 		case "w":
 			// Add worklog entry to selected item.
 			if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
 				m.openTextModal(modalAddWorklog, it.row.item.ID, "Log work…", "")
+				return m, nil
+			}
+			if act, ok := selectedOutlineActivityRow(&m.itemsList); ok {
+				itemID := strings.TrimSpace(act.itemID)
+				if itemID != "" {
+					m.openTextModal(modalAddWorklog, itemID, "Log work…", "")
+					return m, nil
+				}
+			}
+		case "R":
+			// Reply to selected comment.
+			if act, ok := selectedOutlineActivityRow(&m.itemsList); ok {
+				if act.kind == outlineActivityCommentsRoot {
+					m.showMinibuffer("Reply: select a comment")
+					return m, nil
+				}
+				if act.kind != outlineActivityComment {
+					return m, nil
+				}
+				itemID := strings.TrimSpace(act.itemID)
+				if itemID == "" || m.db == nil {
+					return m, nil
+				}
+				c, ok := findCommentByID(m.db.CommentsForItem(itemID), act.commentID)
+				if !ok {
+					return m, nil
+				}
+				quote := truncateInline(c.Body, 280)
+				m.replyQuoteMD = fmt.Sprintf("> %s %s\n> %s", fmtTS(c.CreatedAt), actorAtLabel(m.db, c.AuthorID), quote)
+				m.openTextModal(modalReplyComment, itemID, "Reply…", "")
+				m.modalForKey = strings.TrimSpace(c.ID)
 				return m, nil
 			}
 		case "p":
@@ -9315,16 +9413,153 @@ func (m *appModel) navToParent() {
 }
 
 func (m *appModel) toggleCollapseSelected() {
-	if act, ok := m.itemsList.SelectedItem().(outlineActivityRowItem); ok {
+	if act, ok := selectedOutlineActivityRow(&m.itemsList); ok {
 		if !act.hasChildren && !act.hasDescription {
 			return
 		}
-		collapsed := m.collapsedState()
-		collapsed[act.id] = !collapsed[act.id]
-
 		if m.db == nil {
 			return
 		}
+		collapsed := m.collapsedState()
+
+		// Activity rows cycle like outline items:
+		// - collapsed
+		// - open first layer (replies/entries visible, but collapsed)
+		// - open all layers (replies expanded)
+		switch act.kind {
+		case outlineActivityCommentsRoot:
+			itemID := strings.TrimSpace(act.itemID)
+			if itemID == "" {
+				itemID = strings.TrimSpace(m.openItemID)
+			}
+			comments := m.db.CommentsForItem(itemID)
+			cids := make([]string, 0, len(comments))
+			for _, c := range comments {
+				cid := strings.TrimSpace(c.ID)
+				if cid != "" {
+					cids = append(cids, cid)
+				}
+			}
+			anyExpanded := false
+			allCollapsed := true
+			for _, cid := range cids {
+				if !collapsed[cid] {
+					anyExpanded = true
+				}
+				if !collapsed[cid] {
+					allCollapsed = false
+				}
+			}
+			if collapsed[act.id] {
+				// collapsed -> open first layer (show rows, keep threads collapsed)
+				collapsed[act.id] = false
+				for _, cid := range cids {
+					collapsed[cid] = true
+				}
+			} else if anyExpanded {
+				// open all/mixed -> collapsed
+				collapsed[act.id] = true
+				for _, cid := range cids {
+					collapsed[cid] = true
+				}
+			} else if allCollapsed {
+				// open first layer -> open all
+				for _, cid := range cids {
+					collapsed[cid] = false
+				}
+			} else {
+				// default fallback: collapse
+				collapsed[act.id] = true
+			}
+
+		case outlineActivityComment:
+			itemID := strings.TrimSpace(act.itemID)
+			if itemID == "" {
+				itemID = strings.TrimSpace(m.openItemID)
+			}
+			comments := m.db.CommentsForItem(itemID)
+			desc := commentDescendantIDs(comments, act.id)
+
+			descExpanded := false
+			for _, id := range desc {
+				if !collapsed[id] {
+					descExpanded = true
+					break
+				}
+			}
+
+			if collapsed[act.id] {
+				// collapsed -> open first layer
+				collapsed[act.id] = false
+				for _, id := range desc {
+					collapsed[id] = true
+				}
+			} else {
+				// expanded -> open all OR collapse, depending on descendant state
+				if len(desc) == 0 {
+					collapsed[act.id] = true
+				} else if descExpanded {
+					// open all/mixed -> collapsed
+					collapsed[act.id] = true
+					for _, id := range desc {
+						collapsed[id] = true
+					}
+				} else {
+					// open first layer -> open all
+					for _, id := range desc {
+						collapsed[id] = false
+					}
+				}
+			}
+
+		case outlineActivityWorklogRoot:
+			itemID := strings.TrimSpace(act.itemID)
+			if itemID == "" {
+				itemID = strings.TrimSpace(m.openItemID)
+			}
+			worklog := m.db.WorklogForItem(itemID)
+			wids := make([]string, 0, len(worklog))
+			for _, w := range worklog {
+				wid := strings.TrimSpace(w.ID)
+				if wid != "" {
+					wids = append(wids, wid)
+				}
+			}
+			anyExpanded := false
+			allCollapsed := true
+			for _, wid := range wids {
+				if !collapsed[wid] {
+					anyExpanded = true
+				}
+				if !collapsed[wid] {
+					allCollapsed = false
+				}
+			}
+			if collapsed[act.id] {
+				collapsed[act.id] = false
+				for _, wid := range wids {
+					collapsed[wid] = true
+				}
+			} else if anyExpanded {
+				collapsed[act.id] = true
+				for _, wid := range wids {
+					collapsed[wid] = true
+				}
+			} else if allCollapsed {
+				for _, wid := range wids {
+					collapsed[wid] = false
+				}
+			} else {
+				collapsed[act.id] = true
+			}
+
+		case outlineActivityWorklogEntry:
+			collapsed[act.id] = !collapsed[act.id]
+
+		default:
+			collapsed[act.id] = !collapsed[act.id]
+		}
+
 		var outline model.Outline
 		if m.selectedOutline != nil {
 			outline = *m.selectedOutline
