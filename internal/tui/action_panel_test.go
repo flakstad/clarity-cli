@@ -987,6 +987,11 @@ func TestActionPanel_ItemView_ShowsItemSectionAndItemActions(t *testing.T) {
 			t.Fatalf("expected action panel to contain %q; got:\n%s", want, out)
 		}
 	}
+
+	// Global actions should still be listed from focused item contexts (e.g. x W).
+	if !strings.Contains(out, "Workspaces…") {
+		t.Fatalf("expected action panel to contain %q; got:\n%s", "Workspaces…", out)
+	}
 }
 
 func TestActionPanel_DetailPane_FocusedItemGrouping(t *testing.T) {

@@ -655,13 +655,10 @@ func (m appModel) actionPanelKeyLayout() actionPanelKeyLayout {
 			addSection("Item", []string{"e", "D", "p", "o", "A", "u", "t", "d", "s", " ", "C", "R", "w", "V", "m", "y", "Y", "r"})
 
 			globalKeys := []string{}
-			for _, k := range []string{"g", "a", "c"} {
-				if a, ok := actions[k]; ok && a.kind == actionPanelActionNav {
+			for _, k := range []string{"g", "a", "W", "s", "c", "ctrl+t", "q"} {
+				if _, ok := actions[k]; ok {
 					globalKeys = append(globalKeys, k)
 				}
-			}
-			if _, ok := actions["q"]; ok {
-				globalKeys = append(globalKeys, "q")
 			}
 			addSection("Global", globalKeys)
 
@@ -679,15 +676,29 @@ func (m appModel) actionPanelKeyLayout() actionPanelKeyLayout {
 			})
 
 			globalKeys := []string{}
-			for _, k := range []string{"g", "a", "c"} {
-				if a, ok := actions[k]; ok && a.kind == actionPanelActionNav {
+			for _, k := range []string{"g", "a", "W", "s", "c", "ctrl+t", "q"} {
+				if _, ok := actions[k]; ok {
 					globalKeys = append(globalKeys, k)
 				}
 			}
-			if _, ok := actions["q"]; ok {
-				globalKeys = append(globalKeys, "q")
-			}
 			addSection("Global", globalKeys)
+		}
+
+		// Ensure all available keybindings appear, even if we didn't explicitly group them above.
+		rest := make([]string, 0, len(entries))
+		for _, e := range entries {
+			if seen[e.key] {
+				continue
+			}
+			rest = append(rest, e.key)
+		}
+		sort.Strings(rest)
+		got := []string{}
+		for _, k := range rest {
+			addKey(k, &got)
+		}
+		if len(got) > 0 {
+			sections = append(sections, actionPanelKeySection{header: "Other", keys: got})
 		}
 	} else {
 		// Default: show remaining actions in sorted order.
@@ -2672,13 +2683,10 @@ func (m appModel) renderActionPanel() string {
 			addSection("Item", []string{"e", "D", "p", "o", "A", "u", "t", "d", "s", " ", "C", "R", "w", "V", "m", "y", "Y", "r"})
 
 			globalKeys := []string{}
-			for _, k := range []string{"g", "a", "c"} {
-				if a, ok := actions[k]; ok && a.kind == actionPanelActionNav {
+			for _, k := range []string{"g", "a", "W", "s", "c", "ctrl+t", "q"} {
+				if _, ok := actions[k]; ok {
 					globalKeys = append(globalKeys, k)
 				}
-			}
-			if _, ok := actions["q"]; ok {
-				globalKeys = append(globalKeys, "q")
 			}
 			addSection("Global", globalKeys)
 
@@ -2704,16 +2712,31 @@ func (m appModel) renderActionPanel() string {
 
 			// Global entrypoints.
 			globalKeys := []string{}
-			for _, k := range []string{"g", "a", "c"} {
-				if a, ok := actions[k]; ok && a.kind == actionPanelActionNav {
+			for _, k := range []string{"g", "a", "W", "s", "c", "ctrl+t", "q"} {
+				if _, ok := actions[k]; ok {
 					globalKeys = append(globalKeys, k)
 				}
 			}
-			// Quit is always global.
-			if _, ok := actions["q"]; ok {
-				globalKeys = append(globalKeys, "q")
-			}
 			addSection("Global", globalKeys)
+		}
+
+		// Ensure all available keybindings appear, even if we didn't explicitly group them above.
+		rest := make([]string, 0, len(entries))
+		for _, e := range entries {
+			if seen[e.key] {
+				continue
+			}
+			rest = append(rest, e.key)
+		}
+		sort.Strings(rest)
+		cells := []string{}
+		for _, k := range rest {
+			addKey(k, &cells)
+		}
+		if len(cells) > 0 {
+			lns := []string{strings.ToUpper("Other")}
+			lns = append(lns, cells...)
+			blocks = append(blocks, sectionBlock{header: "Other", lines: lns})
 		}
 	} else {
 		// Default: show remaining actions in sorted order.
