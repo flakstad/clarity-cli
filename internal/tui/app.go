@@ -5417,7 +5417,8 @@ func (m *appModel) ensureActivitySelectionVisibleInCollapsedMap(collapsed map[st
 		return
 	}
 
-	// Worklog entry: ensure worklog root is expanded.
+	// Worklog entry: ensure the parent item and worklog root are expanded.
+	// Note: the entry row is still visible when collapsed; only its description is hidden.
 	for id := range subtreeIDs {
 		id = strings.TrimSpace(id)
 		if id == "" {
@@ -5427,13 +5428,14 @@ func (m *appModel) ensureActivitySelectionVisibleInCollapsedMap(collapsed map[st
 			if strings.TrimSpace(w.ID) != selectionID {
 				continue
 			}
+			collapsed[id] = false
 			collapsed[activityWorklogRootID(id)] = false
-			collapsed[selectionID] = false
 			return
 		}
 	}
 
-	// Comment entry: ensure comments root and ancestor chain are expanded.
+	// Comment entry: ensure the parent item, comments root, and ancestor chain are expanded.
+	// Note: the selected comment row is visible when collapsed; only its description/replies are hidden.
 	for id := range subtreeIDs {
 		id = strings.TrimSpace(id)
 		if id == "" {
@@ -5456,8 +5458,9 @@ func (m *appModel) ensureActivitySelectionVisibleInCollapsedMap(collapsed map[st
 			if strings.TrimSpace(c.ID) != selectionID {
 				continue
 			}
+			collapsed[id] = false
 			collapsed[activityCommentsRootID(id)] = false
-			cur := selectionID
+			cur := strings.TrimSpace(parentByID[selectionID])
 			seen := map[string]bool{}
 			for cur != "" && !seen[cur] {
 				seen[cur] = true
