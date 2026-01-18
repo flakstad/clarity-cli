@@ -423,11 +423,17 @@ var (
 	metaPriorityStyle = defaultMetaPriorityStyle
 	metaOnHoldStyle   = defaultMetaOnHoldStyle
 	// due/schedule buttons in outline.js use the default "has-data" color (text-secondary), not a semantic accent.
-	metaDueStyle      = lipgloss.NewStyle().Foreground(ac("240", "245"))
-	metaScheduleStyle = lipgloss.NewStyle().Foreground(ac("240", "245"))
-	metaAssignStyle   = lipgloss.NewStyle().Foreground(ac("240", "245"))
-	metaCommentStyle  = lipgloss.NewStyle().Foreground(ac("240", "245"))
-	metaTagStyle      = lipgloss.NewStyle().Foreground(ac("240", "245"))
+	defaultMetaDueStyle      = lipgloss.NewStyle().Foreground(ac("240", "245"))
+	defaultMetaScheduleStyle = lipgloss.NewStyle().Foreground(ac("240", "245"))
+	defaultMetaAssignStyle   = lipgloss.NewStyle().Foreground(ac("240", "245"))
+	defaultMetaCommentStyle  = lipgloss.NewStyle().Foreground(ac("240", "245"))
+	defaultMetaTagStyle      = lipgloss.NewStyle().Foreground(ac("240", "245"))
+
+	metaDueStyle      = defaultMetaDueStyle
+	metaScheduleStyle = defaultMetaScheduleStyle
+	metaAssignStyle   = defaultMetaAssignStyle
+	metaCommentStyle  = defaultMetaCommentStyle
+	metaTagStyle      = defaultMetaTagStyle
 )
 
 func renderStatus(outline model.Outline, statusID string) string {

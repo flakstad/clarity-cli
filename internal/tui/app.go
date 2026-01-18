@@ -1052,7 +1052,7 @@ func (m appModel) actionPanelTitle() string {
 	case actionPanelOutline:
 		return "Outline…"
 	case actionPanelAppearance:
-		return "Fonts / Glyphs"
+		return "Appearance"
 	default:
 		return "Actions"
 	}
@@ -1072,7 +1072,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 				return (&mm).openCaptureModal()
 			},
 		}
-		actions["f"] = actionPanelAction{label: "Fonts / glyphs…", kind: actionPanelActionNav, next: actionPanelAppearance}
+		actions["f"] = actionPanelAction{label: "Appearance…", kind: actionPanelActionNav, next: actionPanelAppearance}
 		actions["ctrl+t"] = actionPanelAction{
 			label: "Capture templates…",
 			kind:  actionPanelActionExec,
@@ -1087,11 +1087,13 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 	switch cur {
 	case actionPanelAppearance:
 		curApp := appearanceProfile()
+		curLists := listStyle()
 		actions["1"] = actionPanelAction{
 			label: "Profile: Default" + markCurrent(curApp == appearanceDefault),
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
 				setAppearanceProfile(appearanceDefault)
+				(&mm).applyListStyle()
 				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceDefault))
 				return mm, nil
 			},
@@ -1101,6 +1103,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
 				setAppearanceProfile(appearanceNeon)
+				(&mm).applyListStyle()
 				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceNeon))
 				return mm, nil
 			},
@@ -1110,6 +1113,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
 				setAppearanceProfile(appearancePills)
+				(&mm).applyListStyle()
 				mm.showMinibuffer("Profile: " + appearanceLabel(appearancePills))
 				return mm, nil
 			},
@@ -1119,7 +1123,39 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
 				setAppearanceProfile(appearanceMono)
+				(&mm).applyListStyle()
 				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceMono))
+				return mm, nil
+			},
+		}
+
+		actions["c"] = actionPanelAction{
+			label: "Lists: Cards" + markCurrent(curLists == listStyleCards),
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				setListStyle(listStyleCards)
+				(&mm).applyListStyle()
+				mm.showMinibuffer("Lists: " + listStyleLabel(listStyleCards))
+				return mm, nil
+			},
+		}
+		actions["r"] = actionPanelAction{
+			label: "Lists: Rows" + markCurrent(curLists == listStyleRows),
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				setListStyle(listStyleRows)
+				(&mm).applyListStyle()
+				mm.showMinibuffer("Lists: " + listStyleLabel(listStyleRows))
+				return mm, nil
+			},
+		}
+		actions["m"] = actionPanelAction{
+			label: "Lists: Minimal" + markCurrent(curLists == listStyleMinimal),
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				setListStyle(listStyleMinimal)
+				(&mm).applyListStyle()
+				mm.showMinibuffer("Lists: " + listStyleLabel(listStyleMinimal))
 				return mm, nil
 			},
 		}
@@ -9241,11 +9277,47 @@ func terminateANSILine(s string) string {
 	return s
 }
 
+func modalSurfaceStyle() lipgloss.Style {
+	switch appearanceProfile() {
+	case appearanceNeon:
+		// Slightly darker surface to make bright accents pop.
+		return lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(ac("254", "233"))
+	case appearancePills:
+		// Use the control surface to create a stronger "dialog" separation.
+		return lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorControlBg)
+	case appearanceMono:
+		return lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorSurfaceBg)
+	default:
+		return lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorSurfaceBg)
+	}
+}
+
+func modalHeaderStyle() lipgloss.Style {
+	switch appearanceProfile() {
+	case appearanceNeon:
+		return lipgloss.NewStyle().
+			Bold(true).
+			Padding(0, 1).
+			Foreground(ac("255", "255")).
+			Background(ac("57", "55"))
+	case appearancePills:
+		return lipgloss.NewStyle().
+			Bold(true).
+			Padding(0, 1).
+			Foreground(ac("232", "255")).
+			Background(ac("110", "30"))
+	case appearanceMono:
+		return lipgloss.NewStyle().Bold(true).Underline(true)
+	default:
+		return lipgloss.NewStyle().Bold(true)
+	}
+}
+
 func modalSurfaceANSI() string {
 	// Render a marker to obtain the ANSI prefix that sets the modal surface fg/bg.
 	// This is used to re-apply surface styling after any inner "\x1b[0m" resets.
 	const marker = "X"
-	st := lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorSurfaceBg)
+	st := modalSurfaceStyle()
 	rendered := st.Render(marker)
 	if rendered == "" {
 		return ""
@@ -9287,7 +9359,7 @@ func dimBackground(s string) string {
 func renderModalBox(screenWidth int, title, body string) string {
 	w := modalBoxWidth(screenWidth)
 
-	header := lipgloss.NewStyle().Bold(true).Render(title)
+	header := modalHeaderStyle().Render(title)
 	content := header
 	if strings.TrimSpace(body) != "" {
 		content += "\n" + body
@@ -9295,11 +9367,7 @@ func renderModalBox(screenWidth int, title, body string) string {
 	content = reapplyModalSurfaceAfterResets(content)
 
 	// Flat modal: no outer border. Keep the background and the "perfect" padding.
-	box := lipgloss.NewStyle().
-		Width(w).
-		Padding(1, 2, 1, 2).
-		Foreground(colorSurfaceFg).
-		Background(colorSurfaceBg)
+	box := modalSurfaceStyle().Width(w).Padding(1, 2, 1, 2)
 
 	return box.Render(content)
 }

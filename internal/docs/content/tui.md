@@ -97,12 +97,14 @@ Creating items:
 Notes:
 - The TUI still leans on the CLI for some features (for example: tags, due/schedule, advanced queries).
 
-Fonts / glyphs:
+Appearance (profiles / glyphs / lists):
 - Clarity can’t change your terminal’s actual font, but it can switch between **Unicode** and **ASCII** glyph sets for UI affordances (chevrons, separators, arrows).
 - Use `x` → `f` to switch while running.
 - Or set `CLARITY_TUI_GLYPHS=ascii` (or `unicode`) to pick a default.
 - `x` → `f` also includes a few experimental **appearance profiles** focused on outline/status rendering. Default remains unchanged.
 - Or set `CLARITY_TUI_PROFILE=default|neon|pills|mono` to pick a default profile.
+- `x` → `f` also includes experimental Projects/Outlines list styles (cards vs row-based).
+- Or set `CLARITY_TUI_LISTS=cards|rows|minimal` to pick a default list style.
 
 Comment/worklog editor:
 - `ctrl+s`: save

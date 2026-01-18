@@ -10,12 +10,14 @@ import (
 )
 
 func TestRenderModalBox_UsesLightBackground_WhenThemeForcedLight(t *testing.T) {
+	setAppearanceProfile(appearanceDefault)
 	oldProfile := lipgloss.ColorProfile()
 	oldBG := lipgloss.HasDarkBackground()
 	lipgloss.SetColorProfile(termenv.ANSI256)
 	t.Cleanup(func() {
 		lipgloss.SetColorProfile(oldProfile)
 		lipgloss.SetHasDarkBackground(oldBG)
+		setAppearanceProfile(appearanceDefault)
 	})
 
 	oldTheme := os.Getenv("CLARITY_TUI_THEME")
@@ -42,6 +44,7 @@ func TestRenderModalBox_UsesLightBackground_WhenThemeForcedLight(t *testing.T) {
 }
 
 func TestRenderModalBox_HasNoBorderGlyphs(t *testing.T) {
+	setAppearanceProfile(appearanceDefault)
 	oldProfile := lipgloss.ColorProfile()
 	oldBG := lipgloss.HasDarkBackground()
 	lipgloss.SetColorProfile(termenv.ANSI256)
@@ -49,6 +52,7 @@ func TestRenderModalBox_HasNoBorderGlyphs(t *testing.T) {
 	t.Cleanup(func() {
 		lipgloss.SetColorProfile(oldProfile)
 		lipgloss.SetHasDarkBackground(oldBG)
+		setAppearanceProfile(appearanceDefault)
 	})
 
 	out := renderModalBox(80, "Title", "Body")
@@ -60,6 +64,7 @@ func TestRenderModalBox_HasNoBorderGlyphs(t *testing.T) {
 }
 
 func TestOverlayCenter_NoModalDropShadow(t *testing.T) {
+	setAppearanceProfile(appearanceDefault)
 	oldProfile := lipgloss.ColorProfile()
 	oldBG := lipgloss.HasDarkBackground()
 	lipgloss.SetColorProfile(termenv.ANSI256)
@@ -67,6 +72,7 @@ func TestOverlayCenter_NoModalDropShadow(t *testing.T) {
 	t.Cleanup(func() {
 		lipgloss.SetColorProfile(oldProfile)
 		lipgloss.SetHasDarkBackground(oldBG)
+		setAppearanceProfile(appearanceDefault)
 	})
 
 	bg := strings.Join([]string{
@@ -88,6 +94,7 @@ func TestOverlayCenter_NoModalDropShadow(t *testing.T) {
 }
 
 func TestRenderModalBox_ReappliesSurfaceAfterReset(t *testing.T) {
+	setAppearanceProfile(appearanceDefault)
 	oldProfile := lipgloss.ColorProfile()
 	oldBG := lipgloss.HasDarkBackground()
 	lipgloss.SetColorProfile(termenv.ANSI256)
@@ -95,6 +102,7 @@ func TestRenderModalBox_ReappliesSurfaceAfterReset(t *testing.T) {
 	t.Cleanup(func() {
 		lipgloss.SetColorProfile(oldProfile)
 		lipgloss.SetHasDarkBackground(oldBG)
+		setAppearanceProfile(appearanceDefault)
 	})
 
 	// Simulate nested lipgloss rendering that emits a hard reset mid-body.

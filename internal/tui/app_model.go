@@ -275,6 +275,20 @@ func (m appModel) clipboardShowCmd(itemID string) string {
 	return "clarity items show " + ref
 }
 
+func (m *appModel) applyListStyle() {
+	switch listStyle() {
+	case listStyleRows:
+		m.projectsList.SetDelegate(newProjectRowsDelegate(false))
+		m.outlinesList.SetDelegate(newOutlineRowsDelegate(false))
+	case listStyleMinimal:
+		m.projectsList.SetDelegate(newProjectRowsDelegate(true))
+		m.outlinesList.SetDelegate(newOutlineRowsDelegate(true))
+	default:
+		m.projectsList.SetDelegate(newProjectCardDelegate())
+		m.outlinesList.SetDelegate(newOutlineCardDelegate())
+	}
+}
+
 func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appModel {
 	s := store.Store{Dir: dir}
 	m := appModel{
@@ -478,6 +492,7 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
 	// Avoid highlighting the full current line; the cursor is enough for focus.
 	m.textarea.FocusedStyle.CursorLine = m.textarea.BlurredStyle.CursorLine
 
+	m.applyListStyle()
 	m.refreshProjects()
 
 	// Best-effort: restore last TUI screen/selection for this workspace.
