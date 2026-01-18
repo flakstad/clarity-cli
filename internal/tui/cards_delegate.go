@@ -162,13 +162,13 @@ func (d cardDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		lines = append(lines, d.metaStyle.Render(itemsLine+"  |  updated "+updated+"  |  created "+created))
 	case addProjectRow:
 		lines = append(lines,
-			titleSt.Render("+ Add"),
+			titleSt.Render("+ New"),
 			d.metaStyle.Render("Create a new project"),
 			d.metaStyle.Render(""),
 		)
 	case addOutlineRow:
 		lines = append(lines,
-			titleSt.Render("+ Add"),
+			titleSt.Render("+ New"),
 			d.metaStyle.Render("Create a new outline"),
 			d.metaStyle.Render(""),
 		)

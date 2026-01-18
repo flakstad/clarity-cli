@@ -3689,7 +3689,7 @@ func (m *appModel) refreshProjects() {
 	if curID != "" {
 		selectListItemByID(&m.projectsList, curID)
 	} else {
-		// Default selection: first project, otherwise "+ Add".
+		// Default selection: first project, otherwise "+ New".
 		for i := 0; i < len(items); i++ {
 			if _, ok := items[i].(projectItem); ok {
 				m.projectsList.Select(i)
@@ -3783,7 +3783,7 @@ func (m *appModel) refreshOutlines(projectID string) {
 	if curID != "" {
 		selectListItemByID(&m.outlinesList, curID)
 	} else {
-		// Default selection: first outline, otherwise uploads (if present), otherwise "+ Add".
+		// Default selection: first outline, otherwise uploads (if present), otherwise "+ New".
 		for i := 0; i < len(items); i++ {
 			if _, ok := items[i].(outlineItem); ok {
 				m.outlinesList.Select(i)
@@ -4012,7 +4012,7 @@ func (m *appModel) refreshItems(outline model.Outline) {
 		selectListItemByID(&m.itemsList, strings.TrimSpace(curSelID))
 		return
 	}
-	// Default selection: first real item row, otherwise "+ Add item".
+	// Default selection: first real item row, otherwise "+ New".
 	for i := 0; i < len(items); i++ {
 		if _, ok := items[i].(outlineRowItem); ok {
 			m.itemsList.Select(i)
@@ -8393,7 +8393,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case "N":
-			// New child (under selected) in either pane. If "+ Add item" selected, fall back to root.
+			// New child (under selected) in either pane. If "+ New" selected, fall back to root.
 			if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
 				m.openInputModal(modalNewChild, it.row.item.ID, "Title", "")
 			} else {

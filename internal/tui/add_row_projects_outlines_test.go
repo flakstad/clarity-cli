@@ -90,7 +90,7 @@ func TestAddRowEnterOpensSameModalAsN(t *testing.T) {
 		t.Fatalf("expected modalNewProject; got %v", mp2.modal)
 	}
 
-	// Projects view: enter on "+ Add" opens modalNewProject.
+	// Projects view: enter on "+ New" opens modalNewProject.
 	mp3 := newAppModelWithWorkspace(t.TempDir(), db, "ws")
 	mp3.view = viewProjects
 	mp3.refreshProjects()
@@ -112,7 +112,7 @@ func TestAddRowEnterOpensSameModalAsN(t *testing.T) {
 		t.Fatalf("expected modalNewOutline; got %v", mo2.modal)
 	}
 
-	// Outlines view: enter on "+ Add" opens modalNewOutline.
+	// Outlines view: enter on "+ New" opens modalNewOutline.
 	mo3 := newAppModelWithWorkspace(t.TempDir(), db, "ws")
 	mo3.view = viewOutlines
 	mo3.selectedProjectID = projectID

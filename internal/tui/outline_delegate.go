@@ -133,7 +133,7 @@ func (d outlineItemDelegate) Render(w io.Writer, m list.Model, index int, item l
 		fmt.Fprint(w, d.renderOutlineDescRow(contentW, prefix, it, focused))
 		return
 	case addItemRow:
-		// Match the outline's twisty column (2 chars) so "+ Add item" aligns.
+		// Match the outline's twisty column (2 chars) so "+ New" aligns.
 		line := prefix + "  " + it.Title()
 		if focused {
 			fmt.Fprint(w, d.renderFocusedRow(contentW, d.addRow, line))
@@ -155,7 +155,7 @@ func (d outlineItemDelegate) Render(w io.Writer, m list.Model, index int, item l
 	base := d.normal
 	if _, ok := item.(addItemRow); ok {
 		base = d.addRow
-		// Match the outline's twisty column (2 chars) so "+ Add item" aligns.
+		// Match the outline's twisty column (2 chars) so "+ New" aligns.
 		line = prefix + "  " + txt
 	}
 	if focused {

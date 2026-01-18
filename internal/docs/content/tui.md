@@ -92,7 +92,7 @@ Status:
 Creating items:
 - `n`: create a new sibling after the selected item (outline pane)
 - `N`: create a new subitem under the selected item (either pane)
-- `+ Add item` row: select it and press `enter` to add an item (handy for empty outlines)
+- `+ New` row: select it and press `enter` to add an item (handy for empty outlines)
 
 Notes:
 - The TUI still leans on the CLI for some features (for example: tags, due/schedule, advanced queries).
@@ -109,6 +109,24 @@ Appearance (profiles / glyphs / lists):
 - You can define a basic custom profile by editing `config.json`:
   - Set `tui.profile` to `custom`
   - Define `tui.customProfile` colors (light/dark) for status/meta/progress/selection.
+  - Example:
+    ```json
+    {
+      "tui": {
+        "profile": "custom",
+        "glyphs": "unicode",
+        "lists": "rows",
+        "customProfile": {
+          "selectedBg": { "light": "254", "dark": "55" },
+          "selectedFg": { "light": "232", "dark": "255" },
+          "statusNonEndFg": { "light": "#d16d7a", "dark": "#ff4fd8" },
+          "statusEndFg": { "light": "#6c757d", "dark": "#3ddc84" },
+          "progressFillBg": { "light": "189", "dark": "57" },
+          "progressEmptyBg": { "light": "255", "dark": "235" }
+        }
+      }
+    }
+    ```
 
 Comment/worklog editor:
 - `ctrl+s`: save

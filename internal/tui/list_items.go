@@ -236,19 +236,19 @@ func (i outlineDescRowItem) Description() string { return "" }
 type addItemRow struct{}
 
 func (i addItemRow) FilterValue() string { return "" }
-func (i addItemRow) Title() string       { return "+ Add" }
+func (i addItemRow) Title() string       { return "+ New" }
 func (i addItemRow) Description() string { return "" }
 
 type addProjectRow struct{}
 
 func (i addProjectRow) FilterValue() string { return "" }
-func (i addProjectRow) Title() string       { return "+ Add" }
+func (i addProjectRow) Title() string       { return "+ New" }
 func (i addProjectRow) Description() string { return "" }
 
 type addOutlineRow struct{}
 
 func (i addOutlineRow) FilterValue() string { return "" }
-func (i addOutlineRow) Title() string       { return "+ Add" }
+func (i addOutlineRow) Title() string       { return "+ New" }
 func (i addOutlineRow) Description() string { return "" }
 
 type projectUploadsRow struct {
