@@ -412,10 +412,16 @@ var (
 	// - end statuses:     --clarity-outline-color-done (#6c757d)
 	// - priority:        --clarity-outline-color-priority (#5f9fb0)
 	// - on hold:         --clarity-outline-color-on-hold (#f39c12)
-	statusNonEndStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#d16d7a")).Bold(true)
-	statusEndStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#6c757d")).Bold(true)
-	metaPriorityStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#5f9fb0")).Bold(true)
-	metaOnHoldStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#f39c12")).Bold(true)
+	defaultStatusNonEndStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#d16d7a")).Bold(true)
+	defaultStatusEndStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#6c757d")).Bold(true)
+	defaultMetaPriorityStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#5f9fb0")).Bold(true)
+	defaultMetaOnHoldStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#f39c12")).Bold(true)
+
+	// Current styles (switchable via appearance profiles). Default must remain identical.
+	statusNonEndStyle = defaultStatusNonEndStyle
+	statusEndStyle    = defaultStatusEndStyle
+	metaPriorityStyle = defaultMetaPriorityStyle
+	metaOnHoldStyle   = defaultMetaOnHoldStyle
 	// due/schedule buttons in outline.js use the default "has-data" color (text-secondary), not a semantic accent.
 	metaDueStyle      = lipgloss.NewStyle().Foreground(ac("240", "245"))
 	metaScheduleStyle = lipgloss.NewStyle().Foreground(ac("240", "245"))

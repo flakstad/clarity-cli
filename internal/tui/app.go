@@ -1034,6 +1034,13 @@ func actionPanelDisplayKey(k string) string {
 	}
 }
 
+func markCurrent(isCurrent bool) string {
+	if isCurrent {
+		return " (current)"
+	}
+	return " (switch)"
+}
+
 func (m appModel) actionPanelTitle() string {
 	switch m.curActionPanelKind() {
 	case actionPanelNav:
@@ -1079,6 +1086,44 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 
 	switch cur {
 	case actionPanelAppearance:
+		curApp := appearanceProfile()
+		actions["1"] = actionPanelAction{
+			label: "Profile: Default" + markCurrent(curApp == appearanceDefault),
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				setAppearanceProfile(appearanceDefault)
+				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceDefault))
+				return mm, nil
+			},
+		}
+		actions["2"] = actionPanelAction{
+			label: "Profile: Neon" + markCurrent(curApp == appearanceNeon),
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				setAppearanceProfile(appearanceNeon)
+				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceNeon))
+				return mm, nil
+			},
+		}
+		actions["3"] = actionPanelAction{
+			label: "Profile: Pills" + markCurrent(curApp == appearancePills),
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				setAppearanceProfile(appearancePills)
+				mm.showMinibuffer("Profile: " + appearanceLabel(appearancePills))
+				return mm, nil
+			},
+		}
+		actions["4"] = actionPanelAction{
+			label: "Profile: Mono" + markCurrent(curApp == appearanceMono),
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				setAppearanceProfile(appearanceMono)
+				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceMono))
+				return mm, nil
+			},
+		}
+
 		curGlyphs := glyphs()
 		unicodeLabel := "Glyphs: Unicode " + glyphTwistyCollapsed() + " " + glyphTwistyExpanded() + " " + glyphBullet() + " " + glyphArrow() + " " + glyphHRule()
 		asciiLabel := "Glyphs: ASCII > v * -> -"

@@ -23,6 +23,7 @@ Clarity has three binding scopes:
 
 - `x` opens a context-aware dispatch menu (“Actions”).
 - Every non-trivial operation that Clarity supports in the TUI must be reachable from `x` in the relevant context, even if it also has a direct shortcut.
+  - Appearance tweaks are under `x` → `f` (profiles + Unicode/ASCII glyph set).
 
 2) **Direct keys exist for common actions**
 
