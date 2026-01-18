@@ -31,12 +31,16 @@ var (
 
 	// Make the selection highlight more prominent against the surface background.
 	// (Surface bg is 255/235, so bump contrast in both light+dark themes.)
-	colorSelectedBg = ac("250", "239")
-	colorSelectedFg = ac("235", "255")
+	defaultColorSelectedBg = ac("250", "239")
+	defaultColorSelectedFg = ac("235", "255")
+	colorSelectedBg        = defaultColorSelectedBg
+	colorSelectedFg        = defaultColorSelectedFg
 	// Used for "selected" borders (cards): very dark on light terminals, very bright on dark terminals.
-	colorSelectedBorder = ac("232", "255")
+	defaultColorSelectedBorder = ac("232", "255")
+	colorSelectedBorder        = defaultColorSelectedBorder
 	// Used for unselected borders (cards): softer on light terminals so selection stands out.
-	colorCardBorder = ac("250", "243")
+	defaultColorCardBorder = ac("250", "243")
+	colorCardBorder        = defaultColorCardBorder
 
 	colorSurfaceBg = ac("255", "235")
 	colorSurfaceFg = ac("235", "252")

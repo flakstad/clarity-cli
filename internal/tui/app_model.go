@@ -275,6 +275,32 @@ func (m appModel) clipboardShowCmd(itemID string) string {
 	return "clarity items show " + ref
 }
 
+func (m *appModel) applyAppearanceStyles() {
+	m.applyListStyle()
+
+	// Rebuild delegates that embed selection colors at construction time.
+	m.projectAttachmentsList.SetDelegate(newCompactItemDelegate())
+	m.itemsList.SetDelegate(newFocusAwareOutlineItemDelegate(m.itemsListActive))
+	m.agendaList.SetDelegate(newCompactItemDelegate())
+	m.archivedList.SetDelegate(newCompactItemDelegate())
+
+	m.statusList.SetDelegate(newCompactItemDelegate())
+	m.activityModalList.SetDelegate(newOutlineItemDelegate())
+	m.outlinePickList.SetDelegate(newCompactItemDelegate())
+	m.assigneeList.SetDelegate(newCompactItemDelegate())
+	m.tagsList.SetDelegate(newFocusAwareCompactItemDelegate(m.tagsListActive))
+	m.workspaceList.SetDelegate(newCompactItemDelegate())
+	m.outlineStatusDefsList.SetDelegate(newCompactItemDelegate())
+
+	m.captureTemplatesList.SetDelegate(newCompactItemDelegate())
+	m.targetPickList.SetDelegate(newCompactItemDelegate())
+	m.captureTemplateWorkspaceList.SetDelegate(newCompactItemDelegate())
+	m.captureTemplateOutlineList.SetDelegate(newCompactItemDelegate())
+	m.captureTemplatePromptsList.SetDelegate(newCompactItemDelegate())
+	m.captureTemplatePromptTypeList.SetDelegate(newCompactItemDelegate())
+	m.captureTemplatePromptRequiredList.SetDelegate(newCompactItemDelegate())
+}
+
 func (m *appModel) applyListStyle() {
 	switch listStyle() {
 	case listStyleRows:
@@ -492,7 +518,7 @@ func newAppModelWithWorkspace(dir string, db *store.DB, workspace string) appMod
 	// Avoid highlighting the full current line; the cursor is enough for focus.
 	m.textarea.FocusedStyle.CursorLine = m.textarea.BlurredStyle.CursorLine
 
-	m.applyListStyle()
+	m.applyAppearanceStyles()
 	m.refreshProjects()
 
 	// Best-effort: restore last TUI screen/selection for this workspace.

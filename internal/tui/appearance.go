@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 
+	"clarity-cli/internal/store"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -15,6 +17,7 @@ const (
 	appearanceNeon    appearanceProfileID = "neon"
 	appearancePills   appearanceProfileID = "pills"
 	appearanceMono    appearanceProfileID = "mono"
+	appearanceCustom  appearanceProfileID = "custom"
 )
 
 type listStyleID string
@@ -28,14 +31,25 @@ const (
 var (
 	appearanceMu      sync.RWMutex
 	currentAppearance appearanceProfileID = appearanceDefault
-	knownAppearances                      = []appearanceProfileID{appearanceDefault, appearanceNeon, appearancePills, appearanceMono}
+	knownAppearances                      = []appearanceProfileID{appearanceDefault, appearanceNeon, appearancePills, appearanceMono, appearanceCustom}
 
 	currentListStyle listStyleID = listStyleCards
+
+	customProfile *store.TUICustomProfile
 )
 
 func applyAppearancePreference() {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("CLARITY_TUI_PROFILE")))
+	if cfg, err := store.LoadConfig(); err == nil && cfg != nil && cfg.TUI != nil {
+		customProfile = cfg.TUI.CustomProfile
+	}
 	if v == "" {
+		if cfg, err := store.LoadConfig(); err == nil && cfg != nil && cfg.TUI != nil {
+			if vv := strings.ToLower(strings.TrimSpace(cfg.TUI.Profile)); vv != "" {
+				setAppearanceProfile(appearanceProfileID(vv))
+				return
+			}
+		}
 		setAppearanceProfile(appearanceDefault)
 		return
 	}
@@ -46,7 +60,21 @@ func applyListStylePreference() {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("CLARITY_TUI_LISTS")))
 	switch v {
 	case "", "cards":
-		setListStyle(listStyleCards)
+		if v == "" {
+			if cfg, err := store.LoadConfig(); err == nil && cfg != nil && cfg.TUI != nil {
+				if vv := strings.ToLower(strings.TrimSpace(cfg.TUI.Lists)); vv != "" {
+					v = vv
+				}
+			}
+		}
+		switch v {
+		case "", "cards":
+			setListStyle(listStyleCards)
+		case "rows":
+			setListStyle(listStyleRows)
+		case "minimal":
+			setListStyle(listStyleMinimal)
+		}
 	case "rows":
 		setListStyle(listStyleRows)
 	case "minimal":
@@ -72,6 +100,14 @@ func setAppearanceProfile(id appearanceProfileID) {
 		metaAssignStyle = defaultMetaAssignStyle
 		metaCommentStyle = defaultMetaCommentStyle
 		metaTagStyle = defaultMetaTagStyle
+		progressFillBg = defaultProgressFillBg
+		progressEmptyBg = defaultProgressEmptyBg
+		progressFillFg = defaultProgressFillFg
+		progressEmptyFg = defaultProgressEmptyFg
+		colorSelectedBg = defaultColorSelectedBg
+		colorSelectedFg = defaultColorSelectedFg
+		colorSelectedBorder = defaultColorSelectedBorder
+		colorCardBorder = defaultColorCardBorder
 	case appearanceNeon:
 		currentAppearance = appearanceNeon
 		statusNonEndStyle = lipgloss.NewStyle().Foreground(ac("#a100ff", "#ff4fd8")).Bold(true)
@@ -83,6 +119,14 @@ func setAppearanceProfile(id appearanceProfileID) {
 		metaAssignStyle = lipgloss.NewStyle().Foreground(ac("#5f00af", "#af87ff")).Bold(true)
 		metaCommentStyle = lipgloss.NewStyle().Foreground(ac("#af005f", "#ff5fd7")).Bold(true)
 		metaTagStyle = lipgloss.NewStyle().Foreground(ac("#005f00", "#5fff87")).Bold(true)
+		progressFillBg = ac("159", "57")
+		progressEmptyBg = ac("255", "235")
+		progressFillFg = ac("232", "255")
+		progressEmptyFg = ac("240", "252")
+		colorSelectedBg = ac("225", "55")
+		colorSelectedFg = ac("232", "255")
+		colorSelectedBorder = ac("57", "225")
+		colorCardBorder = defaultColorCardBorder
 	case appearancePills:
 		currentAppearance = appearancePills
 		statusNonEndStyle = lipgloss.NewStyle().
@@ -130,6 +174,14 @@ func setAppearanceProfile(id appearanceProfileID) {
 			Foreground(ac("232", "255")).
 			Background(ac("114", "28")).
 			Bold(true)
+		progressFillBg = ac("153", "24")
+		progressEmptyBg = ac("255", "235")
+		progressFillFg = ac("232", "255")
+		progressEmptyFg = ac("240", "252")
+		colorSelectedBg = ac("153", "24")
+		colorSelectedFg = ac("232", "255")
+		colorSelectedBorder = ac("153", "24")
+		colorCardBorder = defaultColorCardBorder
 	case appearanceMono:
 		currentAppearance = appearanceMono
 		statusNonEndStyle = lipgloss.NewStyle().Foreground(colorSurfaceFg).Bold(true)
@@ -141,6 +193,53 @@ func setAppearanceProfile(id appearanceProfileID) {
 		metaAssignStyle = lipgloss.NewStyle().Foreground(colorSurfaceFg)
 		metaCommentStyle = lipgloss.NewStyle().Foreground(colorSurfaceFg)
 		metaTagStyle = lipgloss.NewStyle().Foreground(colorSurfaceFg)
+		progressFillBg = defaultProgressFillBg
+		progressEmptyBg = defaultProgressEmptyBg
+		progressFillFg = defaultProgressFillFg
+		progressEmptyFg = defaultProgressEmptyFg
+		colorSelectedBg = ac("253", "236")
+		colorSelectedFg = colorSurfaceFg
+		colorSelectedBorder = defaultColorSelectedBorder
+		colorCardBorder = defaultColorCardBorder
+	case appearanceCustom:
+		if customProfile == nil {
+			return
+		}
+		currentAppearance = appearanceCustom
+		applyCustom := func(def lipgloss.AdaptiveColor, c *store.AdaptiveColor) lipgloss.AdaptiveColor {
+			if c == nil {
+				return def
+			}
+			light := strings.TrimSpace(c.Light)
+			dark := strings.TrimSpace(c.Dark)
+			if light == "" {
+				light = def.Light
+			}
+			if dark == "" {
+				dark = def.Dark
+			}
+			return ac(light, dark)
+		}
+		colorSelectedBg = applyCustom(defaultColorSelectedBg, customProfile.SelectedBg)
+		colorSelectedFg = applyCustom(defaultColorSelectedFg, customProfile.SelectedFg)
+		colorSelectedBorder = defaultColorSelectedBorder
+		colorCardBorder = defaultColorCardBorder
+
+		statusNonEndStyle = lipgloss.NewStyle().Foreground(applyCustom(ac("#d16d7a", "#d16d7a"), customProfile.StatusNonEndFg)).Bold(true)
+		statusEndStyle = lipgloss.NewStyle().Foreground(applyCustom(ac("#6c757d", "#6c757d"), customProfile.StatusEndFg)).Bold(true)
+
+		metaPriorityStyle = lipgloss.NewStyle().Foreground(applyCustom(ac("#5f9fb0", "#5f9fb0"), customProfile.MetaPriorityFg)).Bold(true)
+		metaOnHoldStyle = lipgloss.NewStyle().Foreground(applyCustom(ac("#f39c12", "#f39c12"), customProfile.MetaOnHoldFg)).Bold(true)
+		metaDueStyle = lipgloss.NewStyle().Foreground(applyCustom(ac("240", "245"), customProfile.MetaDueFg))
+		metaScheduleStyle = lipgloss.NewStyle().Foreground(applyCustom(ac("240", "245"), customProfile.MetaScheduleFg))
+		metaAssignStyle = lipgloss.NewStyle().Foreground(applyCustom(ac("240", "245"), customProfile.MetaAssignFg))
+		metaCommentStyle = lipgloss.NewStyle().Foreground(applyCustom(ac("240", "245"), customProfile.MetaCommentFg))
+		metaTagStyle = lipgloss.NewStyle().Foreground(applyCustom(ac("240", "245"), customProfile.MetaTagFg))
+
+		progressFillBg = applyCustom(defaultProgressFillBg, customProfile.ProgressFillBg)
+		progressEmptyBg = applyCustom(defaultProgressEmptyBg, customProfile.ProgressEmptyBg)
+		progressFillFg = applyCustom(defaultProgressFillFg, customProfile.ProgressFillFg)
+		progressEmptyFg = applyCustom(defaultProgressEmptyFg, customProfile.ProgressEmptyFg)
 	default:
 		// Unknown value: ignore.
 	}
@@ -190,6 +289,8 @@ func appearanceLabel(id appearanceProfileID) string {
 		return "Pills"
 	case appearanceMono:
 		return "Mono"
+	case appearanceCustom:
+		return "Custom"
 	default:
 		return "Default"
 	}

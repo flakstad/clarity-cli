@@ -351,10 +351,15 @@ func statusLabel(outline model.Outline, statusID string) string {
 }
 
 var (
-	progressFillBg  = ac("189", "242") // light: very light cyan; dark: gray fill
-	progressEmptyBg = ac("255", "237") // light: white; dark: dark gray empty
-	progressFillFg  = ac("235", "255") // light: dark text; dark: light text
-	progressEmptyFg = ac("240", "252") // light: muted; dark: light-ish
+	defaultProgressFillBg  = ac("189", "242") // light: very light cyan; dark: gray fill
+	defaultProgressEmptyBg = ac("255", "237") // light: white; dark: dark gray empty
+	defaultProgressFillFg  = ac("235", "255") // light: dark text; dark: light text
+	defaultProgressEmptyFg = ac("240", "252") // light: muted; dark: light-ish
+
+	progressFillBg  = defaultProgressFillBg
+	progressEmptyBg = defaultProgressEmptyBg
+	progressFillFg  = defaultProgressFillFg
+	progressEmptyFg = defaultProgressEmptyFg
 )
 
 func renderProgressCookie(done, total int) string {
@@ -372,6 +377,11 @@ func renderProgressCookie(done, total int) string {
 	innerRunes := []rune(inner)
 	if len(innerRunes) == 0 {
 		return ""
+	}
+
+	// Mono profile: show a plain progress cookie instead of a colored bar.
+	if appearanceProfile() == appearanceMono {
+		return " " + inner
 	}
 
 	ratio := float64(done) / float64(total)

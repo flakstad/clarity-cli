@@ -105,6 +105,10 @@ Appearance (profiles / glyphs / lists):
 - Or set `CLARITY_TUI_PROFILE=default|neon|pills|mono` to pick a default profile.
 - `x` → `f` also includes experimental Projects/Outlines list styles (cards vs row-based).
 - Or set `CLARITY_TUI_LISTS=cards|rows|minimal` to pick a default list style.
+- Selections made via `x` → `f` are persisted to `~/.clarity/config.json` under the `tui` key (unless you override via env vars).
+- You can define a basic custom profile by editing `config.json`:
+  - Set `tui.profile` to `custom`
+  - Define `tui.customProfile` colors (light/dark) for status/meta/progress/selection.
 
 Comment/worklog editor:
 - `ctrl+s`: save

@@ -35,6 +35,47 @@ type GlobalConfig struct {
 
 	// Replicas maps workspaceId -> replicaId for this device.
 	Replicas map[string]string `json:"replicas,omitempty"`
+
+	// TUI holds optional user preferences for the interactive TUI.
+	TUI *TUIConfig `json:"tui,omitempty"`
+}
+
+type TUIConfig struct {
+	// Profile is the appearance profile id (e.g. "default", "neon").
+	Profile string `json:"profile,omitempty"`
+	// Glyphs selects the glyph set (e.g. "unicode", "ascii").
+	Glyphs string `json:"glyphs,omitempty"`
+	// Lists selects Projects/Outlines list style (e.g. "cards", "rows", "minimal").
+	Lists string `json:"lists,omitempty"`
+
+	// CustomProfile optionally defines a user-configured profile ("custom").
+	CustomProfile *TUICustomProfile `json:"customProfile,omitempty"`
+}
+
+type TUICustomProfile struct {
+	SelectedBg *AdaptiveColor `json:"selectedBg,omitempty"`
+	SelectedFg *AdaptiveColor `json:"selectedFg,omitempty"`
+
+	StatusNonEndFg *AdaptiveColor `json:"statusNonEndFg,omitempty"`
+	StatusEndFg    *AdaptiveColor `json:"statusEndFg,omitempty"`
+
+	MetaPriorityFg *AdaptiveColor `json:"metaPriorityFg,omitempty"`
+	MetaOnHoldFg   *AdaptiveColor `json:"metaOnHoldFg,omitempty"`
+	MetaDueFg      *AdaptiveColor `json:"metaDueFg,omitempty"`
+	MetaScheduleFg *AdaptiveColor `json:"metaScheduleFg,omitempty"`
+	MetaAssignFg   *AdaptiveColor `json:"metaAssignFg,omitempty"`
+	MetaCommentFg  *AdaptiveColor `json:"metaCommentFg,omitempty"`
+	MetaTagFg      *AdaptiveColor `json:"metaTagFg,omitempty"`
+
+	ProgressFillBg  *AdaptiveColor `json:"progressFillBg,omitempty"`
+	ProgressEmptyBg *AdaptiveColor `json:"progressEmptyBg,omitempty"`
+	ProgressFillFg  *AdaptiveColor `json:"progressFillFg,omitempty"`
+	ProgressEmptyFg *AdaptiveColor `json:"progressEmptyFg,omitempty"`
+}
+
+type AdaptiveColor struct {
+	Light string `json:"light,omitempty"`
+	Dark  string `json:"dark,omitempty"`
 }
 
 type WorkspaceRef struct {

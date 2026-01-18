@@ -103,8 +103,15 @@ func (d cardsRowDelegate) Render(w io.Writer, m list.Model, index int, item list
 		} else {
 			right = fmt.Sprintf("%d top%s%d open%s%d done", it.meta.topLevel, sep, open, sep, it.meta.itemsDone)
 		}
+	case projectUploadsRow:
+		left = it.Title()
+		right = it.Description()
 	default:
-		left = fmt.Sprint(item)
+		if t, ok := item.(interface{ Title() string }); ok {
+			left = strings.TrimSpace(t.Title())
+		} else {
+			left = fmt.Sprint(item)
+		}
 	}
 
 	if strings.TrimSpace(right) != "" && d.minimal && index != m.Index() {

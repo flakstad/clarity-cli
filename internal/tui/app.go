@@ -1041,6 +1041,27 @@ func markCurrent(isCurrent bool) string {
 	return " (switch)"
 }
 
+func persistTUIConfig(update func(*store.TUIConfig)) error {
+	cfg, err := store.LoadConfig()
+	if err != nil {
+		return err
+	}
+	if cfg == nil {
+		cfg = &store.GlobalConfig{}
+	}
+	if cfg.TUI == nil {
+		cfg.TUI = &store.TUIConfig{}
+	}
+	update(cfg.TUI)
+	return store.SaveConfig(cfg)
+}
+
+func persistTUIConfigBestEffort(m *appModel, update func(*store.TUIConfig)) {
+	if err := persistTUIConfig(update); err != nil {
+		m.showMinibuffer("Config: " + err.Error())
+	}
+}
+
 func (m appModel) actionPanelTitle() string {
 	switch m.curActionPanelKind() {
 	case actionPanelNav:
@@ -1093,7 +1114,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
 				setAppearanceProfile(appearanceDefault)
-				(&mm).applyListStyle()
+				(&mm).applyAppearanceStyles()
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Profile = string(appearanceDefault) })
 				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceDefault))
 				return mm, nil
 			},
@@ -1103,7 +1125,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
 				setAppearanceProfile(appearanceNeon)
-				(&mm).applyListStyle()
+				(&mm).applyAppearanceStyles()
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Profile = string(appearanceNeon) })
 				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceNeon))
 				return mm, nil
 			},
@@ -1113,7 +1136,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
 				setAppearanceProfile(appearancePills)
-				(&mm).applyListStyle()
+				(&mm).applyAppearanceStyles()
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Profile = string(appearancePills) })
 				mm.showMinibuffer("Profile: " + appearanceLabel(appearancePills))
 				return mm, nil
 			},
@@ -1123,8 +1147,25 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
 				setAppearanceProfile(appearanceMono)
-				(&mm).applyListStyle()
+				(&mm).applyAppearanceStyles()
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Profile = string(appearanceMono) })
 				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceMono))
+				return mm, nil
+			},
+		}
+		actions["5"] = actionPanelAction{
+			label: "Profile: Custom" + markCurrent(curApp == appearanceCustom),
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				cfg, err := store.LoadConfig()
+				if err != nil || cfg == nil || cfg.TUI == nil || cfg.TUI.CustomProfile == nil {
+					mm.showMinibuffer("Profile: custom (missing config)")
+					return mm, nil
+				}
+				setAppearanceProfile(appearanceCustom)
+				(&mm).applyAppearanceStyles()
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Profile = string(appearanceCustom) })
+				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceCustom))
 				return mm, nil
 			},
 		}
@@ -1134,7 +1175,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
 				setListStyle(listStyleCards)
-				(&mm).applyListStyle()
+				(&mm).applyAppearanceStyles()
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Lists = string(listStyleCards) })
 				mm.showMinibuffer("Lists: " + listStyleLabel(listStyleCards))
 				return mm, nil
 			},
@@ -1144,7 +1186,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
 				setListStyle(listStyleRows)
-				(&mm).applyListStyle()
+				(&mm).applyAppearanceStyles()
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Lists = string(listStyleRows) })
 				mm.showMinibuffer("Lists: " + listStyleLabel(listStyleRows))
 				return mm, nil
 			},
@@ -1154,7 +1197,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
 				setListStyle(listStyleMinimal)
-				(&mm).applyListStyle()
+				(&mm).applyAppearanceStyles()
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Lists = string(listStyleMinimal) })
 				mm.showMinibuffer("Lists: " + listStyleLabel(listStyleMinimal))
 				return mm, nil
 			},
@@ -1177,6 +1221,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
 				setGlyphs(glyphSetUnicode)
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Glyphs = "unicode" })
 				mm.showMinibuffer("Glyphs: " + glyphsName(glyphSetUnicode))
 				return mm, nil
 			},
@@ -1186,6 +1231,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
 				setGlyphs(glyphSetASCII)
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Glyphs = "ascii" })
 				mm.showMinibuffer("Glyphs: " + glyphsName(glyphSetASCII))
 				return mm, nil
 			},

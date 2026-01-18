@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"clarity-cli/internal/store"
 )
 
 // Terminal apps can't change the user's actual font. Instead, we can choose
@@ -24,6 +26,11 @@ var (
 
 func applyGlyphPreference() {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("CLARITY_TUI_GLYPHS")))
+	if v == "" {
+		if cfg, err := store.LoadConfig(); err == nil && cfg != nil && cfg.TUI != nil {
+			v = strings.ToLower(strings.TrimSpace(cfg.TUI.Glyphs))
+		}
+	}
 	switch v {
 	case "", "unicode", "utf8":
 		setGlyphs(glyphSetUnicode)
