@@ -87,12 +87,13 @@ func (d cardDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	lines := make([]string, 0, 3)
 	switch it := item.(type) {
 	case projectItem:
+		sep := " " + glyphBullet() + " "
 		title := strings.TrimSpace(it.project.Name)
 		if title == "" {
 			title = "(unnamed project)"
 		}
 		if it.current {
-			title = title + " •"
+			title = title + " " + glyphBullet()
 		}
 
 		created := fmtDate(it.project.CreatedAt)
@@ -110,17 +111,12 @@ func (d cardDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		if open < 0 {
 			open = 0
 		}
-		itemsLine := fmt.Sprintf(
-			"%d items • %d open • %d done",
-			it.meta.itemsTotal,
-			open,
-			it.meta.itemsDone,
-		)
+		itemsLine := fmt.Sprintf("%d items%s%d open%s%d done", it.meta.itemsTotal, sep, open, sep, it.meta.itemsDone)
 		if it.meta.itemsOnHold > 0 {
-			itemsLine += fmt.Sprintf(" • %d on hold", it.meta.itemsOnHold)
+			itemsLine += fmt.Sprintf("%s%d on hold", sep, it.meta.itemsOnHold)
 		}
 		if it.meta.itemsNoStatus > 0 {
-			itemsLine += fmt.Sprintf(" • %d no status", it.meta.itemsNoStatus)
+			itemsLine += fmt.Sprintf("%s%d no status", sep, it.meta.itemsNoStatus)
 		}
 
 		lines = append(lines,
@@ -129,9 +125,10 @@ func (d cardDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 			d.metaStyle.Render("created "+created+"  |  updated "+updated),
 		)
 	case outlineItem:
+		sep := " " + glyphBullet() + " "
 		title := outlineDisplayName(it.outline)
 		if it.current {
-			title = title + " •"
+			title = title + " " + glyphBullet()
 		}
 		lines = append(lines, titleSt.Render(title))
 
@@ -150,16 +147,16 @@ func (d cardDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 			itemsLine += fmt.Sprintf(" (%d with status)", it.meta.itemsWithStatus)
 		}
 		if it.meta.itemsDone > 0 {
-			itemsLine += fmt.Sprintf(" • %d done", it.meta.itemsDone)
+			itemsLine += fmt.Sprintf("%s%d done", sep, it.meta.itemsDone)
 		}
 		if it.meta.itemsOnHold > 0 {
-			itemsLine += fmt.Sprintf(" • %d on hold", it.meta.itemsOnHold)
+			itemsLine += fmt.Sprintf("%s%d on hold", sep, it.meta.itemsOnHold)
 		}
 		if it.meta.topLevel > 0 {
-			itemsLine += fmt.Sprintf(" • %d top-level", it.meta.topLevel)
+			itemsLine += fmt.Sprintf("%s%d top-level", sep, it.meta.topLevel)
 		}
 		if it.meta.itemsNoStatus > 0 {
-			itemsLine += fmt.Sprintf(" • %d no status", it.meta.itemsNoStatus)
+			itemsLine += fmt.Sprintf("%s%d no status", sep, it.meta.itemsNoStatus)
 		}
 
 		lines = append(lines, d.metaStyle.Render(itemsLine+"  |  updated "+updated+"  |  created "+created))

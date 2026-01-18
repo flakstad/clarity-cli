@@ -212,7 +212,7 @@ func (i captureTemplateSearchItem) Title() string {
 	if target == "" {
 		target = strings.TrimSpace(i.template.Target.Workspace) + "/" + strings.TrimSpace(i.template.Target.OutlineID)
 	}
-	return fmt.Sprintf("[%s] %s  → %s", keys, name, target)
+	return fmt.Sprintf("[%s] %s  %s %s", keys, name, glyphArrow(), target)
 }
 func (i captureTemplateSearchItem) Description() string { return "" }
 
@@ -506,7 +506,7 @@ func (m *captureModel) refreshTemplateList() {
 			if label == "" {
 				label = "(unnamed template)"
 			}
-			label = label + "  → " + m.outlineLabel(child.template.Target.Workspace, child.template.Target.OutlineID)
+			label = label + "  " + glyphArrow() + " " + m.outlineLabel(child.template.Target.Workspace, child.template.Target.OutlineID)
 		} else if child != nil {
 			label = m.capturePrefixLabel(append(append([]string{}, m.templatePrefix...), k), child)
 		}

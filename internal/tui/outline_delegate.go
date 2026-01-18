@@ -190,9 +190,9 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
 	twisty := " "
 	if it.row.hasChildren || it.row.hasDescription {
 		if it.row.collapsed {
-			twisty = "▸"
+			twisty = glyphTwistyCollapsed()
 		} else {
-			twisty = "▾"
+			twisty = glyphTwistyExpanded()
 		}
 	}
 
@@ -337,9 +337,9 @@ func (d outlineItemDelegate) renderOutlineActivityRow(width int, prefix string, 
 	twisty := " "
 	if it.hasChildren || it.hasDescription {
 		if it.collapsed {
-			twisty = "▸"
+			twisty = glyphTwistyCollapsed()
 		} else {
-			twisty = "▾"
+			twisty = glyphTwistyExpanded()
 		}
 	}
 	line := prefix + indent + twisty + " " + strings.TrimSpace(it.label)

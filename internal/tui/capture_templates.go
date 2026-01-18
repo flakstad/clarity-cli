@@ -71,7 +71,7 @@ func (i captureTemplateItem) Title() string {
 	if target == "" {
 		target = strings.TrimSpace(i.tmpl.Target.Workspace) + "/" + strings.TrimSpace(i.tmpl.Target.OutlineID)
 	}
-	return fmt.Sprintf("%s  [%s]  →  %s", name, keys, target)
+	return fmt.Sprintf("%s  [%s]  %s  %s", name, keys, glyphArrow(), target)
 }
 func (i captureTemplateItem) Description() string { return "" }
 

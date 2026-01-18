@@ -1044,6 +1044,8 @@ func (m appModel) actionPanelTitle() string {
 		return "Capture"
 	case actionPanelOutline:
 		return "Outline…"
+	case actionPanelAppearance:
+		return "Fonts / Glyphs"
 	default:
 		return "Actions"
 	}
@@ -1063,6 +1065,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 				return (&mm).openCaptureModal()
 			},
 		}
+		actions["f"] = actionPanelAction{label: "Fonts / glyphs…", kind: actionPanelActionNav, next: actionPanelAppearance}
 		actions["ctrl+t"] = actionPanelAction{
 			label: "Capture templates…",
 			kind:  actionPanelActionExec,
@@ -1075,6 +1078,37 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 	}
 
 	switch cur {
+	case actionPanelAppearance:
+		curGlyphs := glyphs()
+		unicodeLabel := "Glyphs: Unicode " + glyphTwistyCollapsed() + " " + glyphTwistyExpanded() + " " + glyphBullet() + " " + glyphArrow() + " " + glyphHRule()
+		asciiLabel := "Glyphs: ASCII > v * -> -"
+
+		if curGlyphs == glyphSetASCII {
+			unicodeLabel += " (switch)"
+			asciiLabel += " (current)"
+		} else {
+			unicodeLabel += " (current)"
+			asciiLabel += " (switch)"
+		}
+
+		actions["u"] = actionPanelAction{
+			label: unicodeLabel,
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				setGlyphs(glyphSetUnicode)
+				mm.showMinibuffer("Glyphs: " + glyphsName(glyphSetUnicode))
+				return mm, nil
+			},
+		}
+		actions["a"] = actionPanelAction{
+			label: asciiLabel,
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				setGlyphs(glyphSetASCII)
+				mm.showMinibuffer("Glyphs: " + glyphsName(glyphSetASCII))
+				return mm, nil
+			},
+		}
 	case actionPanelNav:
 		// Nav destinations are only shown when they can work "right now".
 		actions["p"] = actionPanelAction{
@@ -1415,7 +1449,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 					mm.showMinibuffer("Git: " + strings.TrimSpace(st.Upstream))
 					return mm, nil
 				}
-				mm.showMinibuffer("Git: " + strings.TrimSpace(st.Upstream) + " → " + url)
+				mm.showMinibuffer("Git: " + strings.TrimSpace(st.Upstream) + " " + glyphArrow() + " " + url)
 				return mm, nil
 			},
 		}
@@ -2913,7 +2947,7 @@ func (m appModel) renderActionPanel() string {
 
 				twisty := " "
 				if totalChildren > 0 {
-					twisty = "▸"
+					twisty = glyphTwistyCollapsed()
 				}
 				leadSeg := base.Render(twisty + " ")
 
@@ -3213,7 +3247,7 @@ func captureTemplatesAtPrefix(templates []store.CaptureTemplate, prefix []string
 			if name == "" {
 				name = "(unnamed)"
 			}
-			next[k] = name + "  →  " + captureTemplateTargetLabel(t.Target.Workspace, t.Target.OutlineID)
+			next[k] = name + "  " + glyphArrow() + "  " + captureTemplateTargetLabel(t.Target.Workspace, t.Target.OutlineID)
 		} else {
 			next[k] = "(prefix)"
 		}
@@ -4697,7 +4731,7 @@ func (m *appModel) renderModal() string {
 	case modalCaptureTemplatePrompts:
 		return m.renderCaptureTemplatePromptsModal()
 	case modalCaptureTemplatePromptName:
-		return m.renderInputModalWithDescription("Capture prompt: variable", "Variable name used for expansions (e.g. project → {{project}}). No whitespace.")
+		return m.renderInputModalWithDescription("Capture prompt: variable", "Variable name used for expansions (e.g. project "+glyphArrow()+" {{project}}). No whitespace.")
 	case modalCaptureTemplatePromptLabel:
 		return m.renderInputModalWithDescription("Capture prompt: label", "User-visible label (optional).")
 	case modalCaptureTemplatePromptPickType:

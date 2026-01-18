@@ -184,6 +184,7 @@ const (
 	actionPanelCapture
 	actionPanelSync
 	actionPanelOutline
+	actionPanelAppearance
 )
 
 type actionPanelAction struct {

@@ -22,6 +22,7 @@ Key bindings:
 - `D` (on outlines screen): edit selected outline description
 - `backspace` or `esc`: go back (from item view → outline; from outline → previous screen)
 - `x` (or `?`): open the actions menu (context-aware; includes item actions from outline focus, details pane, and item view)
+- `x` then `f`: fonts/glyphs menu (switch UI glyph set; see below)
 - For the keybinding contract + a more complete reference, see `clarity docs keybindings`.
 - `r`: archive selected item (with confirm)
 - `m`: move selected/open item (pick outline → pick mode → optionally pick a top-level item in that outline to become the new parent)
@@ -95,6 +96,11 @@ Creating items:
 
 Notes:
 - The TUI still leans on the CLI for some features (for example: tags, due/schedule, advanced queries).
+
+Fonts / glyphs:
+- Clarity can’t change your terminal’s actual font, but it can switch between **Unicode** and **ASCII** glyph sets for UI affordances (chevrons, separators, arrows).
+- Use `x` → `f` to switch while running.
+- Or set `CLARITY_TUI_GLYPHS=ascii` (or `unicode`) to pick a default.
 
 Comment/worklog editor:
 - `ctrl+s`: save

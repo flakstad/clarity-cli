@@ -21,7 +21,7 @@ type projectItem struct {
 func (i projectItem) FilterValue() string { return i.project.Name }
 func (i projectItem) Title() string {
 	if i.current {
-		return i.project.Name + " •"
+		return i.project.Name + " " + glyphBullet()
 	}
 	return i.project.Name
 }
@@ -62,7 +62,7 @@ func (i outlineItem) FilterValue() string {
 func (i outlineItem) Title() string {
 	t := outlineDisplayName(i.outline)
 	if i.current {
-		return t + " •"
+		return t + " " + glyphBullet()
 	}
 	return t
 }
@@ -138,7 +138,7 @@ func (i workspaceItem) Title() string {
 		n = n + " (archived)"
 	}
 	if i.current {
-		return n + " •"
+		return n + " " + glyphBullet()
 	}
 	return n
 }
@@ -173,9 +173,9 @@ func (i outlineRowItem) Title() string {
 	twisty := " "
 	if i.row.hasChildren || i.row.hasDescription {
 		if i.row.collapsed {
-			twisty = "▸"
+			twisty = glyphTwistyCollapsed()
 		} else {
-			twisty = "▾"
+			twisty = glyphTwistyExpanded()
 		}
 	}
 	progress := renderProgressCookie(i.row.doneChildren, i.row.totalChildren)
@@ -482,9 +482,9 @@ func (i agendaRowItem) Title() string {
 	twisty := ""
 	if i.row.hasChildren {
 		if i.row.collapsed {
-			twisty = "▸"
+			twisty = glyphTwistyCollapsed()
 		} else {
-			twisty = "▾"
+			twisty = glyphTwistyExpanded()
 		}
 	}
 

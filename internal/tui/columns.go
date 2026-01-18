@@ -464,7 +464,7 @@ func renderOutlineColumns(outline model.Outline, board outlineColumnsBoard, sel 
 		}
 		prefix := "  "
 		if it.HasChildren {
-			prefix = "▸ "
+			prefix = glyphTwistyCollapsed() + " "
 		}
 		titleLines := wrapPlainTextWithPrefix(title, itemInnerW, prefix, "  ")
 
@@ -521,7 +521,7 @@ func renderOutlineColumns(outline model.Outline, board outlineColumnsBoard, sel 
 				if sepW < 0 {
 					sepW = 0
 				}
-				sep := " " + strings.Repeat("─", sepW) + " "
+				sep := " " + strings.Repeat(glyphHRule(), sepW) + " "
 				lines = append(lines, styleMuted().Render(sep))
 			}
 		}
