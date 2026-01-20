@@ -11937,12 +11937,12 @@ func (m *appModel) openMoveModePicker(itemID, toOutlineID string) {
 	opts := []list.Item{
 		moveModeOptionItem{
 			mode:  "outline",
-			title: "1) Add to outline",
+			title: "Add to outline",
 			desc:  "Move to the outline root (top level)",
 		},
 		moveModeOptionItem{
 			mode:  "item",
-			title: "2) Select item in outline…",
+			title: "Select item in outline…",
 			desc:  "Pick a top-level item to become the new parent",
 		},
 	}
