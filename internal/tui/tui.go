@@ -11,6 +11,7 @@ func Run(dir string, db *store.DB) error {
 }
 
 func RunWithWorkspace(dir string, db *store.DB, workspace string) error {
+	applyColorProfilePreference()
 	applyThemePreference()
 	applyGlyphPreference()
 	applyAppearancePreference()

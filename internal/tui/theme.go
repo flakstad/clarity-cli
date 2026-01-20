@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 // Theme/palette helpers.
@@ -56,6 +57,19 @@ var (
 
 func styleMuted() lipgloss.Style {
 	return faintIfDark(lipgloss.NewStyle().Foreground(colorMuted))
+}
+
+// applyColorProfilePreference sets Lip Gloss's color profile for the interactive TUI.
+//
+// Note: termenv.EnvColorProfile respects CLICOLOR/CLICOLOR_FORCE, which is useful for
+// non-interactive CLI output but can accidentally disable colors in a TUI. For the TUI,
+// we only honor NO_COLOR and otherwise follow the terminal's capabilities.
+func applyColorProfilePreference() {
+	if strings.TrimSpace(os.Getenv("NO_COLOR")) != "" {
+		lipgloss.SetColorProfile(termenv.Ascii)
+		return
+	}
+	lipgloss.SetColorProfile(termenv.ColorProfile())
 }
 
 // applyThemePreference configures Lip Gloss's background detection.

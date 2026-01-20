@@ -42,6 +42,7 @@ type captureOpenTemplatesMsg struct{}
 type captureEditConfigDoneMsg struct{ err error }
 
 func RunCapture(cfg *store.GlobalConfig, actorOverride string) (CaptureResult, error) {
+	applyColorProfilePreference()
 	applyThemePreference()
 
 	m, err := newCaptureModel(cfg, strings.TrimSpace(actorOverride))
