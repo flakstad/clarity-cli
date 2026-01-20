@@ -1,9 +1,13 @@
 package tui
 
 import (
+	"context"
 	"os"
+	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
@@ -28,31 +32,67 @@ func faintIfDark(st lipgloss.Style) lipgloss.Style {
 
 // Common semantic colors used across the TUI.
 var (
-	colorMuted = ac("240", "243") // dark-ish gray on light; soft gray on dark
+	defaultColorMuted lipgloss.TerminalColor = ac("240", "243") // dark-ish gray on light; soft gray on dark
+	colorMuted                               = defaultColorMuted
+
+	// Used for headings/breadcrumbs and other secondary chrome.
+	defaultColorChromeMutedFg lipgloss.TerminalColor = ac("240", "245")
+	colorChromeMutedFg                               = defaultColorChromeMutedFg
+	// Even more muted "display-only" rows (e.g. archived list context rows).
+	defaultColorChromeSubtleFg lipgloss.TerminalColor = ac("241", "245")
+	colorChromeSubtleFg                               = defaultColorChromeSubtleFg
 
 	// Make the selection highlight more prominent against the surface background.
 	// (Surface bg is 255/235, so bump contrast in both light+dark themes.)
-	defaultColorSelectedBg = ac("250", "239")
-	defaultColorSelectedFg = ac("235", "255")
-	colorSelectedBg        = defaultColorSelectedBg
-	colorSelectedFg        = defaultColorSelectedFg
+	// Match the Alabaster highlight, which reads well across terminals.
+	defaultColorSelectedBg                        = ac("#e9e9e9", "#262626")
+	defaultColorSelectedFg                        = ac("235", "255")
+	colorSelectedBg        lipgloss.TerminalColor = defaultColorSelectedBg
+	colorSelectedFg        lipgloss.TerminalColor = defaultColorSelectedFg
 	// Used for "selected" borders (cards): very dark on light terminals, very bright on dark terminals.
-	defaultColorSelectedBorder = ac("232", "255")
-	colorSelectedBorder        = defaultColorSelectedBorder
+	defaultColorSelectedBorder                        = ac("232", "255")
+	colorSelectedBorder        lipgloss.TerminalColor = defaultColorSelectedBorder
 	// Used for unselected borders (cards): softer on light terminals so selection stands out.
-	defaultColorCardBorder = ac("250", "243")
-	colorCardBorder        = defaultColorCardBorder
+	defaultColorCardBorder                        = ac("250", "243")
+	colorCardBorder        lipgloss.TerminalColor = defaultColorCardBorder
 
-	colorSurfaceBg = ac("255", "235")
-	colorSurfaceFg = ac("235", "252")
+	defaultColorSurfaceBg lipgloss.TerminalColor = ac("255", "235")
+	colorSurfaceBg                               = defaultColorSurfaceBg
+	defaultColorSurfaceFg lipgloss.TerminalColor = ac("235", "252")
+	colorSurfaceFg                               = defaultColorSurfaceFg
 
 	// Slightly elevated surface for controls/inputs so they remain visible on light terminals.
-	colorControlBg = ac("252", "235")
-	colorInputBg   = ac("254", "234")
+	defaultColorControlBg lipgloss.TerminalColor = ac("252", "235")
+	colorControlBg                               = defaultColorControlBg
+	defaultColorInputBg   lipgloss.TerminalColor = ac("254", "234")
+	colorInputBg                                 = defaultColorInputBg
 
-	colorAccent = ac("27", "62") // blue
+	defaultColorAccent lipgloss.TerminalColor = ac("27", "62") // blue
+	colorAccent                               = defaultColorAccent
+	// Foreground for text rendered on top of colorAccent backgrounds (e.g. input cursor).
+	defaultColorAccentFg lipgloss.TerminalColor = ac("255", "235")
+	colorAccentFg                               = defaultColorAccentFg
 	// Avoid gray "shadow blocks" on light terminals; keep shadow only for dark theme.
-	colorShadow = ac("255", "236")
+	defaultColorShadow lipgloss.TerminalColor = ac("255", "236")
+	colorShadow                               = defaultColorShadow
+
+	// Card metadata (small secondary labels inside cards).
+	defaultColorCardMetaFg lipgloss.TerminalColor = ac("238", "250")
+	colorCardMetaFg                               = defaultColorCardMetaFg
+
+	// Short-lived row flash feedback (e.g. permission denied).
+	defaultColorFlashErrorBg lipgloss.TerminalColor = ac("196", "160") // red
+	colorFlashErrorBg                               = defaultColorFlashErrorBg
+
+	// Modal colors; by default these track the surface.
+	defaultColorModalSurfaceBg lipgloss.TerminalColor = defaultColorSurfaceBg
+	colorModalSurfaceBg                               = defaultColorModalSurfaceBg
+	defaultColorModalSurfaceFg lipgloss.TerminalColor = defaultColorSurfaceFg
+	colorModalSurfaceFg                               = defaultColorModalSurfaceFg
+	defaultColorModalHeaderBg  lipgloss.TerminalColor = defaultColorControlBg
+	colorModalHeaderBg                                = defaultColorModalHeaderBg
+	defaultColorModalHeaderFg  lipgloss.TerminalColor = defaultColorSurfaceFg
+	colorModalHeaderFg                                = defaultColorModalHeaderFg
 )
 
 func styleMuted() lipgloss.Style {
@@ -69,7 +109,29 @@ func applyColorProfilePreference() {
 		lipgloss.SetColorProfile(termenv.Ascii)
 		return
 	}
-	lipgloss.SetColorProfile(termenv.ColorProfile())
+
+	// Start from termenv's best guess.
+	profile := termenv.ColorProfile()
+
+	// Heuristics:
+	// - If TERM/COLORTERM indicate stronger support than the detector reports, trust
+	//   the env. This helps terminals like macOS Terminal.app where color probing
+	//   can under-report (leading to degraded "gray" colors).
+	term := strings.ToLower(strings.TrimSpace(os.Getenv("TERM")))
+	colorterm := strings.ToLower(strings.TrimSpace(os.Getenv("COLORTERM")))
+	if strings.Contains(colorterm, "truecolor") || strings.Contains(colorterm, "24bit") {
+		if profile != termenv.Ascii {
+			profile = termenv.TrueColor
+		}
+	} else if strings.Contains(term, "256color") {
+		if profile == termenv.Ascii {
+			profile = termenv.ANSI256
+		} else if profile == termenv.ANSI {
+			profile = termenv.ANSI256
+		}
+	}
+
+	lipgloss.SetColorProfile(profile)
 }
 
 // applyThemePreference configures Lip Gloss's background detection.
@@ -112,6 +174,35 @@ func applyThemePreference() {
 			// Treat "lighter" backgrounds as non-dark. This is heuristic, but better than
 			// consistently choosing the wrong palette.
 			lipgloss.SetHasDarkBackground(bg < 7)
+			return
 		}
 	}
+
+	// macOS Terminal.app often doesn't set COLORFGBG, and background probing can be unreliable.
+	// As a fallback, use the OS appearance (Light vs Dark) when available.
+	if runtime.GOOS == "darwin" {
+		if dark, ok := macOSHasDarkAppearance(); ok {
+			lipgloss.SetHasDarkBackground(dark)
+			return
+		}
+	}
+}
+
+func macOSHasDarkAppearance() (dark bool, ok bool) {
+	// `defaults read -g AppleInterfaceStyle` prints "Dark" in dark mode and returns exit status 1
+	// in light mode (key missing).
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "defaults", "read", "-g", "AppleInterfaceStyle").CombinedOutput()
+	if ctx.Err() != nil {
+		return false, false
+	}
+	if err == nil {
+		return strings.Contains(strings.ToLower(string(out)), "dark"), true
+	}
+	if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
+		return false, true
+	}
+	return false, false
 }

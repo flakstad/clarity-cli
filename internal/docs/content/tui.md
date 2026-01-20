@@ -102,7 +102,13 @@ Appearance (profiles / glyphs / lists):
 - Use `x` → `f` to switch while running.
 - Or set `CLARITY_TUI_GLYPHS=ascii` (or `unicode`) to pick a default.
 - `x` → `f` also includes a few experimental **appearance profiles** focused on outline/status rendering. Default remains unchanged.
-- Or set `CLARITY_TUI_PROFILE=default|neon|pills|mono` to pick a default profile.
+- Or set `CLARITY_TUI_PROFILE=default|alabaster|dracula|gruvbox|solarized|neon|pills|mono|terminal|custom` to pick a default profile.
+- `dracula`, `gruvbox`, and `solarized` are curated palettes that explicitly set the core TUI colors for a consistent look across terminals.
+- `terminal` uses the terminal’s built-in ANSI theme colors (0–15) for accents and keeps most surfaces unpainted.
+- Palette selection is automatic, but you can force it:
+  - `CLARITY_TUI_THEME=light|dark|auto` (preferred)
+  - `CLARITY_TUI_DARKBG=true|false` (legacy/override)
+  - On macOS, when the terminal doesn’t report a background, Clarity may fall back to OS appearance.
 - `x` → `f` also includes experimental Projects/Outlines list styles (cards vs row-based).
 - Or set `CLARITY_TUI_LISTS=cards|rows|minimal` to pick a default list style.
 - Selections made via `x` → `f` are persisted to `~/.clarity/config.json` under the `tui` key (unless you override via env vars).

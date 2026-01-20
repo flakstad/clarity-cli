@@ -18,7 +18,8 @@ type compactItemDelegate struct {
 
 func newCompactItemDelegate() compactItemDelegate {
 	return compactItemDelegate{
-		normal: lipgloss.NewStyle(),
+		normal: lipgloss.NewStyle().
+			Foreground(colorSurfaceFg),
 		selected: lipgloss.NewStyle().
 			Foreground(colorSelectedFg).
 			Background(colorSelectedBg).
@@ -73,7 +74,8 @@ type focusAwareCompactItemDelegate struct {
 
 func newFocusAwareCompactItemDelegate(active *bool) focusAwareCompactItemDelegate {
 	return focusAwareCompactItemDelegate{
-		normal: lipgloss.NewStyle(),
+		normal: lipgloss.NewStyle().
+			Foreground(colorSurfaceFg),
 		selected: lipgloss.NewStyle().
 			Foreground(colorSelectedFg).
 			Background(colorSelectedBg).

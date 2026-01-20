@@ -19,13 +19,14 @@ type outlineItemDelegate struct {
 
 func newOutlineItemDelegate() outlineItemDelegate {
 	return outlineItemDelegate{
-		normal: lipgloss.NewStyle(),
+		normal: lipgloss.NewStyle().
+			Foreground(colorSurfaceFg),
 		selected: lipgloss.NewStyle().
 			Foreground(colorSelectedFg).
 			Background(colorSelectedBg).
 			Bold(true),
 		addRow: lipgloss.NewStyle().
-			Foreground(ac("240", "245")).
+			Foreground(colorChromeMutedFg).
 			Italic(true),
 	}
 }
@@ -170,7 +171,7 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
 
 	// Short-lived error flash (e.g. permission denied).
 	flashFg := colorSelectedFg
-	flashBg := ac("196", "160") // red
+	flashBg := colorFlashErrorBg
 	if it.flashKind == "error" {
 		bg = flashBg
 	}
@@ -261,28 +262,28 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
 	if s := strings.TrimSpace(formatScheduleLabel(it.row.item.Schedule)); s != "" {
 		st := metaScheduleStyle
 		if focused {
-			st = st.Background(bg)
+			st = st.Foreground(d.selected.GetForeground()).Background(bg)
 		}
 		metaParts = append(metaParts, st.Render(s))
 	}
 	if s := strings.TrimSpace(formatDueLabel(it.row.item.Due)); s != "" {
 		st := metaDueStyle
 		if focused {
-			st = st.Background(bg)
+			st = st.Foreground(d.selected.GetForeground()).Background(bg)
 		}
 		metaParts = append(metaParts, st.Render(s))
 	}
 	if lbl := strings.TrimSpace(it.row.assignedLabel); lbl != "" {
 		st := metaAssignStyle
 		if focused {
-			st = st.Background(bg)
+			st = st.Foreground(d.selected.GetForeground()).Background(bg)
 		}
 		metaParts = append(metaParts, st.Render("@"+lbl))
 	}
 	if it.row.commentsCount > 0 {
 		st := metaCommentStyle
 		if focused {
-			st = st.Background(bg)
+			st = st.Foreground(d.selected.GetForeground()).Background(bg)
 		}
 		metaParts = append(metaParts, st.Render(fmt.Sprintf("c:%d", it.row.commentsCount)))
 	}
@@ -293,7 +294,7 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
 		}
 		st := metaTagStyle
 		if focused {
-			st = st.Background(bg)
+			st = st.Foreground(d.selected.GetForeground()).Background(bg)
 		}
 		metaParts = append(metaParts, st.Render("#"+tag))
 	}

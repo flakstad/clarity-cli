@@ -1109,6 +1109,17 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 	case actionPanelAppearance:
 		curApp := appearanceProfile()
 		curLists := listStyle()
+		actions["0"] = actionPanelAction{
+			label: "Profile: Alabaster" + markCurrent(curApp == appearanceAlabaster),
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				setAppearanceProfile(appearanceAlabaster)
+				(&mm).applyAppearanceStyles()
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Profile = string(appearanceAlabaster) })
+				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceAlabaster))
+				return mm, nil
+			},
+		}
 		actions["1"] = actionPanelAction{
 			label: "Profile: Default" + markCurrent(curApp == appearanceDefault),
 			kind:  actionPanelActionExec,
@@ -1121,6 +1132,39 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			},
 		}
 		actions["2"] = actionPanelAction{
+			label: "Profile: Dracula" + markCurrent(curApp == appearanceDracula || curApp == appearanceMidnight),
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				setAppearanceProfile(appearanceDracula)
+				(&mm).applyAppearanceStyles()
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Profile = string(appearanceDracula) })
+				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceDracula))
+				return mm, nil
+			},
+		}
+		actions["3"] = actionPanelAction{
+			label: "Profile: Gruvbox" + markCurrent(curApp == appearanceGruvbox),
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				setAppearanceProfile(appearanceGruvbox)
+				(&mm).applyAppearanceStyles()
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Profile = string(appearanceGruvbox) })
+				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceGruvbox))
+				return mm, nil
+			},
+		}
+		actions["4"] = actionPanelAction{
+			label: "Profile: Solarized" + markCurrent(curApp == appearanceSolarized || curApp == appearancePaper),
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				setAppearanceProfile(appearanceSolarized)
+				(&mm).applyAppearanceStyles()
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Profile = string(appearanceSolarized) })
+				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceSolarized))
+				return mm, nil
+			},
+		}
+		actions["5"] = actionPanelAction{
 			label: "Profile: Neon" + markCurrent(curApp == appearanceNeon),
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
@@ -1131,7 +1175,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 				return mm, nil
 			},
 		}
-		actions["3"] = actionPanelAction{
+		actions["6"] = actionPanelAction{
 			label: "Profile: Pills" + markCurrent(curApp == appearancePills),
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
@@ -1142,7 +1186,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 				return mm, nil
 			},
 		}
-		actions["4"] = actionPanelAction{
+		actions["7"] = actionPanelAction{
 			label: "Profile: Mono" + markCurrent(curApp == appearanceMono),
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
@@ -1153,7 +1197,18 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 				return mm, nil
 			},
 		}
-		actions["5"] = actionPanelAction{
+		actions["8"] = actionPanelAction{
+			label: "Profile: Terminal" + markCurrent(curApp == appearanceTerminal),
+			kind:  actionPanelActionExec,
+			handler: func(mm appModel) (appModel, tea.Cmd) {
+				setAppearanceProfile(appearanceTerminal)
+				(&mm).applyAppearanceStyles()
+				persistTUIConfigBestEffort(&mm, func(tc *store.TUIConfig) { tc.Profile = string(appearanceTerminal) })
+				mm.showMinibuffer("Profile: " + appearanceLabel(appearanceTerminal))
+				return mm, nil
+			},
+		}
+		actions["9"] = actionPanelAction{
 			label: "Profile: Custom" + markCurrent(curApp == appearanceCustom),
 			kind:  actionPanelActionExec,
 			handler: func(mm appModel) (appModel, tea.Cmd) {
@@ -2390,7 +2445,7 @@ func (m *appModel) viewProjects() string {
 		contentW = w
 	}
 
-	crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+	crumb := lipgloss.NewStyle().Width(contentW).Foreground(colorChromeSubtleFg).Render(m.breadcrumbText())
 	listH := bodyHeight
 	if listH < 0 {
 		listH = 0
@@ -2426,7 +2481,7 @@ func (m *appModel) viewOutlines() string {
 		contentW = w
 	}
 
-	crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+	crumb := lipgloss.NewStyle().Width(contentW).Foreground(colorChromeSubtleFg).Render(m.breadcrumbText())
 	listH := bodyHeight
 	if listH < 0 {
 		listH = 0
@@ -2462,7 +2517,7 @@ func (m *appModel) viewProjectAttachments() string {
 		contentW = w
 	}
 
-	crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+	crumb := lipgloss.NewStyle().Width(contentW).Foreground(colorChromeSubtleFg).Render(m.breadcrumbText())
 	body := m.listBodyWithOverflowHint(&m.projectAttachmentsList, contentW, bodyHeight)
 	main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
 	main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
@@ -2504,7 +2559,7 @@ func (m *appModel) viewAgenda() string {
 		contentW = w
 	}
 
-	crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+	crumb := lipgloss.NewStyle().Width(contentW).Foreground(colorChromeSubtleFg).Render(m.breadcrumbText())
 	body := m.listBodyWithOverflowHint(&m.agendaList, contentW, bodyHeight)
 	main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
 	main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
@@ -2536,7 +2591,7 @@ func (m *appModel) viewArchived() string {
 		contentW = w
 	}
 
-	crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+	crumb := lipgloss.NewStyle().Width(contentW).Foreground(colorChromeSubtleFg).Render(m.breadcrumbText())
 	body := m.listBodyWithOverflowHint(&m.archivedList, contentW, bodyHeight)
 	main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + body
 	main = lipgloss.NewStyle().Width(w).Padding(0, splitOuterMargin).Render(main)
@@ -4591,7 +4646,7 @@ func (m *appModel) viewOutline() string {
 
 	// Experimental: column/kanban view (status as columns).
 	if m.curOutlineViewMode() == outlineViewModeColumns {
-		crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+		crumb := lipgloss.NewStyle().Width(contentW).Foreground(colorChromeSubtleFg).Render(m.breadcrumbText())
 		outline, ok := m.db.FindOutline(m.selectedOutlineID)
 		if !ok {
 			msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("Outline not found.")
@@ -4653,7 +4708,7 @@ func (m *appModel) viewOutline() string {
 
 	var main string
 	if !m.splitPreviewVisible() {
-		crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+		crumb := lipgloss.NewStyle().Width(contentW).Foreground(colorChromeSubtleFg).Render(m.breadcrumbText())
 		outline, ok := m.db.FindOutline(m.selectedOutlineID)
 		if !ok {
 			msg := lipgloss.NewStyle().Width(contentW).Height(bodyHeight).Render("Outline not found.")
@@ -4694,7 +4749,7 @@ func (m *appModel) viewOutline() string {
 		}
 		// Render the breadcrumb at full content width so it doesn't wrap early on narrow left panes.
 		// The right pane overlays on top, so any breadcrumb overflow into the right side is naturally hidden.
-		fullCrumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+		fullCrumb := lipgloss.NewStyle().Width(contentW).Foreground(colorChromeSubtleFg).Render(m.breadcrumbText())
 		leftHeaderTmp := fullCrumb + "\n\n" + titleLine
 		if strings.TrimSpace(descRendered) != "" {
 			leftHeaderTmp = leftHeaderTmp + "\n" + descRendered
@@ -4777,20 +4832,20 @@ func (m *appModel) viewItem() string {
 
 	rootID := strings.TrimSpace(m.openItemID)
 	if rootID == "" {
-		crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+		crumb := lipgloss.NewStyle().Width(contentW).Foreground(colorChromeSubtleFg).Render(m.breadcrumbText())
 		msg := lipgloss.NewStyle().Width(contentW).Height(bodyH).Render("No item selected.")
 		main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
 		return wrap(main)
 	}
 	outline, ok := m.db.FindOutline(m.selectedOutlineID)
 	if !ok || outline == nil {
-		crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+		crumb := lipgloss.NewStyle().Width(contentW).Foreground(colorChromeSubtleFg).Render(m.breadcrumbText())
 		msg := lipgloss.NewStyle().Width(contentW).Height(bodyH).Render("Outline not found.")
 		main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
 		return wrap(main)
 	}
 	if _, ok := m.db.FindItem(rootID); !ok {
-		crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+		crumb := lipgloss.NewStyle().Width(contentW).Foreground(colorChromeSubtleFg).Render(m.breadcrumbText())
 		msg := lipgloss.NewStyle().Width(contentW).Height(bodyH).Render("Item not found.")
 		main := strings.Repeat("\n", topPadLines) + crumb + strings.Repeat("\n", breadcrumbGap+1) + msg
 		return wrap(main)
@@ -4802,7 +4857,7 @@ func (m *appModel) viewItem() string {
 		selectListItemByID(&m.itemsList, rootID)
 	}
 
-	crumb := lipgloss.NewStyle().Width(contentW).Foreground(lipgloss.Color("243")).Render(m.breadcrumbText())
+	crumb := lipgloss.NewStyle().Width(contentW).Foreground(colorChromeSubtleFg).Render(m.breadcrumbText())
 
 	// Item view: single-pane outline list (narrowed to the current root).
 	contentH := frameH - topPadLines
@@ -9597,18 +9652,7 @@ func terminateANSILine(s string) string {
 }
 
 func modalSurfaceStyle() lipgloss.Style {
-	switch appearanceProfile() {
-	case appearanceNeon:
-		// Slightly darker surface to make bright accents pop.
-		return lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(ac("254", "233"))
-	case appearancePills:
-		// Use the control surface to create a stronger "dialog" separation.
-		return lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorControlBg)
-	case appearanceMono:
-		return lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorSurfaceBg)
-	default:
-		return lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorSurfaceBg)
-	}
+	return lipgloss.NewStyle().Foreground(colorModalSurfaceFg).Background(colorModalSurfaceBg)
 }
 
 func modalHeaderStyle() lipgloss.Style {
@@ -9617,14 +9661,14 @@ func modalHeaderStyle() lipgloss.Style {
 		return lipgloss.NewStyle().
 			Bold(true).
 			Padding(0, 1).
-			Foreground(ac("255", "255")).
-			Background(ac("57", "55"))
+			Foreground(colorModalHeaderFg).
+			Background(colorModalHeaderBg)
 	case appearancePills:
 		return lipgloss.NewStyle().
 			Bold(true).
 			Padding(0, 1).
-			Foreground(ac("232", "255")).
-			Background(ac("110", "30"))
+			Foreground(colorModalHeaderFg).
+			Background(colorModalHeaderBg)
 	case appearanceMono:
 		return lipgloss.NewStyle().Bold(true).Underline(true)
 	default:
@@ -13233,7 +13277,7 @@ func (m *appModel) openInputModal(kind modalKind, forID, placeholder, initial st
 	m.input.PromptStyle = st
 	m.input.TextStyle = st
 	m.input.PlaceholderStyle = styleMuted().Background(colorInputBg)
-	m.input.CursorStyle = lipgloss.NewStyle().Foreground(colorSelectedFg).Background(colorAccent)
+	m.input.CursorStyle = lipgloss.NewStyle().Foreground(colorAccentFg).Background(colorAccent)
 
 	m.input.Placeholder = placeholder
 	m.input.SetValue(initial)
@@ -13271,7 +13315,7 @@ func (m *appModel) openDateModal(kind modalKind, itemID string, initial *model.D
 		in.PromptStyle = st
 		in.TextStyle = st
 		in.PlaceholderStyle = styleMuted().Background(colorInputBg)
-		in.CursorStyle = lipgloss.NewStyle().Foreground(colorSelectedFg).Background(colorAccent)
+		in.CursorStyle = lipgloss.NewStyle().Foreground(colorAccentFg).Background(colorAccent)
 	}
 
 	// Focus day by default (clear cursor elsewhere).

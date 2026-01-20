@@ -327,11 +327,22 @@ func applyClarityMarkdownPalette(cfg *ansi.StyleConfig, styleName string) {
 	cfg.BlockQuote.Faint = mdBoolPtr(false)
 }
 
-func mdColor(c lipgloss.AdaptiveColor, styleName string) *string {
-	if strings.TrimSpace(strings.ToLower(styleName)) == "light" {
-		return mdStrPtr(c.Light)
+func mdColor(c lipgloss.TerminalColor, styleName string) *string {
+	switch v := c.(type) {
+	case lipgloss.NoColor:
+		return nil
+	case lipgloss.AdaptiveColor:
+		if strings.TrimSpace(strings.ToLower(styleName)) == "light" {
+			return mdStrPtr(v.Light)
+		}
+		return mdStrPtr(v.Dark)
+	case lipgloss.Color:
+		return mdStrPtr(string(v))
+	case lipgloss.ANSIColor:
+		return mdStrPtr(strconv.Itoa(int(v)))
+	default:
+		return nil
 	}
-	return mdStrPtr(c.Dark)
 }
 
 func mdStrPtr(s string) *string { return &s }

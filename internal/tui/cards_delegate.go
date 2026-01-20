@@ -53,7 +53,7 @@ func newCardDelegate(kind string) cardDelegate {
 		selectedCard:       selected,
 		titleStyle:         lipgloss.NewStyle().Bold(true).Foreground(colorSurfaceFg),
 		titleSelectedStyle: lipgloss.NewStyle().Bold(true).Foreground(colorSurfaceFg),
-		metaStyle:          lipgloss.NewStyle().Foreground(ac("238", "250")),
+		metaStyle:          lipgloss.NewStyle().Foreground(colorCardMetaFg),
 	}
 }
 

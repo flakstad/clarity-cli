@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type appModel struct {
@@ -300,6 +301,40 @@ func (m *appModel) applyAppearanceStyles() {
 	m.captureTemplatePromptsList.SetDelegate(newCompactItemDelegate())
 	m.captureTemplatePromptTypeList.SetDelegate(newCompactItemDelegate())
 	m.captureTemplatePromptRequiredList.SetDelegate(newCompactItemDelegate())
+
+	// Inputs/editors: ensure readable, theme-aligned contrast across terminals.
+	m.applyEditorStyles()
+
+	// Some views cache rendered (ANSI-colored) strings. Theme changes must invalidate
+	// those caches so we don't keep old palette output.
+	m.previewCacheForID = ""
+	m.previewCacheW = 0
+	m.previewCacheH = 0
+	m.previewCache = ""
+}
+
+func (m *appModel) applyEditorStyles() {
+	// Textarea (comments/worklog/description editors).
+	base := lipgloss.NewStyle().Foreground(colorSurfaceFg).Background(colorInputBg)
+	ln := lipgloss.NewStyle().Foreground(colorChromeSubtleFg).Background(colorInputBg)
+	ph := lipgloss.NewStyle().Foreground(colorChromeMutedFg).Background(colorInputBg)
+
+	m.textarea.FocusedStyle.Base = base
+	m.textarea.FocusedStyle.Text = lipgloss.NewStyle().Foreground(colorSurfaceFg)
+	m.textarea.FocusedStyle.Placeholder = ph
+	m.textarea.FocusedStyle.LineNumber = ln
+	m.textarea.FocusedStyle.CursorLineNumber = ln.Copy().Bold(true)
+	m.textarea.FocusedStyle.EndOfBuffer = ln
+
+	m.textarea.BlurredStyle.Base = base
+	m.textarea.BlurredStyle.Text = lipgloss.NewStyle().Foreground(colorSurfaceFg)
+	m.textarea.BlurredStyle.Placeholder = ph
+	m.textarea.BlurredStyle.LineNumber = ln
+	m.textarea.BlurredStyle.CursorLineNumber = ln
+	m.textarea.BlurredStyle.EndOfBuffer = ln
+
+	// Keep cursor line styling minimal (full-line highlights can reduce readability).
+	m.textarea.FocusedStyle.CursorLine = m.textarea.BlurredStyle.CursorLine
 }
 
 func (m *appModel) applyListStyle() {

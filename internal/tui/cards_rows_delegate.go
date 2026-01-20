@@ -29,14 +29,15 @@ func newOutlineRowsDelegate(minimal bool) cardsRowDelegate {
 }
 
 func newCardsRowDelegate(kind string, minimal bool) cardsRowDelegate {
-	muted := lipgloss.NewStyle().Foreground(ac("240", "245"))
+	muted := lipgloss.NewStyle().Foreground(colorChromeMutedFg)
 	if minimal {
 		muted = lipgloss.NewStyle().Foreground(colorMuted)
 	}
 	return cardsRowDelegate{
 		kind:    kind,
 		minimal: minimal,
-		normal:  lipgloss.NewStyle(),
+		normal: lipgloss.NewStyle().
+			Foreground(colorSurfaceFg),
 		selected: lipgloss.NewStyle().
 			Foreground(colorSelectedFg).
 			Background(colorSelectedBg).

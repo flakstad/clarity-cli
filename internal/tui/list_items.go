@@ -360,10 +360,10 @@ var (
 	defaultProgressFillFg  = ac("235", "255") // light: dark text; dark: light text
 	defaultProgressEmptyFg = ac("240", "252") // light: muted; dark: light-ish
 
-	progressFillBg  = defaultProgressFillBg
-	progressEmptyBg = defaultProgressEmptyBg
-	progressFillFg  = defaultProgressFillFg
-	progressEmptyFg = defaultProgressEmptyFg
+	progressFillBg  lipgloss.TerminalColor = defaultProgressFillBg
+	progressEmptyBg lipgloss.TerminalColor = defaultProgressEmptyBg
+	progressFillFg  lipgloss.TerminalColor = defaultProgressFillFg
+	progressEmptyFg lipgloss.TerminalColor = defaultProgressEmptyFg
 )
 
 func renderProgressCookie(done, total int) string {
@@ -437,11 +437,11 @@ var (
 	metaPriorityStyle = defaultMetaPriorityStyle
 	metaOnHoldStyle   = defaultMetaOnHoldStyle
 	// due/schedule buttons in outline.js use the default "has-data" color (text-secondary), not a semantic accent.
-	defaultMetaDueStyle      = lipgloss.NewStyle().Foreground(ac("240", "245"))
-	defaultMetaScheduleStyle = lipgloss.NewStyle().Foreground(ac("240", "245"))
-	defaultMetaAssignStyle   = lipgloss.NewStyle().Foreground(ac("240", "245"))
-	defaultMetaCommentStyle  = lipgloss.NewStyle().Foreground(ac("240", "245"))
-	defaultMetaTagStyle      = lipgloss.NewStyle().Foreground(ac("240", "245"))
+	defaultMetaDueStyle      = lipgloss.NewStyle().Foreground(colorChromeMutedFg)
+	defaultMetaScheduleStyle = lipgloss.NewStyle().Foreground(colorChromeMutedFg)
+	defaultMetaAssignStyle   = lipgloss.NewStyle().Foreground(colorChromeMutedFg)
+	defaultMetaCommentStyle  = lipgloss.NewStyle().Foreground(colorChromeMutedFg)
+	defaultMetaTagStyle      = lipgloss.NewStyle().Foreground(colorChromeMutedFg)
 
 	metaDueStyle      = defaultMetaDueStyle
 	metaScheduleStyle = defaultMetaScheduleStyle
@@ -620,7 +620,7 @@ func (i agendaHeadingItem) Title() string {
 	if o == "" {
 		o = "(unnamed outline)"
 	}
-	return lipgloss.NewStyle().Foreground(ac("240", "245")).Bold(true).Render(p + " / " + o)
+	return lipgloss.NewStyle().Foreground(colorChromeMutedFg).Bold(true).Render(p + " / " + o)
 }
 func (i agendaHeadingItem) Description() string { return "" }
 
@@ -636,7 +636,7 @@ func (i archivedHeadingItem) Title() string {
 	if lbl == "" {
 		lbl = "Archived"
 	}
-	return lipgloss.NewStyle().Foreground(ac("240", "245")).Bold(true).Render(lbl)
+	return lipgloss.NewStyle().Foreground(colorChromeMutedFg).Bold(true).Render(lbl)
 }
 func (i archivedHeadingItem) Description() string { return "" }
 
@@ -654,7 +654,7 @@ func (i archivedProjectItem) Title() string {
 		name = "(unnamed project)"
 	}
 	// Display-only row: keep it muted.
-	return lipgloss.NewStyle().Foreground(ac("241", "245")).Render(name)
+	return lipgloss.NewStyle().Foreground(colorChromeSubtleFg).Render(name)
 }
 func (i archivedProjectItem) Description() string { return strings.TrimSpace(i.projectID) }
 
@@ -677,7 +677,7 @@ func (i archivedOutlineItem) Title() string {
 		o = "(unnamed outline)"
 	}
 	// Display-only row: keep it muted and include context.
-	return lipgloss.NewStyle().Foreground(ac("241", "245")).Render(p + " / " + o)
+	return lipgloss.NewStyle().Foreground(colorChromeSubtleFg).Render(p + " / " + o)
 }
 func (i archivedOutlineItem) Description() string { return strings.TrimSpace(i.outlineID) }
 

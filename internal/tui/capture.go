@@ -2536,7 +2536,7 @@ func (m *captureModel) openDateModal(initial *model.DateTime) {
 		in.TextStyle = st
 		in.PromptStyle = st
 		in.PlaceholderStyle = styleMuted().Background(colorInputBg)
-		in.CursorStyle = lipgloss.NewStyle().Foreground(colorSelectedFg).Background(colorAccent)
+		in.CursorStyle = lipgloss.NewStyle().Foreground(colorAccentFg).Background(colorAccent)
 	}
 
 	// Focus day by default (clear cursor elsewhere).
