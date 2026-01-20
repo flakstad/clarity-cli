@@ -87,6 +87,20 @@ func (m *appModel) openModalForActivityRow(act outlineActivityRowItem) bool {
 		title := fmt.Sprintf("My worklog — %s — %s", fmtTS(w.CreatedAt), actorAtLabel(m.db, w.AuthorID))
 		m.openViewEntryModal(title, strings.TrimSpace(w.Body))
 		return true
+	case outlineActivityDepsRoot:
+		// Enter toggles deps expansion in the outline list (read-only).
+		m.toggleCollapseSelected()
+		return true
+	case outlineActivityDepEdge:
+		otherID := strings.TrimSpace(act.depOtherItemID)
+		if otherID == "" {
+			m.showMinibuffer("Dep: item not found")
+			return true
+		}
+		if err := m.jumpToItemByID(otherID); err != nil {
+			m.showMinibuffer("Dep: " + err.Error())
+		}
+		return true
 	default:
 		return false
 	}

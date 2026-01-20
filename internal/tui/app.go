@@ -3923,10 +3923,22 @@ func (m *appModel) refreshItems(outline model.Outline) {
 	var items []list.Item
 	showInlineDescriptions := m.outlineViewModeForID(outline.ID) != outlineViewModeColumns
 
+	depsTouched := map[string]bool{}
+	for _, d := range m.db.Deps {
+		fromID := strings.TrimSpace(d.FromItemID)
+		toID := strings.TrimSpace(d.ToItemID)
+		if fromID != "" {
+			depsTouched[fromID] = true
+		}
+		if toID != "" {
+			depsTouched[toID] = true
+		}
+	}
+
 	for _, row := range flat {
 		row.commentsCount = len(m.db.CommentsForItem(row.item.ID))
 		worklogCount := len(m.db.WorklogForItem(row.item.ID))
-		if row.commentsCount > 0 || worklogCount > 0 {
+		if row.commentsCount > 0 || worklogCount > 0 || depsTouched[strings.TrimSpace(row.item.ID)] {
 			row.hasChildren = true
 		}
 		if showInlineDescriptions && strings.TrimSpace(row.item.Description) != "" {
@@ -4077,13 +4089,25 @@ func (m *appModel) refreshItemSubtree(outline model.Outline, rootItemID string) 
 		its = append(its, it)
 	}
 
-	// Activity (comments/worklog) makes items collapsible too.
+	depsTouched := map[string]bool{}
+	for _, d := range m.db.Deps {
+		fromID := strings.TrimSpace(d.FromItemID)
+		toID := strings.TrimSpace(d.ToItemID)
+		if fromID != "" && inSubtree[fromID] {
+			depsTouched[fromID] = true
+		}
+		if toID != "" && inSubtree[toID] {
+			depsTouched[toID] = true
+		}
+	}
+
+	// Activity (comments/worklog/deps) makes items collapsible too.
 	for _, it := range its {
 		id := strings.TrimSpace(it.ID)
 		if id == "" {
 			continue
 		}
-		if len(m.db.CommentsForItem(id)) == 0 && len(m.db.WorklogForItem(id)) == 0 {
+		if len(m.db.CommentsForItem(id)) == 0 && len(m.db.WorklogForItem(id)) == 0 && !depsTouched[id] {
 			continue
 		}
 		if _, ok := collapsed[id]; !ok {
@@ -4096,7 +4120,7 @@ func (m *appModel) refreshItemSubtree(outline model.Outline, rootItemID string) 
 	for _, row := range flat {
 		row.commentsCount = len(m.db.CommentsForItem(row.item.ID))
 		worklogCount := len(m.db.WorklogForItem(row.item.ID))
-		if row.commentsCount > 0 || worklogCount > 0 {
+		if row.commentsCount > 0 || worklogCount > 0 || depsTouched[strings.TrimSpace(row.item.ID)] {
 			row.hasChildren = true
 		}
 		if strings.TrimSpace(row.item.Description) != "" {
@@ -5628,6 +5652,31 @@ func (m *appModel) ensureActivitySelectionVisibleInCollapsedMap(collapsed map[st
 				collapsed[cur] = false
 				cur = strings.TrimSpace(parentByID[cur])
 			}
+			return
+		}
+	}
+
+	// Dep edge: ensure the parent item and deps root are expanded.
+	for id := range subtreeIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		for _, d := range m.db.Deps {
+			depID := strings.TrimSpace(d.ID)
+			if depID == "" {
+				continue
+			}
+			if strings.TrimSpace(activityDepEdgeID(depID)) != selectionID {
+				continue
+			}
+			fromID := strings.TrimSpace(d.FromItemID)
+			toID := strings.TrimSpace(d.ToItemID)
+			if fromID != id && toID != id {
+				continue
+			}
+			collapsed[id] = false
+			collapsed[activityDepsRootID(id)] = false
 			return
 		}
 	}

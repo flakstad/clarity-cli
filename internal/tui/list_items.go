@@ -191,6 +191,8 @@ type outlineActivityKind string
 const (
 	outlineActivityCommentsRoot outlineActivityKind = "comments_root"
 	outlineActivityComment      outlineActivityKind = "comment"
+	outlineActivityDepsRoot     outlineActivityKind = "deps_root"
+	outlineActivityDepEdge      outlineActivityKind = "dep_edge"
 	outlineActivityWorklogRoot  outlineActivityKind = "worklog_root"
 	outlineActivityWorklogEntry outlineActivityKind = "worklog_entry"
 	outlineActivityHistoryEntry outlineActivityKind = "history_entry"
@@ -210,9 +212,10 @@ type outlineActivityRowItem struct {
 	collapsed bool
 
 	// entity IDs (optional, kind-dependent).
-	commentID string
-	worklogID string
-	eventID   string
+	commentID      string
+	worklogID      string
+	eventID        string
+	depOtherItemID string
 
 	hasChildren bool
 	// hasDescription indicates the row has a body rendered as outlineDescRowItem lines.

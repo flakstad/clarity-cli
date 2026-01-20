@@ -309,6 +309,85 @@ func TestItemView_RendersActivityRowsInList_NoSplitPane(t *testing.T) {
 	}
 }
 
+func TestItemView_DepsActivityRows_EnterJumpsToItem(t *testing.T) {
+	dir := t.TempDir()
+	s := store.Store{Dir: dir}
+
+	actorID := "act-human"
+	now := time.Now().UTC()
+	db := &store.DB{
+		CurrentActorID: actorID,
+		Actors:         []model.Actor{{ID: actorID, Kind: model.ActorKindHuman, Name: "human"}},
+		Projects: []model.Project{{
+			ID:        "proj-a",
+			Name:      "Project A",
+			CreatedBy: actorID,
+			CreatedAt: now,
+		}},
+		Outlines: []model.Outline{{
+			ID:         "out-a",
+			ProjectID:  "proj-a",
+			StatusDefs: store.DefaultOutlineStatusDefs(),
+			CreatedBy:  actorID,
+			CreatedAt:  now,
+		}},
+		Items: []model.Item{
+			{
+				ID:           "item-a",
+				ProjectID:    "proj-a",
+				OutlineID:    "out-a",
+				Rank:         "h",
+				Title:        "Item A",
+				StatusID:     "todo",
+				OwnerActorID: actorID,
+				CreatedBy:    actorID,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			},
+			{
+				ID:           "item-b",
+				ProjectID:    "proj-a",
+				OutlineID:    "out-a",
+				Rank:         "i",
+				Title:        "Item B",
+				StatusID:     "doing",
+				OwnerActorID: actorID,
+				CreatedBy:    actorID,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			},
+		},
+		Deps: []model.Dependency{
+			{ID: "dep-1", FromItemID: "item-a", ToItemID: "item-b", Type: model.DependencyBlocks},
+		},
+	}
+	if err := s.Save(db); err != nil {
+		t.Fatalf("save db: %v", err)
+	}
+
+	m := newAppModel(dir, db)
+	m.width = 120
+	m.height = 40
+	m.view = viewItem
+	m.pane = paneOutline
+	m.selectedProjectID = "proj-a"
+	m.selectedOutlineID = "out-a"
+	m.selectedOutline = &db.Outlines[0]
+	m.openItemID = "item-a"
+	m.itemCollapsed = map[string]bool{
+		"item-a":                     false,
+		activityDepsRootID("item-a"): false,
+	}
+	m.refreshItemSubtree(db.Outlines[0], "item-a")
+	selectListItemByID(&m.itemsList, activityDepEdgeID("dep-1"))
+
+	mAny, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2 := mAny.(appModel)
+	if got := strings.TrimSpace(m2.openItemID); got != "item-b" {
+		t.Fatalf("expected openItemID=item-b after jumping, got %q", got)
+	}
+}
+
 func TestItemView_TabCollapse_IsIsolatedFromOutlineCollapse(t *testing.T) {
 	dir := t.TempDir()
 	s := store.Store{Dir: dir}

@@ -5,12 +5,16 @@ import (
 	"sort"
 	"strings"
 
+	"clarity-cli/internal/model"
 	"clarity-cli/internal/store"
 
 	"github.com/charmbracelet/bubbles/list"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func activityCommentsRootID(itemID string) string { return "__comments__:" + strings.TrimSpace(itemID) }
+func activityDepsRootID(itemID string) string     { return "__deps__:" + strings.TrimSpace(itemID) }
+func activityDepEdgeID(depID string) string       { return "__dep__:" + strings.TrimSpace(depID) }
 func activityWorklogRootID(itemID string) string  { return "__worklog__:" + strings.TrimSpace(itemID) }
 
 func injectItemActivityRows(items []list.Item, rootItemID string, collapsed map[string]bool, db *store.DB, contentW int) []list.Item {
@@ -77,6 +81,114 @@ func buildItemActivityOutlineRows(db *store.DB, itemID string, collapsed map[str
 	}
 
 	out := make([]list.Item, 0, 64)
+
+	// Deps.
+	type depEdge struct {
+		id        string
+		otherID   string
+		label     string
+		sortGroup int
+	}
+	depEdges := make([]depEdge, 0)
+	for _, d := range db.Deps {
+		fromID := strings.TrimSpace(d.FromItemID)
+		toID := strings.TrimSpace(d.ToItemID)
+		if fromID == "" || toID == "" {
+			continue
+		}
+		if strings.TrimSpace(d.ID) == "" {
+			continue
+		}
+
+		var otherID string
+		var prefix string
+		sortGroup := 99
+
+		switch d.Type {
+		case model.DependencyBlocks:
+			if fromID == itemID {
+				otherID = toID
+				prefix = "Blocked by: "
+				sortGroup = 0
+			} else if toID == itemID {
+				otherID = fromID
+				prefix = "Blocks: "
+				sortGroup = 1
+			} else {
+				continue
+			}
+		case model.DependencyRelated:
+			if fromID == itemID {
+				otherID = toID
+				prefix = "Related: "
+				sortGroup = 2
+			} else if toID == itemID {
+				otherID = fromID
+				prefix = "Related: "
+				sortGroup = 2
+			} else {
+				continue
+			}
+		default:
+			continue
+		}
+
+		otherLabel := otherID
+		if other, ok := db.FindItem(otherID); ok && other != nil {
+			status := ""
+			if o, ok := db.FindOutline(strings.TrimSpace(other.OutlineID)); ok && o != nil {
+				// IMPORTANT: deps rows are rendered as "activity" rows inside a selected-row style.
+				// If we embed ANSI sequences here (as renderStatus does), it can reset the selection
+				// background mid-line. Strip styling so the selection highlight spans the full row.
+				status = strings.TrimSpace(xansi.Strip(renderStatus(*o, other.StatusID)))
+			}
+			if status != "" {
+				otherLabel = status + " " + strings.TrimSpace(other.Title)
+			} else if strings.TrimSpace(other.Title) != "" {
+				otherLabel = strings.TrimSpace(other.Title)
+			}
+		}
+
+		depEdges = append(depEdges, depEdge{
+			id:        activityDepEdgeID(d.ID),
+			otherID:   otherID,
+			label:     prefix + otherLabel,
+			sortGroup: sortGroup,
+		})
+	}
+	sort.SliceStable(depEdges, func(i, j int) bool {
+		if depEdges[i].sortGroup != depEdges[j].sortGroup {
+			return depEdges[i].sortGroup < depEdges[j].sortGroup
+		}
+		return strings.ToLower(depEdges[i].label) < strings.ToLower(depEdges[j].label)
+	})
+	depsRootID := activityDepsRootID(itemID)
+	if len(depEdges) > 0 {
+		if _, ok := collapsed[depsRootID]; !ok {
+			collapsed[depsRootID] = true
+		}
+		out = append(out, outlineActivityRowItem{
+			id:          depsRootID,
+			itemID:      itemID,
+			kind:        outlineActivityDepsRoot,
+			depth:       baseDepth,
+			label:       fmt.Sprintf("Deps (%d)", len(depEdges)),
+			hasChildren: true,
+			collapsed:   collapsed[depsRootID],
+		})
+		if !collapsed[depsRootID] {
+			for _, e := range depEdges {
+				out = append(out, outlineActivityRowItem{
+					id:             e.id,
+					itemID:         itemID,
+					kind:           outlineActivityDepEdge,
+					depth:          baseDepth + 1,
+					label:          e.label,
+					depOtherItemID: e.otherID,
+				})
+			}
+		}
+	}
 
 	// Comments.
 	comments := db.CommentsForItem(itemID)
