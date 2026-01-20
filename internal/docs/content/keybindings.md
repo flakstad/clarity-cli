@@ -95,7 +95,7 @@ Item actions (selected row):
 - `enter`: open item
 - `e`: edit title
 - `D`: edit description
-- `space`: change status (picker)
+- `space`: change status (picker) / toggle checkbox (when parent enables checkbox children)
 - `shift+←/→`: cycle status backward/forward
 - `n`: new sibling
 - `N`: new child
@@ -108,6 +108,8 @@ Item actions (selected row):
 - `w`: add worklog entry
 - `p`: toggle priority
 - `o`: toggle on-hold
+- `K`: toggle checkbox children (makes direct children render as checkboxes)
+- `B`: toggle checkbox override (force normal status rendering for this item)
 - `A`: assign
 - `t`: tags
 - `d`: due date
@@ -156,7 +158,7 @@ Item actions (selected item row):
 - `enter`: open item
 - `e`: edit title
 - `D`: edit description
-- `space`: change status
+- `space`: change status / toggle checkbox (when parent enables checkbox children)
 - `shift+←/→`: cycle status backward/forward
 - `r`: archive
 - `C`: add comment

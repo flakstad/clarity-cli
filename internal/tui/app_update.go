@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"clarity-cli/internal/statusutil"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -875,11 +877,49 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.reportError(rowID, err)
 				}
 				return m, nil
+			case "K":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				if err := m.toggleChildrenCheckboxMode(rowID); err != nil {
+					return m, m.reportError(rowID, err)
+				}
+				return m, nil
+			case "B":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				if err := m.toggleItemKindStatusOverride(rowID); err != nil {
+					return m, m.reportError(rowID, err)
+				}
+				return m, nil
 			case " ":
 				if m.itemArchivedReadOnly {
 					m.showMinibuffer("Archived item: read-only")
 					return m, nil
 				}
+				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok && it.row.checkbox {
+					next := checkboxCheckedStatusID(*outline)
+					if isCheckboxChecked(*outline, it.row.item.StatusID) {
+						next = checkboxUncheckedStatusID(*outline)
+					}
+					if strings.TrimSpace(next) == "" {
+						m.showMinibuffer("Checkbox: outline has no statuses")
+						return m, nil
+					}
+					if statusutil.RequiresNote(*outline, next) {
+						m.openTextModal(modalStatusNote, rowID, "Status note…", "")
+						m.modalForKey = strings.TrimSpace(next)
+						return m, nil
+					}
+					if err := m.setStatusForItem(rowID, next); err != nil {
+						return m, m.reportError(rowID, err)
+					}
+					return m, nil
+				}
+
 				cur := ""
 				if it, ok := m.db.FindItem(rowID); ok && it != nil {
 					cur = it.StatusID
@@ -893,6 +933,22 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.showMinibuffer("Archived item: read-only")
 					return m, nil
 				}
+				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok && it.row.checkbox {
+					next := checkboxCheckedStatusID(*outline)
+					if strings.TrimSpace(next) == "" {
+						m.showMinibuffer("Checkbox: outline has no statuses")
+						return m, nil
+					}
+					if statusutil.RequiresNote(*outline, next) {
+						m.openTextModal(modalStatusNote, rowID, "Status note…", "")
+						m.modalForKey = strings.TrimSpace(next)
+						return m, nil
+					}
+					if err := m.setStatusForItem(rowID, next); err != nil {
+						return m, m.reportError(rowID, err)
+					}
+					return m, nil
+				}
 				if err := m.cycleItemStatus(*outline, rowID, +1); err != nil {
 					return m, m.reportError(rowID, err)
 				}
@@ -900,6 +956,18 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "shift+left":
 				if m.itemArchivedReadOnly {
 					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok && it.row.checkbox {
+					next := checkboxUncheckedStatusID(*outline)
+					if statusutil.RequiresNote(*outline, next) {
+						m.openTextModal(modalStatusNote, rowID, "Status note…", "")
+						m.modalForKey = strings.TrimSpace(next)
+						return m, nil
+					}
+					if err := m.setStatusForItem(rowID, next); err != nil {
+						return m, m.reportError(rowID, err)
+					}
 					return m, nil
 				}
 				if err := m.cycleItemStatus(*outline, rowID, -1); err != nil {

@@ -19,6 +19,8 @@ var itemActionsCoreSpecs = []actionSpec{
 	{key: "D", label: "Edit description"},
 	{key: "p", label: "Toggle priority"},
 	{key: "o", label: "Toggle on hold"},
+	{key: "K", label: "Toggle checkbox children"},
+	{key: "B", label: "Toggle checkbox override (status)"},
 	{key: "A", label: "Assign…"},
 	{key: "t", label: "Tags…"},
 	{key: "d", label: "Set due"},

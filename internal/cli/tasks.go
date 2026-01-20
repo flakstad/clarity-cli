@@ -31,6 +31,8 @@ func newItemsCmd(app *App) *cobra.Command {
 	cmd.AddCommand(newItemsSetStatusCmd(app))
 	cmd.AddCommand(newItemsSetPriorityCmd(app))
 	cmd.AddCommand(newItemsSetOnHoldCmd(app))
+	cmd.AddCommand(newItemsSetChildrenCheckboxCmd(app))
+	cmd.AddCommand(newItemsSetItemKindCmd(app))
 	cmd.AddCommand(newItemsSetDueCmd(app))
 	cmd.AddCommand(newItemsSetScheduleCmd(app))
 	cmd.AddCommand(newItemsSetAssignCmd(app))
@@ -366,6 +368,14 @@ func newItemsCreateCmd(app *App) *cobra.Command {
 			}
 
 			now := time.Now().UTC()
+			statusID := store.FirstStatusID(outline.StatusDefs)
+			if p != nil && strings.TrimSpace(*p) != "" {
+				if parent, ok := db.FindItem(strings.TrimSpace(*p)); ok && parent != nil && strings.TrimSpace(parent.ChildrenKind) == "checkbox" {
+					if sid := statusutil.CheckboxUncheckedStatusID(*outline); strings.TrimSpace(sid) != "" {
+						statusID = sid
+					}
+				}
+			}
 			t := model.Item{
 				ID:                 s.NextID(db, "item"),
 				ProjectID:          pid,
@@ -374,7 +384,7 @@ func newItemsCreateCmd(app *App) *cobra.Command {
 				Rank:               nextSiblingRank(db, oid, p),
 				Title:              strings.TrimSpace(title),
 				Description:        desc,
-				StatusID:           store.FirstStatusID(outline.StatusDefs),
+				StatusID:           statusID,
 				Priority:           false,
 				OnHold:             false,
 				Due:                nil,

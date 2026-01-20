@@ -276,6 +276,14 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
 	run(t, invocation{name: "items set-on-hold --on", cmdPath: "items set-on-hold", args: []string{"--dir", dir, "--actor", humanID, "items", "set-on-hold", itemA, "--on"}, expect: expectJSONEnvelope})
 	run(t, invocation{name: "items set-on-hold --off", cmdPath: "items set-on-hold", args: []string{"--dir", dir, "--actor", humanID, "items", "set-on-hold", itemA, "--off"}, expect: expectJSONEnvelope})
 
+	// set-children-checkbox: explicit --on/--off.
+	run(t, invocation{name: "items set-children-checkbox --on", cmdPath: "items set-children-checkbox", args: []string{"--dir", dir, "--actor", humanID, "items", "set-children-checkbox", itemA, "--on"}, expect: expectJSONEnvelope})
+	run(t, invocation{name: "items set-children-checkbox --off", cmdPath: "items set-children-checkbox", args: []string{"--dir", dir, "--actor", humanID, "items", "set-children-checkbox", itemA, "--off"}, expect: expectJSONEnvelope})
+
+	// set-item-kind: set + clear override.
+	run(t, invocation{name: "items set-item-kind --kind status", cmdPath: "items set-item-kind", args: []string{"--dir", dir, "--actor", humanID, "items", "set-item-kind", itemA, "--kind", "status"}, expect: expectJSONEnvelope})
+	run(t, invocation{name: "items set-item-kind --kind inherit", cmdPath: "items set-item-kind", args: []string{"--dir", dir, "--actor", humanID, "items", "set-item-kind", itemA, "--kind", "inherit"}, expect: expectJSONEnvelope})
+
 	// set-due/schedule: set + clear.
 	run(t, invocation{name: "items set-due --at", cmdPath: "items set-due", args: []string{"--dir", dir, "--actor", humanID, "items", "set-due", itemA, "--at", "2025-12-31"}, expect: expectJSONEnvelope})
 	run(t, invocation{name: "items set-due --clear", cmdPath: "items set-due", args: []string{"--dir", dir, "--actor", humanID, "items", "set-due", itemA, "--clear"}, expect: expectJSONEnvelope})

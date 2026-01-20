@@ -93,6 +93,7 @@ clarity items desc <item-id> --description "Markdown..."       # alias for set-d
 clarity items status <item-id> --status doing                  # alias for set-status
 clarity items priority <item-id> --on                          # alias for set-priority
 clarity items on-hold <item-id> --on                           # alias for set-on-hold
+clarity items children-checkbox <item-id> --on                 # alias for set-children-checkbox
 clarity items due <item-id> --at 2025-12-31                    # alias for set-due
 clarity items schedule <item-id> --at 2025-12-20T09:00:00Z     # alias for set-schedule
 clarity items parent <item-id> --parent none                   # alias for set-parent
@@ -131,6 +132,26 @@ clarity items set-assign <item-id> --clear
 - Status definitions live on the outline.
 - Items store a `status_id` (stable) but CLI accepts status **labels** too.
 - Items can always have **no status**: `--status none`.
+
+## Checkbox-style children
+Sometimes you want a parent item to act like a “checklist”, where its direct children are simply checked/unchecked instead of showing full status labels.
+
+This is a UI rendering mode controlled by a setting on the parent item:
+
+```bash
+# Enable checkbox rendering for direct children
+clarity items set-children-checkbox <item-id> --on
+
+# Disable (back to normal status rendering)
+clarity items set-children-checkbox <item-id> --off
+```
+
+To opt out for a specific child (make it render as a normal status item even when the parent has checkbox children enabled):
+
+```bash
+clarity items set-item-kind <item-id> --kind status
+clarity items set-item-kind <item-id> --kind inherit
+```
 
 ### Customize status values per outline
 Each outline can define its own `statusDefs` (labels + which ones count as “end-state”).

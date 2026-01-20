@@ -150,6 +150,7 @@ type outlineRow struct {
 	hasChildren    bool
 	hasDescription bool
 	collapsed      bool
+	checkbox       bool
 	doneChildren   int
 	totalChildren  int
 	commentsCount  int
@@ -169,7 +170,7 @@ type outlineRowItem struct {
 func (i outlineRowItem) FilterValue() string { return i.row.item.Title }
 func (i outlineRowItem) Title() string {
 	prefix := strings.Repeat("  ", i.row.depth)
-	status := renderStatus(i.outline, i.row.item.StatusID)
+	status := renderItemState(i.outline, i.row.item.StatusID, i.row.checkbox)
 	twisty := " "
 	if i.row.hasChildren || i.row.hasDescription {
 		if i.row.collapsed {
@@ -461,6 +462,31 @@ func renderStatus(outline model.Outline, statusID string) string {
 	return statusNonEndStyle.Render(txt)
 }
 
+func renderCheckbox(outline model.Outline, statusID string) string {
+	checked := isCheckboxChecked(outline, statusID)
+	txt := "☐"
+	if checked {
+		txt = "☑"
+	}
+	if glyphs() == glyphSetASCII {
+		txt = "[ ]"
+		if checked {
+			txt = "[x]"
+		}
+	}
+	if checked {
+		return statusEndStyle.Render(txt)
+	}
+	return statusNonEndStyle.Render(txt)
+}
+
+func renderItemState(outline model.Outline, statusID string, checkbox bool) string {
+	if checkbox {
+		return renderCheckbox(outline, statusID)
+	}
+	return renderStatus(outline, statusID)
+}
+
 func newList(title, help string, items []list.Item) list.Model {
 	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
 	l.Title = title
@@ -513,7 +539,7 @@ func (i agendaRowItem) Title() string {
 		}
 	}
 
-	status := renderStatus(i.outline, i.row.item.StatusID)
+	status := renderItemState(i.outline, i.row.item.StatusID, i.row.checkbox)
 	title := strings.TrimSpace(i.row.item.Title)
 	if title == "" {
 		title = "(untitled)"

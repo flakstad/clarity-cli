@@ -201,11 +201,29 @@ func (d outlineItemDelegate) renderOutlineRow(width int, prefix string, it outli
 
 	statusID := strings.TrimSpace(it.row.item.StatusID)
 	statusTxt := strings.ToUpper(strings.TrimSpace(statusLabel(it.outline, statusID)))
+	if it.row.checkbox {
+		checked := isCheckboxChecked(it.outline, statusID)
+		if glyphs() == glyphSetASCII {
+			statusTxt = "[ ]"
+			if checked {
+				statusTxt = "[x]"
+			}
+		} else {
+			statusTxt = "☐"
+			if checked {
+				statusTxt = "☑"
+			}
+		}
+	}
 	statusRaw := ""
 	statusSeg := ""
 	if statusTxt != "" {
 		style := statusNonEndStyle
-		if isEndState(it.outline, statusID) {
+		if it.row.checkbox {
+			if isCheckboxChecked(it.outline, statusID) {
+				style = statusEndStyle
+			}
+		} else if isEndState(it.outline, statusID) {
 			style = statusEndStyle
 		}
 		if focused || it.flashKind == "error" {

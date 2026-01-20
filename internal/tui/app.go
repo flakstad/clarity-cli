@@ -679,7 +679,7 @@ func (m appModel) actionPanelKeyLayout() actionPanelKeyLayout {
 			addSection("Item", []string{
 				"e", "V", "n", "N", // title/new items
 				" ", "shift+left", "shift+right", // status
-				"p", "o", "A", "t", "d", "s", "D", // priority/on-hold/assign/tags/due/schedule/description
+				"p", "o", "K", "B", "A", "t", "d", "s", "D", // priority/on-hold/checkbox/assign/tags/due/schedule/description
 				"m",           // move
 				"C", "R", "w", // comment/reply/worklog
 				"y", "Y", // copy helpers (still item-scoped)
@@ -1679,6 +1679,8 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 			actions["w"] = actionPanelAction{label: "Add worklog", kind: actionPanelActionExec}
 			actions["p"] = actionPanelAction{label: "Toggle priority", kind: actionPanelActionExec}
 			actions["o"] = actionPanelAction{label: "Toggle on hold", kind: actionPanelActionExec}
+			actions["K"] = actionPanelAction{label: "Toggle checkbox children", kind: actionPanelActionExec}
+			actions["B"] = actionPanelAction{label: "Toggle checkbox override (status)", kind: actionPanelActionExec}
 			actions["A"] = actionPanelAction{
 				label: "Assign…",
 				kind:  actionPanelActionExec,
@@ -2892,7 +2894,7 @@ func (m appModel) renderActionPanel() string {
 			addSection("Item", []string{
 				"e", "V", "n", "N", // title/new items
 				" ", "shift+left", "shift+right", // status
-				"p", "o", "A", "t", "d", "s", "D", // priority/on-hold/assign/tags/due/schedule/description
+				"p", "o", "K", "B", "A", "t", "d", "s", "D", // priority/on-hold/checkbox/assign/tags/due/schedule/description
 				"m",           // move
 				"C", "R", "w", // comment/reply/worklog
 				"y", "Y", // copy helpers (still item-scoped)
@@ -8352,9 +8354,28 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case " ":
-			// Set status via picker (outline pane only).
+			// Checkbox toggle or status picker (outline pane only).
 			if m.pane == paneOutline {
 				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+					if it.row.checkbox {
+						next := checkboxCheckedStatusID(it.outline)
+						if isCheckboxChecked(it.outline, it.row.item.StatusID) {
+							next = checkboxUncheckedStatusID(it.outline)
+						}
+						if strings.TrimSpace(next) == "" {
+							m.showMinibuffer("Checkbox: outline has no statuses")
+							return m, nil
+						}
+						if statusutil.RequiresNote(it.outline, next) {
+							m.openTextModal(modalStatusNote, it.row.item.ID, "Status note…", "")
+							m.modalForKey = strings.TrimSpace(next)
+							return m, nil
+						}
+						if err := m.setStatusForItem(it.row.item.ID, next); err != nil {
+							return m, m.reportError(it.row.item.ID, err)
+						}
+						return m, nil
+					}
 					m.openStatusPicker(it.outline, it.row.item.ID, it.row.item.StatusID)
 					m.modal = modalPickStatus
 					m.modalForID = it.row.item.ID
@@ -8372,6 +8393,22 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "shift+right":
 			if m.pane == paneOutline {
 				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+					if it.row.checkbox {
+						next := checkboxCheckedStatusID(it.outline)
+						if strings.TrimSpace(next) == "" {
+							m.showMinibuffer("Checkbox: outline has no statuses")
+							return m, nil
+						}
+						if statusutil.RequiresNote(it.outline, next) {
+							m.openTextModal(modalStatusNote, it.row.item.ID, "Status note…", "")
+							m.modalForKey = strings.TrimSpace(next)
+							return m, nil
+						}
+						if err := m.setStatusForItem(it.row.item.ID, next); err != nil {
+							return m, m.reportError(it.row.item.ID, err)
+						}
+						return m, nil
+					}
 					if err := m.cycleItemStatus(it.outline, it.row.item.ID, +1); err != nil {
 						return m, m.reportError(it.row.item.ID, err)
 					}
@@ -8381,11 +8418,39 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "shift+left":
 			if m.pane == paneOutline {
 				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+					if it.row.checkbox {
+						next := checkboxUncheckedStatusID(it.outline)
+						if statusutil.RequiresNote(it.outline, next) {
+							m.openTextModal(modalStatusNote, it.row.item.ID, "Status note…", "")
+							m.modalForKey = strings.TrimSpace(next)
+							return m, nil
+						}
+						if err := m.setStatusForItem(it.row.item.ID, next); err != nil {
+							return m, m.reportError(it.row.item.ID, err)
+						}
+						return m, nil
+					}
 					if err := m.cycleItemStatus(it.outline, it.row.item.ID, -1); err != nil {
 						return m, m.reportError(it.row.item.ID, err)
 					}
 					return m, nil
 				}
+			}
+		case "K":
+			// Toggle checkbox rendering for direct children.
+			if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+				if err := m.toggleChildrenCheckboxMode(it.row.item.ID); err != nil {
+					return m, m.reportError(it.row.item.ID, err)
+				}
+				return m, nil
+			}
+		case "B":
+			// Toggle item kind override (force status vs inherit).
+			if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+				if err := m.toggleItemKindStatusOverride(it.row.item.ID); err != nil {
+					return m, m.reportError(it.row.item.ID, err)
+				}
+				return m, nil
 			}
 		case "enter":
 			switch m.itemsList.SelectedItem().(type) {
@@ -8653,6 +8718,20 @@ func (m *appModel) updateOutlineColumns(msg tea.KeyMsg) (bool, tea.Cmd) {
 			return true, m.reportError(it.Item.ID, err)
 		}
 		return true, nil
+	case "K":
+		if err := m.toggleChildrenCheckboxMode(it.Item.ID); err != nil {
+			return true, m.reportError(it.Item.ID, err)
+		}
+		sel.ItemID = strings.TrimSpace(it.Item.ID)
+		m.columnsSel[oid] = sel
+		return true, nil
+	case "B":
+		if err := m.toggleItemKindStatusOverride(it.Item.ID); err != nil {
+			return true, m.reportError(it.Item.ID, err)
+		}
+		sel.ItemID = strings.TrimSpace(it.Item.ID)
+		m.columnsSel[oid] = sel
+		return true, nil
 	case "A":
 		m.openAssigneePicker(it.Item.ID)
 		return true, nil
@@ -8669,6 +8748,33 @@ func (m *appModel) updateOutlineColumns(msg tea.KeyMsg) (bool, tea.Cmd) {
 		m.openTextModal(modalEditDescription, it.Item.ID, "Markdown description…", it.Item.Description)
 		return true, nil
 	case " ":
+		checkbox := false
+		if it.Item.ParentID != nil && strings.TrimSpace(*it.Item.ParentID) != "" {
+			if p, ok := m.db.FindItem(strings.TrimSpace(*it.Item.ParentID)); ok && p != nil {
+				checkbox = strings.TrimSpace(p.ChildrenKind) == "checkbox"
+			}
+		}
+		if checkbox {
+			next := checkboxCheckedStatusID(*outline)
+			if isCheckboxChecked(*outline, it.Item.StatusID) {
+				next = checkboxUncheckedStatusID(*outline)
+			}
+			if strings.TrimSpace(next) == "" {
+				m.showMinibuffer("Checkbox: outline has no statuses")
+				return true, nil
+			}
+			if statusutil.RequiresNote(*outline, next) {
+				m.openTextModal(modalStatusNote, it.Item.ID, "Status note…", "")
+				m.modalForKey = strings.TrimSpace(next)
+				return true, nil
+			}
+			if err := m.setStatusForItem(it.Item.ID, next); err != nil {
+				return true, m.reportError(it.Item.ID, err)
+			}
+			sel.ItemID = strings.TrimSpace(it.Item.ID)
+			m.columnsSel[oid] = sel
+			return true, nil
+		}
 		m.openStatusPicker(*outline, it.Item.ID, it.Item.StatusID)
 		m.modal = modalPickStatus
 		m.modalForID = it.Item.ID
@@ -8677,6 +8783,30 @@ func (m *appModel) updateOutlineColumns(msg tea.KeyMsg) (bool, tea.Cmd) {
 		m.openMoveOutlinePicker(it.Item.ID)
 		return true, nil
 	case "shift+right":
+		checkbox := false
+		if it.Item.ParentID != nil && strings.TrimSpace(*it.Item.ParentID) != "" {
+			if p, ok := m.db.FindItem(strings.TrimSpace(*it.Item.ParentID)); ok && p != nil {
+				checkbox = strings.TrimSpace(p.ChildrenKind) == "checkbox"
+			}
+		}
+		if checkbox {
+			next := checkboxCheckedStatusID(*outline)
+			if strings.TrimSpace(next) == "" {
+				m.showMinibuffer("Checkbox: outline has no statuses")
+				return true, nil
+			}
+			if statusutil.RequiresNote(*outline, next) {
+				m.openTextModal(modalStatusNote, it.Item.ID, "Status note…", "")
+				m.modalForKey = strings.TrimSpace(next)
+				return true, nil
+			}
+			if err := m.setStatusForItem(it.Item.ID, next); err != nil {
+				return true, m.reportError(it.Item.ID, err)
+			}
+			sel.ItemID = strings.TrimSpace(it.Item.ID)
+			m.columnsSel[oid] = sel
+			return true, nil
+		}
 		if err := m.cycleItemStatus(*outline, it.Item.ID, +1); err != nil {
 			return true, m.reportError(it.Item.ID, err)
 		}
@@ -8684,6 +8814,26 @@ func (m *appModel) updateOutlineColumns(msg tea.KeyMsg) (bool, tea.Cmd) {
 		m.columnsSel[oid] = sel
 		return true, nil
 	case "shift+left":
+		checkbox := false
+		if it.Item.ParentID != nil && strings.TrimSpace(*it.Item.ParentID) != "" {
+			if p, ok := m.db.FindItem(strings.TrimSpace(*it.Item.ParentID)); ok && p != nil {
+				checkbox = strings.TrimSpace(p.ChildrenKind) == "checkbox"
+			}
+		}
+		if checkbox {
+			next := checkboxUncheckedStatusID(*outline)
+			if statusutil.RequiresNote(*outline, next) {
+				m.openTextModal(modalStatusNote, it.Item.ID, "Status note…", "")
+				m.modalForKey = strings.TrimSpace(next)
+				return true, nil
+			}
+			if err := m.setStatusForItem(it.Item.ID, next); err != nil {
+				return true, m.reportError(it.Item.ID, err)
+			}
+			sel.ItemID = strings.TrimSpace(it.Item.ID)
+			m.columnsSel[oid] = sel
+			return true, nil
+		}
 		if err := m.cycleItemStatus(*outline, it.Item.ID, -1); err != nil {
 			return true, m.reportError(it.Item.ID, err)
 		}
@@ -8858,17 +9008,74 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.openTextModal(modalEditDescription, it.row.item.ID, "Markdown description…", it.row.item.Description)
 			return m, nil
 		case " ":
+			if it.row.checkbox {
+				next := checkboxCheckedStatusID(it.outline)
+				if isCheckboxChecked(it.outline, it.row.item.StatusID) {
+					next = checkboxUncheckedStatusID(it.outline)
+				}
+				if strings.TrimSpace(next) == "" {
+					m.showMinibuffer("Checkbox: outline has no statuses")
+					return m, nil
+				}
+				if statusutil.RequiresNote(it.outline, next) {
+					m.openTextModal(modalStatusNote, it.row.item.ID, "Status note…", "")
+					m.modalForKey = strings.TrimSpace(next)
+					return m, nil
+				}
+				if err := m.setStatusForItem(it.row.item.ID, next); err != nil {
+					return m, m.reportError(it.row.item.ID, err)
+				}
+				return m, nil
+			}
 			m.openStatusPicker(it.outline, it.row.item.ID, it.row.item.StatusID)
 			m.modal = modalPickStatus
 			m.modalForID = it.row.item.ID
 			return m, nil
 		case "shift+right":
+			if it.row.checkbox {
+				next := checkboxCheckedStatusID(it.outline)
+				if strings.TrimSpace(next) == "" {
+					m.showMinibuffer("Checkbox: outline has no statuses")
+					return m, nil
+				}
+				if statusutil.RequiresNote(it.outline, next) {
+					m.openTextModal(modalStatusNote, it.row.item.ID, "Status note…", "")
+					m.modalForKey = strings.TrimSpace(next)
+					return m, nil
+				}
+				if err := m.setStatusForItem(it.row.item.ID, next); err != nil {
+					return m, m.reportError(it.row.item.ID, err)
+				}
+				return m, nil
+			}
 			if err := m.cycleItemStatus(it.outline, it.row.item.ID, +1); err != nil {
 				return m, m.reportError(it.row.item.ID, err)
 			}
 			return m, nil
 		case "shift+left":
+			if it.row.checkbox {
+				next := checkboxUncheckedStatusID(it.outline)
+				if statusutil.RequiresNote(it.outline, next) {
+					m.openTextModal(modalStatusNote, it.row.item.ID, "Status note…", "")
+					m.modalForKey = strings.TrimSpace(next)
+					return m, nil
+				}
+				if err := m.setStatusForItem(it.row.item.ID, next); err != nil {
+					return m, m.reportError(it.row.item.ID, err)
+				}
+				return m, nil
+			}
 			if err := m.cycleItemStatus(it.outline, it.row.item.ID, -1); err != nil {
+				return m, m.reportError(it.row.item.ID, err)
+			}
+			return m, nil
+		case "K":
+			if err := m.toggleChildrenCheckboxMode(it.row.item.ID); err != nil {
+				return m, m.reportError(it.row.item.ID, err)
+			}
+			return m, nil
+		case "B":
+			if err := m.toggleItemKindStatusOverride(it.row.item.ID); err != nil {
 				return m, m.reportError(it.row.item.ID, err)
 			}
 			return m, nil
@@ -10396,6 +10603,15 @@ func (m *appModel) createItemFromModal(title string) error {
 
 	assigned := defaultAssignedActorID(m.db, actorID)
 	now := time.Now().UTC()
+	statusID := store.FirstStatusID(outline.StatusDefs)
+	if parentID != nil && strings.TrimSpace(*parentID) != "" {
+		if p, ok := m.db.FindItem(strings.TrimSpace(*parentID)); ok && p != nil && strings.TrimSpace(p.ChildrenKind) == "checkbox" {
+			// Default new checkbox-children to unchecked.
+			if sid := checkboxUncheckedStatusID(outline); strings.TrimSpace(sid) != "" {
+				statusID = sid
+			}
+		}
+	}
 	newItem := model.Item{
 		ID:                 m.store.NextID(m.db, "item"),
 		ProjectID:          outline.ProjectID,
@@ -10404,7 +10620,7 @@ func (m *appModel) createItemFromModal(title string) error {
 		Rank:               rank,
 		Title:              title,
 		Description:        "",
-		StatusID:           store.FirstStatusID(outline.StatusDefs),
+		StatusID:           statusID,
 		Priority:           false,
 		OnHold:             false,
 		Due:                nil,
@@ -10868,6 +11084,89 @@ func (m *appModel) toggleOnHold(itemID string) error {
 			eventType:    "item.set_on_hold",
 			eventPayload: map[string]any{"onHold": it.OnHold},
 			minibuffer:   fmt.Sprintf("On hold: %v", it.OnHold),
+		}, nil
+	})
+}
+
+func (m *appModel) toggleChildrenCheckboxMode(itemID string) error {
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return nil
+	}
+	return m.mutateItem(itemID, func(db *store.DB, it *model.Item) (bool, itemMutationResult, error) {
+		actorID := m.editActorID()
+		if actorID == "" {
+			return false, itemMutationResult{}, errors.New("no current actor")
+		}
+
+		next := ""
+		if strings.TrimSpace(it.ChildrenKind) != "checkbox" {
+			next = "checkbox"
+		}
+
+		res, err := mutate.SetItemChildrenKind(db, actorID, it.ID, next)
+		if err != nil {
+			switch err.(type) {
+			case mutate.OwnerOnlyError:
+				return false, itemMutationResult{}, errors.New("permission denied")
+			default:
+				return false, itemMutationResult{}, err
+			}
+		}
+		if !res.Changed {
+			return false, itemMutationResult{}, nil
+		}
+
+		msg := "Children: status"
+		if strings.TrimSpace(it.ChildrenKind) == "checkbox" {
+			msg = "Children: checkbox"
+		}
+
+		return true, itemMutationResult{
+			eventType:    "item.set_children_kind",
+			eventPayload: res.EventPayload,
+			minibuffer:   msg,
+		}, nil
+	})
+}
+
+func (m *appModel) toggleItemKindStatusOverride(itemID string) error {
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return nil
+	}
+	return m.mutateItem(itemID, func(db *store.DB, it *model.Item) (bool, itemMutationResult, error) {
+		actorID := m.editActorID()
+		if actorID == "" {
+			return false, itemMutationResult{}, errors.New("no current actor")
+		}
+
+		next := ""
+		if strings.TrimSpace(it.ItemKind) != "status" {
+			next = "status"
+		}
+		res, err := mutate.SetItemKind(db, actorID, it.ID, next)
+		if err != nil {
+			switch err.(type) {
+			case mutate.OwnerOnlyError:
+				return false, itemMutationResult{}, errors.New("permission denied")
+			default:
+				return false, itemMutationResult{}, err
+			}
+		}
+		if !res.Changed {
+			return false, itemMutationResult{}, nil
+		}
+
+		msg := "Item kind: inherit"
+		if strings.TrimSpace(it.ItemKind) == "status" {
+			msg = "Item kind: status"
+		}
+
+		return true, itemMutationResult{
+			eventType:    "item.set_item_kind",
+			eventPayload: res.EventPayload,
+			minibuffer:   msg,
 		}, nil
 	})
 }
