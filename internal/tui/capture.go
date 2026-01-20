@@ -1552,7 +1552,7 @@ func (m *captureModel) refreshDraftList() {
 	}
 	activeID := m.activeDraftID()
 
-	flat := flattenOutline(*o, m.draftItems, m.draftCollapsed)
+	flat := flattenOutline(m.db, *o, m.draftItems, m.draftCollapsed)
 	items := make([]list.Item, 0, len(flat))
 	for _, row := range flat {
 		if row.item.AssignedActorID != nil && strings.TrimSpace(*row.item.AssignedActorID) != "" {
@@ -1597,7 +1597,7 @@ func (m *captureModel) createDraftItems() (string, error) {
 	}
 
 	// Create items in a stable parent-before-child order (pre-order traversal by rank).
-	flat := flattenOutline(*out, m.draftItems, map[string]bool{})
+	flat := flattenOutline(db, *out, m.draftItems, map[string]bool{})
 	idMap := map[string]string{} // draft-id -> real-id
 	var firstRealID string
 	now := time.Now().UTC()

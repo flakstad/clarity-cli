@@ -3938,7 +3938,7 @@ func (m *appModel) refreshItems(outline model.Outline) {
 		}
 	}
 
-	flat := flattenOutline(outline, its, m.collapsed)
+	flat := flattenOutline(m.db, outline, its, m.collapsed)
 	var items []list.Item
 	showInlineDescriptions := m.outlineViewModeForID(outline.ID) != outlineViewModeColumns
 
@@ -4134,7 +4134,7 @@ func (m *appModel) refreshItemSubtree(outline model.Outline, rootItemID string) 
 		}
 	}
 
-	flat := flattenOutline(outline, its, collapsed)
+	flat := flattenOutline(m.db, outline, its, collapsed)
 	items := make([]list.Item, 0, len(flat))
 	for _, row := range flat {
 		row.commentsCount = len(m.db.CommentsForItem(row.item.ID))
@@ -4345,7 +4345,7 @@ func (m *appModel) refreshAgenda() {
 					m.agendaCollapsed[parentID] = true
 				}
 			}
-			flat := flattenOutline(o, its, m.agendaCollapsed)
+			flat := flattenOutline(m.db, o, its, m.agendaCollapsed)
 			for _, row := range flat {
 				if row.item.AssignedActorID != nil && strings.TrimSpace(*row.item.AssignedActorID) != "" {
 					row.assignedLabel = actorCompactLabel(m.db, *row.item.AssignedActorID)

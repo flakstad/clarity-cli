@@ -5,9 +5,10 @@ import (
 	"strings"
 
 	"clarity-cli/internal/model"
+	"clarity-cli/internal/store"
 )
 
-func flattenOutline(outline model.Outline, items []model.Item, collapsed map[string]bool) []outlineRow {
+func flattenOutline(db *store.DB, outline model.Outline, items []model.Item, collapsed map[string]bool) []outlineRow {
 	// Build parent -> children map (siblings sorted by Order).
 	children := map[string][]model.Item{}
 	hasChildren := map[string]bool{}
@@ -78,7 +79,13 @@ func flattenOutline(outline model.Outline, items []model.Item, collapsed map[str
 		}
 	}
 	for _, r := range roots {
-		walk(r, 0, false)
+		rootCheckbox := false
+		if db != nil && r.ParentID != nil && strings.TrimSpace(*r.ParentID) != "" {
+			if p, ok := db.FindItem(strings.TrimSpace(*r.ParentID)); ok && p != nil && strings.TrimSpace(p.ChildrenKind) == "checkbox" {
+				rootCheckbox = true
+			}
+		}
+		walk(r, 0, rootCheckbox)
 	}
 	return out
 }
