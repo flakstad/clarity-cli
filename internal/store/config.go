@@ -135,6 +135,24 @@ func LoadConfig() (*GlobalConfig, error) {
 	return &cfg, nil
 }
 
+func atomicWriteFile(dir, tmpPattern, path string, b []byte, perm os.FileMode) error {
+	f, err := os.CreateTemp(dir, tmpPattern)
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }()
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	_ = os.Chmod(tmp, perm)
+	return os.Rename(tmp, path)
+}
+
 func SaveConfig(cfg *GlobalConfig) error {
 	path, err := ConfigPath()
 	if err != nil {
@@ -152,25 +170,13 @@ func SaveConfig(cfg *GlobalConfig) error {
 	// Best-effort safety net: keep a copy of the previous config to make recovery from
 	// accidental overwrites easier. Ignore errors to avoid blocking normal usage.
 	if prev, err := os.ReadFile(path); err == nil && len(prev) > 0 {
-		_ = os.WriteFile(path+".bak", prev, 0o644)
+		// Use a unique temp file name + atomic rename to avoid cross-process corruption.
+		_ = atomicWriteFile(dir, "config.json.bak.*.tmp", path+".bak", prev, 0o644)
 	}
 
 	// Use a unique temp file name to avoid cross-process clobbering/corruption when multiple
 	// Clarity processes write config concurrently (CLI + TUI + web).
-	f, err := os.CreateTemp(dir, "config.json.*.tmp")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer func() { _ = os.Remove(tmp) }()
-	if _, err := f.Write(b); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicWriteFile(dir, "config.json.*.tmp", path, b, 0o600)
 }
 
 func NormalizeWorkspaceName(name string) (string, error) {

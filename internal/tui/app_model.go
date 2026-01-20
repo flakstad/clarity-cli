@@ -218,7 +218,8 @@ type appModel struct {
 	lastDBModTime     time.Time
 	lastEventsModTime time.Time
 
-	minibufferText string
+	minibufferText  string
+	minibufferSetAt time.Time
 
 	autoCommit *gitrepo.DebouncedCommitter
 

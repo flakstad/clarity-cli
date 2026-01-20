@@ -2709,8 +2709,25 @@ func (m appModel) minibufferView() string {
 		Render(txt)
 }
 
+const minibufferAutoClearAfter = 5 * time.Second
+
+func (m appModel) shouldAutoClearMinibuffer(now time.Time) bool {
+	if strings.TrimSpace(m.minibufferText) == "" {
+		return false
+	}
+	if m.minibufferSetAt.IsZero() {
+		return false
+	}
+	return now.Sub(m.minibufferSetAt) >= minibufferAutoClearAfter
+}
+
 func (m *appModel) showMinibuffer(text string) {
 	m.minibufferText = text
+	if strings.TrimSpace(text) == "" {
+		m.minibufferSetAt = time.Time{}
+		return
+	}
+	m.minibufferSetAt = time.Now()
 }
 
 func (m appModel) renderActionPanel() string {

@@ -140,6 +140,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case reloadTickMsg:
+		if m.shouldAutoClearMinibuffer(time.Now()) {
+			m.minibufferText = ""
+			m.minibufferSetAt = time.Time{}
+		}
 		if m.storeChanged() {
 			_ = m.reloadFromDisk()
 		}
