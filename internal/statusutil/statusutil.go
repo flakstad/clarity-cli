@@ -107,9 +107,11 @@ func CheckboxCheckedStatusID(outline model.Outline) string {
 }
 
 func IsCheckboxChecked(outline model.Outline, statusID string) bool {
-	want := strings.TrimSpace(CheckboxCheckedStatusID(outline))
-	if want == "" {
-		return false
-	}
-	return strings.TrimSpace(statusID) == want
+	// Checkbox semantics are derived from end-state:
+	// - any end-state status counts as "checked"
+	// - any non-end status counts as "unchecked"
+	//
+	// When toggling, callers should still pick a concrete end/non-end status id
+	// (CheckboxCheckedStatusID / CheckboxUncheckedStatusID).
+	return IsEndState(outline, statusID)
 }

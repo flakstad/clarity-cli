@@ -98,6 +98,7 @@ func TestCheckboxStatusIDs(t *testing.T) {
 		{ID: "todo", IsEndState: false},
 		{ID: "review", IsEndState: false},
 		{ID: "done", IsEndState: true},
+		{ID: "closed", IsEndState: true},
 	}}
 	if got := CheckboxUncheckedStatusID(o); got != "todo" {
 		t.Fatalf("expected unchecked=todo; got %q", got)
@@ -107,6 +108,9 @@ func TestCheckboxStatusIDs(t *testing.T) {
 	}
 	if !IsCheckboxChecked(o, "done") {
 		t.Fatalf("expected done to be checked")
+	}
+	if !IsCheckboxChecked(o, "closed") {
+		t.Fatalf("expected closed to be checked")
 	}
 	if IsCheckboxChecked(o, "todo") {
 		t.Fatalf("expected todo to be unchecked")
