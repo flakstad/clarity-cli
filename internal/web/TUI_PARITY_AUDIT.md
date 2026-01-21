@@ -134,7 +134,7 @@ The web currently exposes only a minimal subset of the TUI’s “Agenda Command
 
 | Key | TUI entry | Web entry | Status |
 |---|---|---|---|
-| `t` | List all TODO entries | List all TODO entries | ✅ |
+| `t` | List all unfinished items | List all unfinished items | ✅ |
 
 ## Dialog parity
 

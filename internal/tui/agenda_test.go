@@ -51,7 +51,7 @@ func TestAgendaView_ShowsAllNonDoneNonHoldItemsAcrossWorkspace(t *testing.T) {
 		t.Fatalf("expected start viewProjects, got %v", m.view)
 	}
 
-	// Open agenda commands, then run 't' (list all TODO entries).
+	// Open agenda commands, then run 't' (list all unfinished items).
 	mAny, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	m2 := mAny.(appModel)
 	if m2.modal != modalActionPanel || m2.curActionPanelKind() != actionPanelAgenda {
@@ -79,6 +79,9 @@ func TestAgendaView_ShowsAllNonDoneNonHoldItemsAcrossWorkspace(t *testing.T) {
 		if r.row.item.ID == "item-hold" {
 			t.Fatalf("did not expect on-hold item in agenda")
 		}
+		if r.row.item.ID == "item-empty" {
+			t.Fatalf("did not expect item with empty status in agenda")
+		}
 		if r.row.item.ID == "item-parent" {
 			if !r.row.hasChildren {
 				t.Fatalf("expected parent hasChildren=true")
@@ -93,8 +96,8 @@ func TestAgendaView_ShowsAllNonDoneNonHoldItemsAcrossWorkspace(t *testing.T) {
 		}
 	}
 	// Because the parent starts collapsed, the child should not be visible initially.
-	if rows != 2 {
-		t.Fatalf("expected 2 visible agenda rows initially (parent collapsed), got %d (total list items=%d)", rows, len(all))
+	if rows != 1 {
+		t.Fatalf("expected 1 visible agenda row initially (parent collapsed), got %d (total list items=%d)", rows, len(all))
 	}
 	if !parentCollapsed {
 		t.Fatalf("expected to find parent row and confirm it is collapsed")

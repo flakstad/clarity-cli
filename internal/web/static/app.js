@@ -1305,7 +1305,7 @@
   };
 
   const actionsForAgenda = () => ([
-    { key: 't', label: 'List all TODO entries', kind: 'exec', run: () => { window.location.href = '/agenda'; } },
+    { key: 't', label: 'List all unfinished items', kind: 'exec', run: () => { window.location.href = '/agenda'; } },
   ]);
 
   const actionsForSync = () => ([

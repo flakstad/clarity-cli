@@ -1513,7 +1513,7 @@ func (m appModel) actionPanelActions() map[string]actionPanelAction {
 		}
 
 	case actionPanelAgenda:
-		actions["t"] = actionPanelAction{label: "List all TODO entries", kind: actionPanelActionExec, handler: func(mm appModel) (appModel, tea.Cmd) {
+		actions["t"] = actionPanelAction{label: "List all unfinished items", kind: actionPanelActionExec, handler: func(mm appModel) (appModel, tea.Cmd) {
 			if mm.view != viewAgenda {
 				mm.hasAgendaReturnView = true
 				mm.agendaReturnView = mm.view
@@ -4366,6 +4366,9 @@ func (m *appModel) refreshAgenda() {
 					continue
 				}
 				if it.OnHold {
+					continue
+				}
+				if strings.TrimSpace(it.StatusID) == "" {
 					continue
 				}
 				if it.ProjectID != p.ID {
