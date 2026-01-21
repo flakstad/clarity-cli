@@ -188,6 +188,10 @@ type appModel struct {
 	// pendingMoveOutlineTo, the status picker "enter" applies the move-under-item.
 	pendingMoveParentTo string
 
+	// pendingMove batches repeated reorder keypresses (Alt+Up/Down) into a single persisted event.
+	pendingMove    *pendingMoveState
+	pendingMoveSeq int
+
 	actionPanelStack []actionPanelKind
 	// actionPanelSelectedKey is the current selection in the action panel (for tab/enter navigation).
 	actionPanelSelectedKey string
@@ -229,6 +233,14 @@ type appModel struct {
 	gitStatusErr      string
 	gitStatusFetchSeq int
 	gitStatusFetching bool
+}
+
+type pendingMoveState struct {
+	itemID    string
+	actorID   string
+	rebalance map[string]string
+	lastAt    time.Time
+	seq       int
 }
 
 const (

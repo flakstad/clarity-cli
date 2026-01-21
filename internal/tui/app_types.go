@@ -31,6 +31,8 @@ type resizeDoneMsg struct{ seq int }
 
 type flashDoneMsg struct{ seq int }
 
+type flushPendingMoveMsg struct{ seq int }
+
 type previewComputeMsg struct {
 	seq    int
 	itemID string

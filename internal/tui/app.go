@@ -8153,6 +8153,13 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// If the user just finished a burst of reorders and immediately hit a different key,
+		// persist the final position now so subsequent operations don't reload a stale DB.
+		if m.pendingMove != nil && !isMoveDown(msg) && !isMoveUp(msg) {
+			if err := (&m).flushPendingMove(); err != nil {
+				return m, m.reportError("", err)
+			}
+		}
 		if m.curOutlineViewMode() == outlineViewModeColumns && m.modal == modalNone {
 			if handled, cmd := (&m).updateOutlineColumns(msg); handled {
 				return m, cmd
@@ -8203,17 +8210,19 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "up", "k", "p":
 				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-					if err := m.moveSelected("up"); err != nil {
+					cmd, err := m.moveSelected("up")
+					if err != nil {
 						return m, m.reportError(it.row.item.ID, err)
 					}
-					return m, nil
+					return m, cmd
 				}
 			case "down", "j", "n":
 				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-					if err := m.moveSelected("down"); err != nil {
+					cmd, err := m.moveSelected("down")
+					if err != nil {
 						return m, m.reportError(it.row.item.ID, err)
 					}
-					return m, nil
+					return m, cmd
 				}
 			case "right", "l", "f":
 				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
@@ -10409,20 +10418,22 @@ func (m *appModel) mutateOutlineByKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
 			itemID = it.row.item.ID
 		}
-		if err := m.moveSelected("down"); err != nil {
+		cmd, err := m.moveSelected("down")
+		if err != nil {
 			return true, m.reportError(itemID, err)
 		}
-		return true, nil
+		return true, cmd
 	}
 	if isMoveUp(msg) {
 		itemID := ""
 		if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
 			itemID = it.row.item.ID
 		}
-		if err := m.moveSelected("up"); err != nil {
+		cmd, err := m.moveSelected("up")
+		if err != nil {
 			return true, m.reportError(itemID, err)
 		}
-		return true, nil
+		return true, cmd
 	}
 	// Indent/outdent.
 	if isIndent(msg) {
@@ -10462,14 +10473,14 @@ func isMoveDown(msg tea.KeyMsg) bool {
 	if msg.String() == "ctrl+j" {
 		return true
 	}
-	return isAltDown(msg) || msg.Type == tea.KeyShiftDown
+	return isAltDown(msg) || msg.Type == tea.KeyShiftDown || msg.Type == tea.KeyCtrlShiftDown
 }
 
 func isMoveUp(msg tea.KeyMsg) bool {
 	if msg.String() == "ctrl+k" {
 		return true
 	}
-	return isAltUp(msg) || msg.Type == tea.KeyShiftUp
+	return isAltUp(msg) || msg.Type == tea.KeyShiftUp || msg.Type == tea.KeyCtrlShiftUp
 }
 
 func isIndent(msg tea.KeyMsg) bool {
@@ -12849,27 +12860,25 @@ func (m *appModel) setStatusForItemWithNote(itemID, statusID string, note *strin
 	})
 }
 
-func (m *appModel) moveSelected(dir string) error {
+func (m *appModel) moveSelected(dir string) (tea.Cmd, error) {
 	it, ok := m.itemsList.SelectedItem().(outlineRowItem)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
-	db, err := m.store.Load()
-	if err != nil {
-		return err
+	if err := m.ensureDBLoaded(); err != nil {
+		return nil, err
 	}
-	m.db = db
 	actorID := m.editActorID()
 	if actorID == "" {
-		return errors.New("no current actor")
+		return nil, errors.New("no current actor")
 	}
 	t, ok := m.db.FindItem(it.row.item.ID)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if !canEditItem(m.db, actorID, t) {
-		return errors.New("permission denied")
+		return nil, errors.New("permission denied")
 	}
 
 	// We need the moved item included for finding current position; build full list.
@@ -12877,31 +12886,202 @@ func (m *appModel) moveSelected(dir string) error {
 	full = filterItems(full, func(x *model.Item) bool { return !x.Archived })
 	idx := indexOfItem(full, t.ID)
 	if idx < 0 {
-		return nil
+		return nil, nil
 	}
 	switch dir {
 	case "up":
 		if idx == 0 {
-			return nil
+			return nil, nil
 		}
 		ref := full[idx-1]
-		return m.reorderItem(t, "", ref.ID)
+		if err := m.flushPendingMoveIfDifferent(t.ID); err != nil {
+			return nil, err
+		}
+		res, err := m.applyReorderRanks(t, "", ref.ID)
+		if err != nil {
+			return nil, err
+		}
+		if len(res.RankByID) == 0 {
+			return nil, nil
+		}
+		m.notePendingMove(t.ID, res)
+		if m.selectedOutline != nil {
+			m.refreshOutlineList(*m.selectedOutline)
+			selectListItemByID(&m.itemsList, t.ID)
+		}
+		return m.schedulePendingMoveFlush(), nil
 	case "down":
 		if idx+1 >= len(full) {
-			return nil
+			return nil, nil
 		}
 		ref := full[idx+1]
-		return m.reorderItem(t, ref.ID, "")
+		if err := m.flushPendingMoveIfDifferent(t.ID); err != nil {
+			return nil, err
+		}
+		res, err := m.applyReorderRanks(t, ref.ID, "")
+		if err != nil {
+			return nil, err
+		}
+		if len(res.RankByID) == 0 {
+			return nil, nil
+		}
+		m.notePendingMove(t.ID, res)
+		if m.selectedOutline != nil {
+			m.refreshOutlineList(*m.selectedOutline)
+			selectListItemByID(&m.itemsList, t.ID)
+		}
+		return m.schedulePendingMoveFlush(), nil
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
-func (m *appModel) reorderItem(t *model.Item, afterID, beforeID string) error {
+const pendingMoveDebounce = 200 * time.Millisecond
+
+func (m *appModel) ensureDBLoaded() error {
+	if m.db != nil {
+		return nil
+	}
+	db, err := m.store.Load()
+	if err != nil {
+		return err
+	}
+	m.db = db
+	return nil
+}
+
+func (m *appModel) notePendingMove(itemID string, res store.ReorderResult) {
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return
+	}
+	if m.pendingMove == nil || strings.TrimSpace(m.pendingMove.itemID) != itemID {
+		m.pendingMove = &pendingMoveState{
+			itemID:    itemID,
+			actorID:   m.currentWriteActorID(),
+			rebalance: map[string]string{},
+		}
+	}
+	m.pendingMove.lastAt = time.Now()
+	for id, r := range res.RankByID {
+		id = strings.TrimSpace(id)
+		if id == "" || id == itemID {
+			continue
+		}
+		r = strings.TrimSpace(r)
+		if r == "" {
+			continue
+		}
+		m.pendingMove.rebalance[id] = r
+	}
+}
+
+func (m *appModel) flushPendingMoveIfDifferent(itemID string) error {
+	if m.pendingMove == nil {
+		return nil
+	}
+	if strings.TrimSpace(m.pendingMove.itemID) == strings.TrimSpace(itemID) {
+		return nil
+	}
+	return m.flushPendingMove()
+}
+
+func (m *appModel) schedulePendingMoveFlush() tea.Cmd {
+	if m.pendingMove == nil {
+		return nil
+	}
+	m.pendingMoveSeq++
+	seq := m.pendingMoveSeq
+	m.pendingMove.seq = seq
+	return tea.Tick(pendingMoveDebounce, func(time.Time) tea.Msg {
+		return flushPendingMoveMsg{seq: seq}
+	})
+}
+
+func (m *appModel) handleFlushPendingMove(seq int) tea.Cmd {
+	if m.pendingMove == nil || m.pendingMove.seq != seq {
+		return nil
+	}
+	since := time.Since(m.pendingMove.lastAt)
+	if since < pendingMoveDebounce {
+		delay := pendingMoveDebounce - since
+		if delay < 25*time.Millisecond {
+			delay = 25 * time.Millisecond
+		}
+		return tea.Tick(delay, func(time.Time) tea.Msg {
+			return flushPendingMoveMsg{seq: seq}
+		})
+	}
+	itemID := m.pendingMove.itemID
+	if err := m.flushPendingMove(); err != nil {
+		return m.reportError(itemID, err)
+	}
+	return nil
+}
+
+func (m *appModel) flushPendingMove() error {
+	if m.pendingMove == nil {
+		return nil
+	}
+	if err := m.ensureDBLoaded(); err != nil {
+		return err
+	}
+	st := m.pendingMove
+	itemID := strings.TrimSpace(st.itemID)
+	actorID := strings.TrimSpace(st.actorID)
+	m.pendingMove = nil
+
+	if itemID == "" {
+		return nil
+	}
+	it, ok := m.db.FindItem(itemID)
+	if !ok || it == nil {
+		return nil
+	}
+
+	payload := map[string]any{"rank": strings.TrimSpace(it.Rank)}
+	rebalance := map[string]string{}
+	for id, r := range st.rebalance {
+		id = strings.TrimSpace(id)
+		if id == "" || id == itemID {
+			continue
+		}
+		r = strings.TrimSpace(r)
+		if r == "" {
+			continue
+		}
+		rebalance[id] = r
+	}
+	if len(rebalance) > 0 {
+		payload["rebalance"] = rebalance
+		payload["rebalanceCount"] = len(rebalance)
+	}
+
+	if actorID == "" {
+		actorID = m.currentWriteActorID()
+	}
+	if err := m.appendEvent(actorID, "item.move", itemID, payload); err != nil {
+		return err
+	}
+	if err := m.store.Save(m.db); err != nil {
+		return err
+	}
+
+	m.refreshEventsTail()
+	m.captureStoreModTimes()
+	m.showMinibuffer("Moved " + itemID)
+	if m.selectedOutline != nil {
+		m.refreshOutlineList(*m.selectedOutline)
+		selectListItemByID(&m.itemsList, itemID)
+	}
+	return nil
+}
+
+func (m *appModel) applyReorderRanks(t *model.Item, afterID, beforeID string) (store.ReorderResult, error) {
 	afterID = strings.TrimSpace(afterID)
 	beforeID = strings.TrimSpace(beforeID)
 	if (afterID == "" && beforeID == "") || (afterID != "" && beforeID != "") {
-		return nil
+		return store.ReorderResult{RankByID: map[string]string{}}, nil
 	}
 
 	// Build the current sibling order (includes t). This ordering must match the rendered order.
@@ -12918,7 +13098,7 @@ func (m *appModel) reorderItem(t *model.Item, afterID, beforeID string) error {
 	}
 	refIdx := indexOfItem(rest, refID)
 	if refIdx < 0 {
-		return nil
+		return store.ReorderResult{RankByID: map[string]string{}}, nil
 	}
 	insertAt := refIdx
 	if mode == "after" {
@@ -12927,10 +13107,10 @@ func (m *appModel) reorderItem(t *model.Item, afterID, beforeID string) error {
 
 	res, err := store.PlanReorderRanks(full, t.ID, insertAt)
 	if err != nil {
-		return err
+		return store.ReorderResult{}, err
 	}
 	if len(res.RankByID) == 0 {
-		return nil
+		return store.ReorderResult{RankByID: map[string]string{}}, nil
 	}
 
 	now := time.Now().UTC()
@@ -12944,6 +13124,17 @@ func (m *appModel) reorderItem(t *model.Item, afterID, beforeID string) error {
 		}
 		it.Rank = r
 		it.UpdatedAt = now
+	}
+	return res, nil
+}
+
+func (m *appModel) reorderItem(t *model.Item, afterID, beforeID string) error {
+	res, err := m.applyReorderRanks(t, afterID, beforeID)
+	if err != nil {
+		return err
+	}
+	if len(res.RankByID) == 0 {
+		return nil
 	}
 
 	// Single event, even if we had to rebalance a local window.
@@ -13086,10 +13277,15 @@ func (m *appModel) outdentSelected() error {
 		}
 		r, err := store.RankBetweenUnique(existing, lower, upper)
 		if err != nil {
-			return err
+			// If there isn't a usable gap (e.g. prefix-adjacent ranks like "y" < "y0"),
+			// we must still be able to outdent. Fall back to appending at the bottom of
+			// the destination siblings (bottom of outline when dest is root).
+			t.ParentID = destParentID
+			t.Rank = nextSiblingRank(m.db, t.OutlineID, destParentID)
+		} else {
+			t.ParentID = destParentID
+			t.Rank = r
 		}
-		t.ParentID = destParentID
-		t.Rank = r
 	}
 	t.UpdatedAt = time.Now().UTC()
 	payload := map[string]any{"rank": t.Rank}

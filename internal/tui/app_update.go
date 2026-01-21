@@ -25,6 +25,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case flushPendingMoveMsg:
+		if cmd := (&m).handleFlushPendingMove(msg.seq); cmd != nil {
+			return m, cmd
+		}
+		return m, nil
+
 	case externalEditorDoneMsg:
 		m.applyExternalEditorResult(msg)
 		// If we're still in a text modal, keep the body focused after returning from the editor.
@@ -721,6 +727,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch km := msg.(type) {
 	case tea.KeyMsg:
+		// If we were debouncing a burst of outline reorders, persist the final move before
+		// handling unrelated keys (so we don't accidentally reload a stale DB).
+		if m.pendingMove != nil && !isMoveDown(km) && !isMoveUp(km) {
+			if err := (&m).flushPendingMove(); err != nil {
+				return m, m.reportError("", err)
+			}
+		}
 		rootID := strings.TrimSpace(m.openItemID)
 		if rootID == "" {
 			return m, nil
@@ -750,17 +763,19 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch km.String() {
 			case "up", "k", "p":
 				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-					if err := m.moveSelected("up"); err != nil {
+					cmd, err := m.moveSelected("up")
+					if err != nil {
 						return m, m.reportError(it.row.item.ID, err)
 					}
-					return m, nil
+					return m, cmd
 				}
 			case "down", "j", "n":
 				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
-					if err := m.moveSelected("down"); err != nil {
+					cmd, err := m.moveSelected("down")
+					if err != nil {
 						return m, m.reportError(it.row.item.ID, err)
 					}
-					return m, nil
+					return m, cmd
 				}
 			case "right", "l", "f":
 				if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
