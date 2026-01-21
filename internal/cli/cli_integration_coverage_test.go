@@ -560,8 +560,6 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
 	run(t, invocation{name: "sync remotes (--dir)", cmdPath: "sync remotes", args: []string{"--dir", dir, "sync", "remotes"}, expect: expectJSONEnvelope})
 	run(t, invocation{name: "sync setup (--remote-url/--remote-name/--message)", cmdPath: "sync setup", args: []string{"--dir", dir, "sync", "setup", "--remote-name", "origin", "--remote-url", "https://example.com/repo.git", "--message", "clarity: setup (test)", "--commit=false", "--push=false"}, expect: expectJSONEnvelope})
 
-	// web: long-running server command; cover flags via --help (no server start).
-	run(t, invocation{name: "web --help (--addr --read-only --auth --components-dir --outline-mode)", cmdPath: "web", args: []string{"--dir", dir, "web", "--addr", "127.0.0.1:0", "--read-only=false", "--auth", "magic", "--components-dir", dir, "--outline-mode", "native", "--help"}, expect: expectRawText})
 	// webtui: long-running server command; cover flags via --help (no server start).
 	run(t, invocation{name: "webtui --help (--addr)", cmdPath: "webtui", args: []string{"--dir", dir, "webtui", "--addr", "127.0.0.1:0", "--help"}, expect: expectRawText})
 	// capture: interactive TUI; cover flags via --help (no capture start).

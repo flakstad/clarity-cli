@@ -5,56 +5,19 @@ Clarity is local-first. The v1 web UI is designed to run **on your machine** and
 ## Run
 
 ```bash
-clarity web --addr 127.0.0.1:3333
+clarity webtui --addr 127.0.0.1:3334
 ```
 
 Or explicitly select a workspace:
 
 ```bash
-clarity --workspace "Flakstad Software" web --addr :3333
+clarity --workspace "Flakstad Software" webtui --addr :3334
 ```
-
-## Auth (v1)
-
-Today there are two modes:
-- `--auth none` (default): no browser login; use a fixed actor by starting with `--actor`, or run read-only.
-- `--auth dev`: local/dev mode that lets you pick a human actor in the browser at `/login` (sets a cookie).
-- `--auth magic`: email magic-link login. V1 delivery writes “emails” to `.clarity/web/outbox/`.
-
-### `meta/users.json`
-
-Magic-link login requires a committed mapping file at `meta/users.json`:
-
-```json
-{
-  "users": [
-    {"email": "you@example.com", "actorId": "act-..."}
-  ]
-}
-```
-
-V1 magic-link delivery writes “emails” to `.clarity/web/outbox/` (gitignored). Tokens and sessions are HMAC-signed using a local secret at `.clarity/web/secret.key` (gitignored).
 
 ## Current status
 
-The web UI is **experimental** and currently focuses on:
-- Read-only views for confidence and debugging
-- Showing Git status so teams can see when they’re behind/dirty/conflicted
+`clarity webtui` is an **experimental** demo that runs the existing Bubble Tea TUI over the web via a server-side PTY and a browser terminal emulator.
 
-If you start the server with `--read-only=false`, a minimal write path is enabled:
-- post comments from the item detail page (requires an actor; start with `--actor` or set a current actor via `clarity identity use`)
-
-Current routes (read-only):
-- `/` (home)
-- `/agenda`
-- `/sync`
-- `/projects`
-- `/projects/<project-id>`
-- `/outlines/<outline-id>`
-- `/items/<item-id>`
-
-Dev auth routes:
-- `/login`
-- `/verify`
-
-Writes, login, and multi-user semantics are planned under the `Pivot` epic.
+Notes:
+- No auth yet; bind to loopback unless you fully trust your network.
+- Each browser tab starts a TUI subprocess on the server.

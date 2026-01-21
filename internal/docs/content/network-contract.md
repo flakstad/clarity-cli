@@ -20,7 +20,7 @@ Clarity should still function without `git` installed; only the `sync` commands 
 
 ### WebTUI serving
 
-`clarity web ...` / WebTUI mode starts an HTTP server that serves a UI. This is
+`clarity webtui ...` starts an HTTP server that serves a UI. This is
 network exposure in the sense that it binds to an address you choose, but it is
 not an outbound network call.
 
@@ -39,4 +39,3 @@ Licensing should not require periodic “phone home” checks to keep Clarity us
 If Clarity adds any networked surfaces beyond Git sync and explicit web serving, it should also provide:
 - a global “offline mode” that blocks outbound network I/O, and
 - clear error messages that explain which command attempted network access and why.
-

@@ -82,9 +82,6 @@ func NewRootCmd() *cobra.Command {
 			return nil
 		}
 		// Avoid attempting sync after long-running commands.
-		if strings.HasPrefix(strings.TrimSpace(cmd.CommandPath()), "clarity web") {
-			return nil
-		}
 		if strings.HasPrefix(strings.TrimSpace(cmd.CommandPath()), "clarity webtui") {
 			return nil
 		}
@@ -116,7 +113,6 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newAgentCmd(app))
 	cmd.AddCommand(newCaptureCmd(app))
 	cmd.AddCommand(newAttachmentsCmd(app))
-	cmd.AddCommand(newWebCmd(app))
 	cmd.AddCommand(newWebTUICmd(app))
 
 	return cmd
