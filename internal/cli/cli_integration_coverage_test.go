@@ -562,6 +562,10 @@ func TestCLIIntegration_CommandAndFlagCoverage(t *testing.T) {
 
 	// webtui: long-running server command; cover flags via --help (no server start).
 	run(t, invocation{name: "webtui --help (--addr)", cmdPath: "webtui", args: []string{"--dir", dir, "webtui", "--addr", "127.0.0.1:0", "--help"}, expect: expectRawText})
+	// web: long-running server command; cover flags via --help (no server start).
+	run(t, invocation{name: "web --help (--addr --open)", cmdPath: "web", args: []string{"--dir", dir, "web", "--addr", "127.0.0.1:0", "--open", "--help"}, expect: expectRawText})
+	// webview: long-running server command; cover flags via --help (no server start).
+	run(t, invocation{name: "webview --help (--addr --title --width --height --debug)", cmdPath: "webview", args: []string{"--dir", dir, "webview", "--addr", "127.0.0.1:0", "--title", "Clarity", "--width", "800", "--height", "600", "--debug", "--help"}, expect: expectRawText})
 	// capture: interactive TUI; cover flags via --help (no capture start).
 	run(t, invocation{name: "capture --help (--hotkey --no-output --exit-0-on-cancel --url --selection)", cmdPath: "capture", args: []string{"--dir", dir, "capture", "--hotkey", "--no-output", "--exit-0-on-cancel", "--url", "https://example.com", "--selection", "hello", "--help"}, expect: expectRawText})
 

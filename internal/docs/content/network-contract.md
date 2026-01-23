@@ -18,9 +18,9 @@ The `clarity sync ...` commands may perform network I/O by calling Git when you 
 
 Clarity should still function without `git` installed; only the `sync` commands require Git.
 
-### WebTUI serving
+### Web serving
 
-`clarity webtui ...` starts an HTTP server that serves a UI. This is
+`clarity web ...`, `clarity webview ...`, and `clarity webtui ...` start HTTP servers that serve UIs. This is
 network exposure in the sense that it binds to an address you choose, but it is
 not an outbound network call.
 
