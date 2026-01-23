@@ -412,6 +412,7 @@ func (m *appModel) deleteSelectedCaptureTemplatePrompt() {
 	m.captureTemplatePromptDeleteIdx = it.idx
 	m.modalForID = strings.TrimSpace(it.p.Name)
 	m.modalForKey = strings.TrimSpace(it.p.Type)
+	m.confirmFocus = confirmFocusConfirm
 	m.modal = modalConfirmDeleteCaptureTemplatePrompt
 }
 
@@ -717,8 +718,8 @@ func (m appModel) renderConfirmDeleteCaptureTemplatePromptModal() string {
 	} else {
 		name = fmt.Sprintf("{{%s}}", name)
 	}
-	body := fmt.Sprintf("Delete %s?\n\nType: %s\n\nenter/y: delete   esc/n: cancel", name, typ)
-	return renderModalBox(m.width, "Confirm", body)
+	body := fmt.Sprintf("Delete %s?\n\nType: %s", name, typ)
+	return renderConfirmModal(m.width, "Confirm", body, "Delete", "Cancel", m.confirmFocus)
 }
 
 func (m *appModel) updateCaptureTemplatePromptsModal(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -790,6 +791,7 @@ func (m *appModel) deleteSelectedCaptureTemplate() {
 	m.captureTemplateDeleteIdx = it.idx
 	m.modalForID = strings.TrimSpace(it.tmpl.Name)
 	m.modalForKey = strings.Join(it.tmpl.Keys, " ")
+	m.confirmFocus = confirmFocusConfirm
 	m.modal = modalConfirmDeleteCaptureTemplate
 }
 
@@ -825,8 +827,8 @@ func (m appModel) renderConfirmDeleteCaptureTemplateModal() string {
 	} else {
 		name = fmt.Sprintf("%q", name)
 	}
-	body := fmt.Sprintf("Delete %s?\n\nKeys: %s\n\nenter/y: delete   esc/n: cancel", name, keys)
-	return renderModalBox(m.width, "Confirm", body)
+	body := fmt.Sprintf("Delete %s?\n\nKeys: %s", name, keys)
+	return renderConfirmModal(m.width, "Confirm", body, "Delete", "Cancel", m.confirmFocus)
 }
 
 func (m *appModel) updateCaptureTemplatesModal(msg tea.Msg) (tea.Model, tea.Cmd) {

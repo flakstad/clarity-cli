@@ -231,6 +231,13 @@ const (
 	textFocusCancel
 )
 
+type confirmModalFocus int
+
+const (
+	confirmFocusConfirm confirmModalFocus = iota
+	confirmFocusCancel
+)
+
 type dateModalFocus int
 
 const (
@@ -283,6 +290,7 @@ func (m *appModel) closeAllModals() {
 	m.attachmentAddReturnForKey = ""
 	m.targetPickTargets = nil
 
+	m.confirmFocus = confirmFocusConfirm
 	m.textFocus = textFocusBody
 	m.dateFocus = dateFocusYear
 	m.tagsFocus = tagsFocusInput

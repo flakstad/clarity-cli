@@ -2633,7 +2633,10 @@ func (m appModel) footerText() string {
 	}
 	if m.modal != modalNone {
 		if m.modal == modalConfirmArchive {
-			return "archive: y/enter: confirm  n/esc: cancel"
+			return "archive: tab: focus  enter: select  y: archive  esc/ctrl+g: cancel"
+		}
+		if m.modal == modalConfirmDeleteCaptureTemplate || m.modal == modalConfirmDeleteCaptureTemplatePrompt {
+			return "confirm: tab: focus  enter: select  y: confirm  esc/ctrl+g: cancel"
 		}
 		if m.modal == modalPickStatus {
 			return "status: enter: set  esc/ctrl+g: cancel"
@@ -5055,7 +5058,7 @@ func (m *appModel) renderModal() string {
 			cascade,
 			"You can unarchive later via the CLI.",
 		}, "\n")
-		return renderModalBox(m.width, "Confirm", body+"\n\nenter/y: archive   esc/n: cancel   ctrl+g: close")
+		return renderConfirmModal(m.width, "Confirm", body, "Archive", "Cancel", m.confirmFocus)
 	default:
 		return ""
 	}
@@ -6618,11 +6621,25 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.modal == modalConfirmArchive {
 			if km, ok := msg.(tea.KeyMsg); ok {
 				switch km.String() {
-				case "esc", "n":
+				case "tab", "shift+tab", "left", "right", "h", "l":
+					if m.confirmFocus == confirmFocusConfirm {
+						m.confirmFocus = confirmFocusCancel
+					} else {
+						m.confirmFocus = confirmFocusConfirm
+					}
+					return m, nil
+				case "esc", "ctrl+g", "n":
 					m.modal = modalNone
 					m.modalForID = ""
 					return m, nil
-				case "enter", "y":
+				case "enter":
+					if m.confirmFocus == confirmFocusCancel {
+						m.modal = modalNone
+						m.modalForID = ""
+						return m, nil
+					}
+					fallthrough
+				case "y":
 					target := strings.TrimSpace(m.modalForID)
 					m.modal = modalNone
 					m.modalForID = ""
@@ -7628,13 +7645,29 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.modal == modalConfirmDeleteCaptureTemplate {
 			if km, ok := msg.(tea.KeyMsg); ok {
 				switch km.String() {
-				case "esc", "n":
+				case "tab", "shift+tab", "left", "right", "h", "l":
+					if m.confirmFocus == confirmFocusConfirm {
+						m.confirmFocus = confirmFocusCancel
+					} else {
+						m.confirmFocus = confirmFocusConfirm
+					}
+					return m, nil
+				case "esc", "ctrl+g", "n":
 					m.modal = modalCaptureTemplates
 					m.captureTemplateDeleteIdx = -1
 					m.modalForID = ""
 					m.modalForKey = ""
 					return m, nil
-				case "enter", "y":
+				case "enter":
+					if m.confirmFocus == confirmFocusCancel {
+						m.modal = modalCaptureTemplates
+						m.captureTemplateDeleteIdx = -1
+						m.modalForID = ""
+						m.modalForKey = ""
+						return m, nil
+					}
+					fallthrough
+				case "y":
 					if err := m.confirmDeleteCaptureTemplate(); err != nil {
 						m.showMinibuffer("Delete failed: " + err.Error())
 					} else {
@@ -7653,13 +7686,29 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.modal == modalConfirmDeleteCaptureTemplatePrompt {
 			if km, ok := msg.(tea.KeyMsg); ok {
 				switch km.String() {
-				case "esc", "n":
+				case "tab", "shift+tab", "left", "right", "h", "l":
+					if m.confirmFocus == confirmFocusConfirm {
+						m.confirmFocus = confirmFocusCancel
+					} else {
+						m.confirmFocus = confirmFocusConfirm
+					}
+					return m, nil
+				case "esc", "ctrl+g", "n":
 					m.modal = modalCaptureTemplatePrompts
 					m.captureTemplatePromptDeleteIdx = -1
 					m.modalForID = ""
 					m.modalForKey = ""
 					return m, nil
-				case "enter", "y":
+				case "enter":
+					if m.confirmFocus == confirmFocusCancel {
+						m.modal = modalCaptureTemplatePrompts
+						m.captureTemplatePromptDeleteIdx = -1
+						m.modalForID = ""
+						m.modalForKey = ""
+						return m, nil
+					}
+					fallthrough
+				case "y":
 					if err := m.confirmDeleteCaptureTemplatePrompt(); err != nil {
 						m.showMinibuffer("Delete failed: " + err.Error())
 					} else {
@@ -8661,6 +8710,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Archive/remove selected item (with confirmation).
 			if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
 				m.modal = modalConfirmArchive
+				m.confirmFocus = confirmFocusConfirm
 				m.modalForID = it.row.item.ID
 				m.archiveFor = archiveTargetItem
 				m.input.Blur()
@@ -8979,6 +9029,7 @@ func (m *appModel) updateOutlineColumns(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return true, nil
 	case "r":
 		m.modal = modalConfirmArchive
+		m.confirmFocus = confirmFocusConfirm
 		m.modalForID = it.Item.ID
 		m.archiveFor = archiveTargetItem
 		m.input.Blur()
@@ -9207,6 +9258,7 @@ func (m appModel) updateAgenda(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "r":
 			m.modal = modalConfirmArchive
+			m.confirmFocus = confirmFocusConfirm
 			m.modalForID = it.row.item.ID
 			m.archiveFor = archiveTargetItem
 			m.input.Blur()

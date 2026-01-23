@@ -131,6 +131,7 @@ type appModel struct {
 	archiveFor                    archiveTarget
 	input                         textinput.Model
 	textarea                      textarea.Model
+	confirmFocus                  confirmModalFocus
 	textFocus                     textModalFocus
 	// Date modal inputs (due/schedule).
 	yearInput    textinput.Model

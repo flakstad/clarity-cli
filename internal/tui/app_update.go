@@ -532,6 +532,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Note: item view is otherwise read-only, but archiving is a safe global action.
 			if m.view == viewItem && strings.TrimSpace(m.openItemID) != "" {
 				m.modal = modalConfirmArchive
+				m.confirmFocus = confirmFocusConfirm
 				m.modalForID = strings.TrimSpace(m.openItemID)
 				m.archiveFor = archiveTargetItem
 				m.input.Blur()
@@ -541,6 +542,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.view == viewProjects {
 				if it, ok := m.projectsList.SelectedItem().(projectItem); ok {
 					m.modal = modalConfirmArchive
+					m.confirmFocus = confirmFocusConfirm
 					m.modalForID = it.project.ID
 					m.archiveFor = archiveTargetProject
 					m.input.Blur()
@@ -550,6 +552,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.view == viewOutlines {
 				if it, ok := m.outlinesList.SelectedItem().(outlineItem); ok {
 					m.modal = modalConfirmArchive
+					m.confirmFocus = confirmFocusConfirm
 					m.modalForID = it.outline.ID
 					m.archiveFor = archiveTargetOutline
 					m.input.Blur()
@@ -1093,6 +1096,7 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.modal = modalConfirmArchive
+				m.confirmFocus = confirmFocusConfirm
 				m.modalForID = rowID
 				m.archiveFor = archiveTargetItem
 				m.input.Blur()
