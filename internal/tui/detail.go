@@ -110,7 +110,9 @@ func renderItemDetail(db *store.DB, outline model.Outline, it model.Item, width,
 
 	desc := ""
 	if strings.TrimSpace(it.Description) != "" {
-		rendered := strings.TrimSpace(renderMarkdownComment(it.Description, innerW))
+		// Leave a small safety margin so the rendered output doesn't get cut off by
+		// normalizePane (some terminals/fonts treat certain glyphs as "ambiguous width").
+		rendered := strings.TrimSpace(renderMarkdownComment(it.Description, maxInt(10, innerW-2)))
 		if rendered == "" {
 			rendered = strings.TrimSpace(it.Description)
 		}
@@ -319,7 +321,9 @@ func renderItemDetailInteractive(db *store.DB, outline model.Outline, it model.I
 
 	descLines := []string{}
 	if strings.TrimSpace(it.Description) != "" {
-		rendered := strings.TrimSpace(renderMarkdownComment(it.Description, innerW))
+		// Leave a small safety margin so the rendered output doesn't get cut off by
+		// normalizePane (some terminals/fonts treat certain glyphs as "ambiguous width").
+		rendered := strings.TrimSpace(renderMarkdownComment(it.Description, maxInt(10, innerW-2)))
 		if rendered == "" {
 			rendered = strings.TrimSpace(it.Description)
 		}
