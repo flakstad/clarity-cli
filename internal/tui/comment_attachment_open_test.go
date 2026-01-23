@@ -95,8 +95,8 @@ func TestItemComment_OpenLinksPicker_IncludesCommentAttachments(t *testing.T) {
 		t.Fatalf("expected view modal body to include attachment id %q; got %q", attID, m2.viewModalBody)
 	}
 
-	// l => open link/attachment picker.
-	mAny, _ = m2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	// L => open link/attachment picker.
+	mAny, _ = m2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
 	m3 := mAny.(appModel)
 	if m3.modal != modalPickTargets {
 		t.Fatalf("expected modalPickTargets, got %v", m3.modal)

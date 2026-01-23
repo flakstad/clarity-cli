@@ -36,13 +36,13 @@ var itemActionsCoreSpecs = []actionSpec{
 }
 
 var itemActionsItemViewExtrasSpecs = []actionSpec{
-	{key: "l", label: "Open links…"},
+	{key: "L", label: "Open links…"},
 	{key: "u", label: "Attach file…"},
 	{key: "H", label: "View history"},
 }
 
 var itemActionsItemViewReadOnlySpecs = []actionSpec{
-	{key: "l", label: "Open links…"},
+	{key: "L", label: "Open links…"},
 	{key: "V", label: "Duplicate item"},
 	{key: "y", label: "Copy item ref (includes --workspace)"},
 	{key: "Y", label: "Copy CLI show command (includes --workspace)"},

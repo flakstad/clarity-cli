@@ -5358,7 +5358,7 @@ func (m *appModel) renderViewEntryModal() string {
 	if m.viewModalReturn != modalNone {
 		closeHint = "esc: back   ctrl+g: close"
 	}
-	controls := styleMuted().Render("up/down: scroll  pgup/pgdown: page  l: links  ctrl+y: copy  ctrl+o: editor  "+closeHint) + "\x1b[0m"
+	controls := styleMuted().Render("up/down: scroll  pgup/pgdown: page  L: links  ctrl+y: copy  ctrl+o: editor  "+closeHint) + "\x1b[0m"
 	window := windowLinesWithIndicators(lines, max(1, h-2), m.viewModalScroll, styleMuted())
 	content := strings.Join(append(window, "", controls), "\n")
 	return renderModalBox(m.width, title, content)
@@ -6784,7 +6784,7 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 					return m, cmd
-				case "l":
+				case "l", "L":
 					targets := m.targetsForMarkdownLinks(m.viewModalBody)
 					if len(targets) == 0 {
 						m.showMinibuffer("Links: none")
@@ -8420,6 +8420,65 @@ func (m appModel) updateOutline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.openTextModal(modalEditDescription, it.row.item.ID, "Markdown description…", it.row.item.Description)
 				return m, nil
 			}
+		case "L":
+			// Open links from the current selection:
+			// - Item rows: item's description (URLs + attachment ids referenced in markdown).
+			// - Comment rows: comment body (including attachment ids rendered into the markdown).
+			// - Worklog rows: URLs only.
+			if m.db == nil {
+				m.showMinibuffer("Links: none")
+				return m, nil
+			}
+			if act, ok := selectedOutlineActivityRow(&m.itemsList); ok {
+				itemID := strings.TrimSpace(act.itemID)
+				switch act.kind {
+				case outlineActivityComment:
+					c, ok := findCommentByID(m.db.CommentsForItem(itemID), act.commentID)
+					if !ok {
+						m.showMinibuffer("Links: comment not found")
+						return m, nil
+					}
+					targets := m.targetsForMarkdownLinks(commentMarkdownWithAttachments(m.db, c))
+					if len(targets) == 0 {
+						m.showMinibuffer("Links: none")
+						return m, nil
+					}
+					m.startTargetPicker("Links", targets)
+					return m, nil
+				case outlineActivityWorklogEntry:
+					found := false
+					var w model.WorklogEntry
+					for _, ww := range m.db.WorklogForItem(itemID) {
+						if strings.TrimSpace(ww.ID) == strings.TrimSpace(act.worklogID) {
+							w = ww
+							found = true
+							break
+						}
+					}
+					if !found {
+						m.showMinibuffer("Links: worklog entry not found")
+						return m, nil
+					}
+					targets := m.targetsForMarkdownLinksURLOnly(w.Body)
+					if len(targets) == 0 {
+						m.showMinibuffer("Links: none")
+						return m, nil
+					}
+					m.startTargetPicker("Links", targets)
+					return m, nil
+				}
+			}
+			if it, ok := m.itemsList.SelectedItem().(outlineRowItem); ok {
+				targets := m.targetsForMarkdownLinks(it.row.item.Description)
+				if len(targets) == 0 {
+					m.showMinibuffer("Links: none")
+					return m, nil
+				}
+				m.startTargetPicker("Links", targets)
+				return m, nil
+			}
+			m.showMinibuffer("Links: none")
+			return m, nil
 		case " ":
 			// Checkbox toggle or status picker (outline pane only).
 			if m.pane == paneOutline {

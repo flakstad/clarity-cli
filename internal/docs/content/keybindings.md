@@ -144,7 +144,7 @@ Activity panel (Comments / Worklog / History):
 - `C`: add comment
 - `R`: reply to selected comment (Comments)
 - `w`: add worklog entry
-- `l`: open links picker (Comments/Worklog)
+- `L`: open links picker (Description/Comments/Worklog)
 
 ### Agenda view
 

@@ -49,4 +49,4 @@ In the full-screen item view:
 
 - Default max attachment size is 50MB (`clarity attachments add --max-mb`).
 - Inline attachment previews are intentionally not implemented for now; we rely on OS open.
-- To reference an attachment in markdown, include its id (e.g. `att-...`) in the description/comment. While focused on Description or Comments, press `l` to open a picker of targets (URLs + `att-...`), then `enter` to open. Worklog supports URLs only.
+- To reference an attachment in markdown, include its id (e.g. `att-...`) in the description/comment. While focused on Description, Comments, or Worklog, press `L` to open a picker of targets (URLs + `att-...`), then `enter` to open. Worklog supports URLs only.

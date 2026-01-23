@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"clarity-cli/internal/model"
 	"clarity-cli/internal/statusutil"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -817,6 +818,82 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Left pane: outline-style navigation within the current subtree.
 		if m.pane == paneOutline {
+			// In the item view, use "L" (not "l") to avoid collisions with vi-style navigation.
+			// - On item rows: opens links from the item's description (URLs + attachment ids).
+			// - On comment/worklog rows: opens links from the selected entry.
+			if km.String() == "L" {
+				if m.db == nil {
+					m.showMinibuffer("Links: none")
+					return m, nil
+				}
+
+				// If the selection is an activity row (or its desc line), open from that entry.
+				if act, ok := selectedOutlineActivityRow(&m.itemsList); ok {
+					itemID := strings.TrimSpace(act.itemID)
+					if itemID == "" {
+						itemID = rootID
+					}
+					switch act.kind {
+					case outlineActivityComment:
+						c, ok := findCommentByID(m.db.CommentsForItem(itemID), act.commentID)
+						if !ok {
+							m.showMinibuffer("Links: comment not found")
+							return m, nil
+						}
+						targets := m.targetsForMarkdownLinks(commentMarkdownWithAttachments(m.db, c))
+						if len(targets) == 0 {
+							m.showMinibuffer("Links: none")
+							return m, nil
+						}
+						m.startTargetPicker("Links", targets)
+						return m, nil
+					case outlineActivityWorklogEntry:
+						found := false
+						var w model.WorklogEntry
+						for _, ww := range m.db.WorklogForItem(itemID) {
+							if strings.TrimSpace(ww.ID) == strings.TrimSpace(act.worklogID) {
+								w = ww
+								found = true
+								break
+							}
+						}
+						if !found {
+							m.showMinibuffer("Links: worklog entry not found")
+							return m, nil
+						}
+						targets := m.targetsForMarkdownLinksURLOnly(w.Body)
+						if len(targets) == 0 {
+							m.showMinibuffer("Links: none")
+							return m, nil
+						}
+						m.startTargetPicker("Links", targets)
+						return m, nil
+					}
+				}
+
+				// Default: open from the selected item's description (or root).
+				itemID := strings.TrimSpace(selectedOutlineListItemID(&m.itemsList))
+				if itemID == "" {
+					itemID = rootID
+				}
+				if itemID == "" {
+					m.showMinibuffer("Links: none")
+					return m, nil
+				}
+				it, ok := m.db.FindItem(itemID)
+				if !ok || it == nil {
+					m.showMinibuffer("Links: item not found")
+					return m, nil
+				}
+				targets := m.targetsForMarkdownLinks(it.Description)
+				if len(targets) == 0 {
+					m.showMinibuffer("Links: none")
+					return m, nil
+				}
+				m.startTargetPicker("Links", targets)
+				return m, nil
+			}
+
 			// Outline navigation keys (parent/child) should keep working.
 			if m.navOutline(km) {
 				return m, nil

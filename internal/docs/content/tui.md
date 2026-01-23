@@ -48,7 +48,7 @@ Item view:
 - `enter`: narrow further to the selected row
 - `backspace` / `esc`: widen (pop the narrow stack) or return to the outline
 - `ctrl+x` then `o` (or `ctrl+o`, terminal-dependent): other window (focus left/right)
-- Activity panel (Comments / My worklog / History): `tab` / `shift+tab` cycles section (when focused), `enter` views entry, `C` adds comment, `w` adds worklog, `R` replies, `l` opens links picker.
+- Activity panel (Comments / My worklog / History): `tab` / `shift+tab` cycles section (when focused), `enter` views entry, `C` adds comment, `w` adds worklog, `R` replies, `L` opens links picker.
 
 Due/schedule modal:
 - Date is required (`YYYY-MM-DD`), time is optional (`HH:MM`)
