@@ -85,6 +85,9 @@ func NewRootCmd() *cobra.Command {
 		if strings.HasPrefix(strings.TrimSpace(cmd.CommandPath()), "clarity webtui") {
 			return nil
 		}
+		if strings.HasPrefix(strings.TrimSpace(cmd.CommandPath()), "clarity web") {
+			return nil
+		}
 		return autoSyncWorkspaceBestEffort(cmd, app)
 	}
 
@@ -114,6 +117,8 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newCaptureCmd(app))
 	cmd.AddCommand(newAttachmentsCmd(app))
 	cmd.AddCommand(newWebTUICmd(app))
+	cmd.AddCommand(newWebCmd(app))
+	cmd.AddCommand(newWebViewCmd(app))
 
 	return cmd
 }
