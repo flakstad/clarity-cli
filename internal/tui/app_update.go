@@ -1088,6 +1088,28 @@ func (m appModel) updateItem(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.openTextModal(modalAddWorklog, itemID, "My worklog…", "")
 				return m, nil
+			case "u":
+				if m.itemArchivedReadOnly {
+					m.showMinibuffer("Archived item: read-only")
+					return m, nil
+				}
+				itemID := rowID
+				if act, ok := selectedOutlineActivityRow(&m.itemsList); ok {
+					if id := strings.TrimSpace(act.itemID); id != "" {
+						itemID = id
+					}
+				}
+				m.attachmentAddFlow = attachmentAddFlowCommit
+				m.attachmentAddReturnModal = modalNone
+				m.attachmentAddReturnForID = ""
+				m.attachmentAddReturnForKey = ""
+				m.attachmentAddKind = "item"
+				m.attachmentAddEntityID = strings.TrimSpace(itemID)
+				m.attachmentAddPath = ""
+				m.attachmentAddTitle = ""
+				m.attachmentAddAlt = ""
+				m.attachmentAddTitleHint = ""
+				return m, m.openAttachmentFilePicker()
 			case "R":
 				if m.itemArchivedReadOnly {
 					m.showMinibuffer("Archived item: read-only")
